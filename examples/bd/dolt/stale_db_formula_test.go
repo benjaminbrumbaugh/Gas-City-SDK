@@ -18,8 +18,9 @@ func staleDBFilteredEnv(keys ...string) []string {
 		"GC_ESCALATION_RECIPIENT",
 		"GC_SYSTEM_PACKS_DIR",
 		"GC_MAINTENANCE_DONE_TARGET",
+		"BEADS_ACTOR",
 	)
-	return filteredEnv(keys...)
+	return append(filteredEnv(keys...), "GC_AGENT=worker-1")
 }
 
 func TestStaleDBFormulaRuntimeContract(t *testing.T) {
@@ -36,7 +37,9 @@ func TestStaleDBFormulaRuntimeContract(t *testing.T) {
 	desc := f.Steps[0].Description
 	for _, want := range []string{
 		`set -euo pipefail`,
-		`WORK_BEAD="${GC_BEAD_ID:?GC_BEAD_ID required`,
+		`WORK_BEAD="${GC_BEAD_ID:?GC_BEAD_ID required (pass gc hook --claim JSON bead_id`,
+		`WORK_ACTOR="${BEADS_ACTOR:-${GC_AGENT:?GC_AGENT required`,
+		`export BEADS_ACTOR="$WORK_ACTOR"`,
 		`TMP_DIR=$(mktemp -d`,
 		`trap cleanup EXIT`,
 		`drain_ack_once()`,
@@ -67,6 +70,8 @@ func TestStaleDBFormulaRuntimeContract(t *testing.T) {
 		`gc nudge deacon`,
 		`gc session nudge deacon`,
 		`GC_BEAD_ID:-<work-bead>`,
+		`GC_TRIGGER_BEAD_ID`,
+		`GC_TRIGGER_WORK_BEAD_ID`,
 		`Dolt orphan(s) detected`,
 	} {
 		if strings.Contains(desc, bad) {
@@ -83,7 +88,8 @@ func TestStaleDBFormulaRenderedShellIsStrictAndValid(t *testing.T) {
 	script := renderStaleDBFormulaShell(t)
 	for _, want := range []string{
 		`set -euo pipefail`,
-		`WORK_BEAD="${GC_BEAD_ID:?GC_BEAD_ID required`,
+		`WORK_BEAD="${GC_BEAD_ID:?GC_BEAD_ID required (pass gc hook --claim JSON bead_id`,
+		`export BEADS_ACTOR="$WORK_ACTOR"`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("rendered script missing %q", want)
@@ -94,6 +100,85 @@ func TestStaleDBFormulaRenderedShellIsStrictAndValid(t *testing.T) {
 	cmd.Stdin = strings.NewReader(script)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("bash -n failed: %v\n%s", err, out)
+	}
+}
+
+// TestStaleDBFormulaUsesClaimResultBeadID observes the formula-shell boundary:
+// the exact hook result is carried in GC_BEAD_ID, while stale spawn-time trigger
+// values cannot influence report or close mutations. It does not prove a provider
+// preserves that value between tool calls; the pool-worker prompt contract covers
+// that separate handoff layer.
+func TestStaleDBFormulaUsesClaimResultBeadID(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skipf("bash not found: %v", err)
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skipf("jq not found: %v", err)
+	}
+
+	script := renderStaleDBFormulaShell(t)
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	logPath := filepath.Join(dir, "commands.log")
+	scanPath := filepath.Join(dir, "scan.json")
+	writeTestFile(t, logPath, "")
+	writeTestFile(t, scanPath, `{"schema":"gc.dolt.cleanup.v1","dropped":{"count":0,"failed":[]},"purge":{"bytes_reclaimed":0},"reaped":{"count":0,"targets":[]},"summary":{"bytes_freed_disk":0,"bytes_freed_rss":0,"errors_total":0}}`)
+	writeTestFile(t, filepath.Join(binDir, "gc"), `#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-} ${2:-}" in
+  "dolt-cleanup "*) cat "$GC_TEST_SCAN_JSON" ;;
+  "event emit"|"runtime drain-ack"|"session nudge"|"mail send") echo "gc $*" >> "$GC_TEST_LOG" ;;
+  *) echo "unexpected gc command: $*" >&2; exit 64 ;;
+esac
+`, 0o755)
+	writeTestFile(t, filepath.Join(binDir, "bd"), `#!/usr/bin/env bash
+set -euo pipefail
+if [ "${BEADS_ACTOR:-}" != "worker-1" ]; then
+  echo "unexpected bd actor: ${BEADS_ACTOR:-<unset>}" >&2
+  exit 65
+fi
+case "${1:-}" in
+  update|close) echo "bd $* actor=${BEADS_ACTOR:-}" >> "$GC_TEST_LOG" ;;
+  *) echo "unexpected bd command: $*" >&2; exit 64 ;;
+esac
+`, 0o755)
+
+	cmd := exec.Command("bash", "-s")
+	cmd.Stdin = strings.NewReader(script)
+	cmd.Env = append(staleDBFilteredEnv("PATH", "TMPDIR", "GC_TEST_LOG", "GC_TEST_SCAN_JSON"),
+		"GC_BEAD_ID=bead-1",
+		"GC_AGENT=worker-1",
+		"GC_TRIGGER_BEAD_ID=stale-bead",
+		"GC_TRIGGER_WORK_BEAD_ID=stale-bead",
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"TMPDIR="+dir,
+		"GC_TEST_LOG="+logPath,
+		"GC_TEST_SCAN_JSON="+scanPath,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("rendered formula failed with its exact hook-result bead ID: %v\noutput:\n%s", err, out)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", logPath, err)
+	}
+	log := string(logData)
+	for _, want := range []string{
+		"bd update bead-1 --append-notes",
+		"bd close bead-1 --reason",
+		"actor=worker-1",
+	} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("command log missing %q\nlog:\n%s\noutput:\n%s", want, log, out)
+		}
+	}
+	if strings.Contains(log, "stale-bead") {
+		t.Fatalf("formula used stale trigger metadata\nlog:\n%s", log)
 	}
 }
 

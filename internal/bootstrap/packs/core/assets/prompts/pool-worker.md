@@ -22,6 +22,15 @@ gc hook --claim --drain-ack --json
 If the result action is `drain`, your session is done. If the action is `work`,
 read the returned `bead_id` with `gc bd show <id>`.
 
+The exact `bead_id` returned by that `gc hook --claim --json` invocation is
+the current claim's identity. Keep it with this work until the bead is closed.
+When a formula shell script requires `GC_BEAD_ID`, pass that exact value in the
+script invocation as `GC_BEAD_ID=<returned bead_id>` (for example, before
+`bash -s`); do not rely on an export surviving separate tool calls. Never
+derive `GC_BEAD_ID` from `GC_TRIGGER_*`: those spawn-time values can be stale
+in a reused pool slot. Do not call `gc hook` again to rediscover the formula's
+work bead.
+
 ## Following Your Formula
 
 Your formula defines your work as a sequence of steps. Steps are NOT

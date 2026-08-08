@@ -85,7 +85,12 @@ Run this as one shell script so every derived value remains in the same process:
 ```bash
 set -euo pipefail
 
-WORK_BEAD="${GC_BEAD_ID:?GC_BEAD_ID required (set by gc hook); aborting}"
+WORK_BEAD="${GC_BEAD_ID:?GC_BEAD_ID required (pass gc hook --claim JSON bead_id to this formula shell); aborting}"
+WORK_ACTOR="${BEADS_ACTOR:-${GC_AGENT:?GC_AGENT required for work-bead ownership; aborting}}"
+# The session's canonical actor, not GC_SESSION_NAME, must accompany every bd
+# mutation so the close guard compares the same identity the hook claimed with.
+export BEADS_ACTOR="$WORK_ACTOR"
+
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/dolt-cleanup.XXXXXX")
 DRAIN_ACKED=0
 

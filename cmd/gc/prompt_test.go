@@ -956,6 +956,33 @@ func TestCoreWorkerPromptsUseHookClaimProtocol(t *testing.T) {
 	}
 }
 
+// TestPoolWorkerPromptCarriesHookClaimBeadIDToFormulaShell observes the prompt
+// contract only: a formula that needs GC_BEAD_ID receives the exact bead_id from
+// the preceding successful hook result. Runtime providers retaining shell state
+// is outside this text-level evidence, so the instruction requires a per-command
+// environment assignment and explicitly rejects stale spawn-time trigger values.
+func TestPoolWorkerPromptCarriesHookClaimBeadIDToFormulaShell(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("filepath.Abs(repo root): %v", err)
+	}
+	path := filepath.Join(repoRoot, "internal", "bootstrap", "packs", "core", "assets", "prompts", "pool-worker.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	prompt := strings.Join(strings.Fields(string(data)), " ")
+	for _, want := range []string{
+		"exact `bead_id` returned by that `gc hook --claim --json` invocation",
+		"`GC_BEAD_ID=<returned bead_id>`",
+		"Never derive `GC_BEAD_ID` from `GC_TRIGGER_*`",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("pool-worker prompt missing claim-to-formula handoff %q", want)
+		}
+	}
+}
+
 func TestMergeFragmentLists(t *testing.T) {
 	tests := []struct {
 		name    string
