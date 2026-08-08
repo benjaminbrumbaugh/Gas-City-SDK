@@ -157,6 +157,8 @@ const (
 	RigRootMetadataKey                   = "gc.rig_root"
 	RootBeadIDMetadataKey                = "gc.root_bead_id"
 	RootStoreRefMetadataKey              = "gc.root_store_ref"
+	RoutingDecisionClaimFenceMetadataKey = "gc.routing_decision_claim_fence"
+	RoutingDecisionIDMetadataKey         = "gc.routing_decision_id"
 	RoutedToMetadataKey                  = "gc.routed_to"
 	RunTargetMetadataKey                 = "gc.run_target"
 	RuntimeVarsMetadataKey               = "gc.graphv2_vars.v1"
@@ -401,6 +403,8 @@ var KnownMetadataKeys = []string{
 	RigRootMetadataKey,
 	RootBeadIDMetadataKey,
 	RootStoreRefMetadataKey,
+	RoutingDecisionClaimFenceMetadataKey,
+	RoutingDecisionIDMetadataKey,
 	RoutedToMetadataKey,
 	RunTargetMetadataKey,
 	RuntimeVarsMetadataKey,

@@ -1,12 +1,14 @@
 package beads
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
 
 var (
 	_ ConditionalWriter                = (*MemStore)(nil)
+	_ ReadyConditionalWriter           = (*MemStore)(nil)
 	_ conditionalWritesModeCarrier     = (*MemStore)(nil)
 	_ conditionalWriteCapabilityProber = (*MemStore)(nil)
 
@@ -52,6 +54,37 @@ func (m *MemStore) UpdateIfMatch(id string, expectedRevision int64, opts UpdateO
 	}
 	m.applyUpdateLocked(i, opts)
 	return nil
+}
+
+// UpdateIfReadyAndMatch applies opts only when the same locked snapshot proves
+// the bead is ready for controller demand and still at expectedRevision.
+func (m *MemStore) UpdateIfReadyAndMatch(id string, expectedRevision int64, opts UpdateOpts) error {
+	if isEmptyUpdateOpts(opts) {
+		return fmt.Errorf("conditional ready update %s: %w", id, ErrEmptyConditionalUpdate)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.DisableConditionalWrites {
+		return ErrConditionalWriteUnsupported
+	}
+	i := m.indexOfLocked(id)
+	if i < 0 {
+		return fmt.Errorf("updating ready bead %q: %w", id, ErrNotFound)
+	}
+	if m.beads[i].Revision != expectedRevision {
+		return &PreconditionFailedError{ID: id, Expected: expectedRevision, Current: m.beads[i].Revision}
+	}
+	ready, err := m.readyLocked(context.Background(), ReadyQuery{TierMode: TierBoth})
+	if err != nil {
+		return err
+	}
+	for _, bead := range ready {
+		if bead.ID == id {
+			m.applyUpdateLocked(i, opts)
+			return nil
+		}
+	}
+	return ErrNotReadyForConditionalUpdate
 }
 
 // CloseIfMatch closes the bead only when its current revision equals

@@ -503,7 +503,7 @@ func validateJSONResultSchema(t *testing.T, commandPath []string, data []byte) {
 		t.Fatalf("unmarshal schema: %v", err)
 	}
 	compiler := jsonschema.NewCompiler()
-	schemaName := strings.Join(commandPath, "-") + "-result.schema.json"
+	schemaName := "https://gascity.local/" + filepath.ToSlash(filepath.Join(append(append([]string{"schemas"}, commandPath...), jsonSchemaResultRole+".schema.json")...))
 	if err := compiler.AddResource(schemaName, schemaDoc); err != nil {
 		t.Fatalf("add schema resource: %v", err)
 	}

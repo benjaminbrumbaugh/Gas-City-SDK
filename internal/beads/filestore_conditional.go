@@ -9,7 +9,10 @@ import "fmt"
 // save → rollback wrapper its other write methods use. Revisions survive the
 // reload/save cycle via the out-of-band Revisions map in fileData (Bead.Revision
 // is json:"-").
-var _ ConditionalWriter = (*FileStore)(nil)
+var (
+	_ ConditionalWriter      = (*FileStore)(nil)
+	_ ReadyConditionalWriter = (*FileStore)(nil)
+)
 
 // UpdateIfMatch applies opts only when the bead's persisted revision matches,
 // then flushes to disk. A precondition failure or not-found leaves the store
@@ -33,6 +36,35 @@ func (fs *FileStore) UpdateIfMatch(id string, expectedRevision int64, opts Updat
 	snap := fs.snapshotLocked()
 	if err := fs.MemStore.UpdateIfMatch(id, expectedRevision, opts); err != nil {
 		return err // precondition failed / not found: nothing mutated, nothing to save
+	}
+	if err := fs.save(); err != nil {
+		fs.restoreFrom(snap.seq, snap.beads, snap.deps)
+		return err
+	}
+	return nil
+}
+
+// UpdateIfReadyAndMatch persists a revision-fenced update only when FileStore's
+// locked, freshly reloaded MemStore also proves the work is ready.
+func (fs *FileStore) UpdateIfReadyAndMatch(id string, expectedRevision int64, opts UpdateOpts) error {
+	if isEmptyUpdateOpts(opts) {
+		return fmt.Errorf("conditional ready update %s: %w", id, ErrEmptyConditionalUpdate)
+	}
+	fs.fmu.Lock()
+	defer fs.fmu.Unlock()
+	if fs.DisableConditionalWrites {
+		return ErrConditionalWriteUnsupported
+	}
+	if err := fs.locker.Lock(); err != nil {
+		return err
+	}
+	defer fs.locker.Unlock() //nolint:errcheck // best-effort unlock
+	if err := fs.reloadFromDisk(); err != nil {
+		return err
+	}
+	snap := fs.snapshotLocked()
+	if err := fs.MemStore.UpdateIfReadyAndMatch(id, expectedRevision, opts); err != nil {
+		return err
 	}
 	if err := fs.save(); err != nil {
 		fs.restoreFrom(snap.seq, snap.beads, snap.deps)

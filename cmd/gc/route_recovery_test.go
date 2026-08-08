@@ -8,6 +8,14 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
+type unsupportedLegacyRecoveryStore struct{ *beads.MemStore }
+
+type noConditionalLegacyRecoveryStore struct{ beads.Store }
+
+func (s unsupportedLegacyRecoveryStore) UpdateIfMatch(string, int64, beads.UpdateOpts) error {
+	return beads.ErrConditionalWriteUnsupported
+}
+
 // TestRestoreCarriedWorkRoutes covers ga-n2d.4: after a controller restart,
 // open+unassigned work that carries a gc.run_target pool route but no
 // gc.routed_to is invisible to the pool autoscaler (which keys on gc.routed_to)
@@ -100,6 +108,47 @@ func TestRestoreCarriedWorkRoutes(t *testing.T) {
 	}
 	if restored2 != 0 {
 		t.Errorf("second pass restored = %d, want 0 (idempotent)", restored2)
+	}
+}
+
+func TestRestoreCarriedWorkRoutesLegacyFallsBackFromUnsupportedCAS(t *testing.T) {
+	const (
+		beadID = "GC-LEGACY-FALLBACK"
+		route  = "gascity/gastown.polecat"
+	)
+	base := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID: beadID, Status: "open", Metadata: map[string]string{"gc.run_target": route},
+	}}, nil)
+	store := unsupportedLegacyRecoveryStore{MemStore: base}
+	restored, err := restoreCarriedWorkRoutes(store)
+	if err != nil {
+		t.Fatalf("restore legacy route: %v", err)
+	}
+	if restored != 1 {
+		t.Fatalf("restored = %d, want 1", restored)
+	}
+	if got := mustRoutedTo(t, base, beadID); got != route {
+		t.Fatalf("gc.routed_to = %q, want %q", got, route)
+	}
+}
+
+func TestRestoreCarriedWorkRoutesPreservesLegacyRouteWithoutConditionalWriter(t *testing.T) {
+	const (
+		beadID = "GC-LEGACY-NO-CAS"
+		route  = "gascity/gastown.polecat"
+	)
+	base := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID: beadID, Status: "open", Metadata: map[string]string{"gc.run_target": route},
+	}}, nil)
+	restored, err := restoreCarriedWorkRoutes(noConditionalLegacyRecoveryStore{Store: base})
+	if err != nil {
+		t.Fatalf("restore without conditional writer: %v", err)
+	}
+	if restored != 1 {
+		t.Fatalf("restored = %d, want 1 for established unmarked compatibility", restored)
+	}
+	if got := mustRoutedTo(t, base, beadID); got != route {
+		t.Fatalf("gc.routed_to = %q, want %q", got, route)
 	}
 }
 

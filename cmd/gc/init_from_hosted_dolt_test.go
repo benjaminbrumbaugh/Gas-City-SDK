@@ -71,6 +71,11 @@ func TestInitFromWithoutHostedPreservesTemplate(t *testing.T) {
 
 	src := gastownExamplePath(t)
 	cityPath := filepath.Join(t.TempDir(), "city")
+	t.Cleanup(func() {
+		if err := shutdownBeadsProvider(cityPath); err != nil {
+			t.Logf("shutdownBeadsProvider(%q): %v", cityPath, err)
+		}
+	})
 
 	var stdout, stderr bytes.Buffer
 	// disabled hosted options => template preserved

@@ -13,6 +13,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/packman"
+	"github.com/gastownhall/gascity/internal/testutil"
 )
 
 func TestDoImportAddRemoteWritesConfigAndLock(t *testing.T) {
@@ -2679,10 +2680,12 @@ schema = 1
 	if err != nil {
 		t.Fatalf("resolveImportRoot: %v", err)
 	}
-	want, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(%q): %v", dir, err)
+	want := filepath.Clean(dir)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		want = resolved
 	}
+	want = testutil.CanonicalPath(want)
+	got = testutil.CanonicalPath(got)
 	if got != want {
 		t.Fatalf("resolveImportRoot() = %q, want %q", got, want)
 	}

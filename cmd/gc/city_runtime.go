@@ -27,6 +27,7 @@ import (
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/nudgequeue"
 	"github.com/gastownhall/gascity/internal/orders"
+	"github.com/gastownhall/gascity/internal/routingdecision"
 	"github.com/gastownhall/gascity/internal/runtime"
 	sessionauto "github.com/gastownhall/gascity/internal/runtime/auto"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
@@ -86,6 +87,9 @@ type CityRuntime struct {
 	orderRescanEnabled      bool
 	orderRescanLast         time.Time
 	trace                   *sessionReconcilerTraceManager
+	routingDecisionStore    *routingdecision.Store
+	routingDecisionVerifier *routingdecision.Verifier // nil is intentional default-deny
+	routingDecisionNowFn    func() time.Time
 
 	orderSweepWatchdogLast             time.Time
 	orderTrackingRetentionWatchdogLast time.Time
@@ -547,6 +551,18 @@ func (cr *CityRuntime) run(ctx context.Context) {
 		cr.dispatchOrders(ctx, cityRoot)
 	}, "startup-orders")
 	logPhaseElapsed("startup-orders", startupOrdersStart)
+	if ctx.Err() != nil {
+		return
+	}
+
+	// Admit explicitly approved routing decisions before carried-route recovery and
+	// session reconciliation. This is metadata admission only: demand/reconciler
+	// code remains the sole path that can create or start a worker session.
+	startupRoutingDecisionStart := time.Now()
+	cr.safeTick(func() {
+		cr.applyApprovedRoutingDecisionsAndLog()
+	}, "startup-routing-decision-admission")
+	logPhaseElapsed("startup-routing-decision-admission", startupRoutingDecisionStart)
 	if ctx.Err() != nil {
 		return
 	}
@@ -1123,6 +1139,16 @@ func (cr *CityRuntime) tick(
 	phaseStart = time.Now()
 	cr.dispatchOrders(ctx, cityRoot)
 	recordPhase(TraceSiteOrderDispatch, "dispatch_orders", phaseStart, nil)
+	if ctx.Err() != nil {
+		return
+	}
+
+	// Controller-owned admission turns an approved, validated decision into the
+	// normal gc.routed_to demand signal. It cannot start, stop, or migrate a
+	// session; the existing reconciliation path remains lifecycle authority.
+	phaseStart = time.Now()
+	cr.applyApprovedRoutingDecisionsAndLog()
+	recordPhase(TraceSiteControllerTickPhase, "apply_approved_routing_decisions", phaseStart, nil)
 	if ctx.Err() != nil {
 		return
 	}

@@ -64,18 +64,27 @@ func carriedPoolRoute(b beads.Bead) string {
 // TOCTOU-narrowing (not eliminating): the open-bead List is a snapshot, so
 // before writing, each bead is re-read through the store's authoritative,
 // cache-bypassing live handle and skipped unless it is still open, unassigned,
-// and carries the same recoverable route. This shrinks — but does not close —
-// the window in which the re-stamp could clobber a route a polecat consumed by
-// claiming the bead after the snapshot (ga-bgu): a claim landing between the
-// live re-read and SetMetadata is still possible. The re-stamp stays monotonic
-// (never worse than the prior blind write), so the residual window degrades to
-// the pre-guard behavior rather than a new failure.
+// and carries the same recoverable route. When a store supports revision CAS,
+// the re-stamp uses that fence; a decision-marked route never falls back to a
+// blind write when the fence is unavailable. Legacy unmarked routes retain their
+// established best-effort SetMetadata fallback for adapter compatibility.
 //
 // That re-read guards claims but cannot guard blocks: a claim flips the bead to
 // in_progress, which mapBdStatus preserves, while a block flips it to a status
 // that collapses to "open" (gc-4zb). Blocked work is therefore excluded at the
 // snapshot, by the Live query below, and not here.
 func restoreCarriedWorkRoutes(store beads.Store) (int, error) {
+	return restoreCarriedWorkRoutesWithGate(store, nil)
+}
+
+// carriedRouteRecoveryGate returns true when a carried route is still eligible
+// for recovery. A nil gate preserves the legacy recovery behavior.
+type carriedRouteRecoveryGate func(beads.Bead) bool
+
+// restoreCarriedWorkRoutesWithGate is restoreCarriedWorkRoutes with an optional
+// controller-owned authorization gate for routes that carry extra provenance
+// (such as durable routing decisions).
+func restoreCarriedWorkRoutesWithGate(store beads.Store, gate carriedRouteRecoveryGate) (int, error) {
 	if store == nil {
 		return 0, nil
 	}
@@ -113,7 +122,7 @@ func restoreCarriedWorkRoutes(store beads.Store) (int, error) {
 	handles := beads.HandlesFor(store)
 	for _, b := range items {
 		route := carriedPoolRoute(b)
-		if route == "" {
+		if route == "" || (gate != nil && !gate(b)) {
 			continue
 		}
 		// Only re-route open, unassigned work: an assigned bead is already
@@ -141,21 +150,43 @@ func restoreCarriedWorkRoutes(store beads.Store) (int, error) {
 			errs = append(errs, fmt.Errorf("bead %s: re-reading before route restore: %w", b.ID, getErr))
 			continue
 		}
-		if live.Status != "open" || strings.TrimSpace(live.Assignee) != "" || carriedPoolRoute(live) != route {
+		if live.Status != "open" || strings.TrimSpace(live.Assignee) != "" || carriedPoolRoute(live) != route || (gate != nil && !gate(live)) {
 			continue // claimed, closed, or already routed since the snapshot — don't clobber
 		}
-		if setErr := store.SetMetadata(b.ID, beadmeta.RoutedToMetadataKey, route); setErr != nil {
-			errs = append(errs, fmt.Errorf("bead %s: restoring gc.routed_to=%q: %w", b.ID, route, setErr))
-			continue
+		decisionMarked := strings.TrimSpace(live.Metadata[beadmeta.RoutingDecisionIDMetadataKey]) != ""
+		if decisionMarked {
+			writer, ok := beads.ReadyConditionalWriterFor(store)
+			if !ok {
+				continue // marked routes never fall back from atomic readiness
+			}
+			updateErr := writer.UpdateIfReadyAndMatch(live.ID, live.Revision, beads.UpdateOpts{
+				Metadata: map[string]string{beadmeta.RoutedToMetadataKey: route},
+			})
+			if updateErr != nil {
+				if beads.IsPreconditionFailed(updateErr) || errors.Is(updateErr, beads.ErrNotReadyForConditionalUpdate) {
+					continue
+				}
+				errs = append(errs, fmt.Errorf("bead %s: atomically restoring marked gc.routed_to=%q: %w", b.ID, route, updateErr))
+				continue
+			}
+		} else {
+			// Preserve the established compatibility contract for unmarked carried
+			// routes. Only decision-marked recovery acquires the stronger ready CAS.
+			if setErr := store.SetMetadata(b.ID, beadmeta.RoutedToMetadataKey, route); setErr != nil {
+				errs = append(errs, fmt.Errorf("bead %s: restoring legacy carried route: %w", b.ID, setErr))
+				continue
+			}
 		}
 		restored++
 	}
 	return restored, errors.Join(errs...)
 }
 
-// routeRecoveryScope pairs a bead store with a human label for logging.
+// routeRecoveryScope pairs a bead store with a human label and its scope for
+// logging and decision-recovery authorization.
 type routeRecoveryScope struct {
 	label string
+	rig   string
 	store beads.Store
 }
 
@@ -163,19 +194,25 @@ type routeRecoveryScope struct {
 // route across the city store and every active rig store, so ready work
 // re-enters pool demand after a controller restart without a manual `gc sling`
 // (ga-n2d.4). Best-effort: a per-store failure is logged and the remaining
-// stores still run.
+// stores still run. A durable routing-decision marker additionally requires a
+// matching unexpired admitted record; recovery never turns a stale decision into
+// new demand.
 func (cr *CityRuntime) recoverUnroutedWorkRoutes() {
+	authorizer := cr.newRoutingDecisionRecoveryAuthorizer(cr.routingDecisionNow())
+	defer authorizer.Close()
 	scopes := []routeRecoveryScope{{label: "city", store: cr.cityBeadStore()}}
 	for name, store := range cr.rigBeadStores() {
-		scopes = append(scopes, routeRecoveryScope{label: "rig " + name, store: store})
+		scopes = append(scopes, routeRecoveryScope{label: "rig " + name, rig: name, store: store})
 	}
 	for _, sc := range scopes {
 		if sc.store == nil {
 			continue
 		}
-		restored, err := restoreCarriedWorkRoutes(sc.store)
+		restored, err := restoreCarriedWorkRoutesWithGate(sc.store, func(bead beads.Bead) bool {
+			return authorizer.Allows(sc.rig, bead)
+		})
 		if err != nil {
-			fmt.Fprintf(cr.stderr, "%s: route recovery (%s): %v\n", cr.logPrefix, sc.label, err) //nolint:errcheck // best-effort stderr
+			fmt.Fprintf(cr.stderr, "%s: route recovery (%s) failed\n", cr.logPrefix, sc.label) //nolint:errcheck // best-effort sanitized stderr
 		}
 		if restored > 0 {
 			fmt.Fprintf(cr.stderr, "%s: route recovery (%s): restored gc.routed_to on %d ready bead(s) from gc.run_target\n", cr.logPrefix, sc.label, restored) //nolint:errcheck // best-effort stderr

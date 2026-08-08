@@ -251,8 +251,11 @@ func TestTranscriptMetaReconcilerContinuesAfterPerSidecarWriteFailure(t *testing
 	if err := os.MkdirAll(filepath.Dir(failingPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("/proc/self/status", failingPath); err != nil {
-		t.Fatalf("Symlink failing transcript: %v", err)
+	if err := os.WriteFile(failingPath, []byte("not parsed\n"), 0o644); err != nil {
+		t.Fatalf("Write failing transcript: %v", err)
+	}
+	if err := os.Mkdir(failingPath+transcriptmeta.Suffix, 0o755); err != nil {
+		t.Fatalf("Mkdir failing sidecar: %v", err)
 	}
 
 	const secondWorkDir = "/data/projects/working-sidecar"

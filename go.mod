@@ -25,6 +25,7 @@ require (
 	github.com/spf13/pflag v1.0.10
 	github.com/steveyegge/beads v1.1.1-0.20260805093327-bf97b73749ac
 	github.com/stretchr/testify v1.11.1
+	go.etcd.io/bbolt v1.4.3
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.19.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.44.0

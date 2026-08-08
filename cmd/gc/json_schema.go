@@ -475,7 +475,18 @@ func readBuiltinSchema(commandPath []string, role string) (json.RawMessage, erro
 	}
 	parts := append([]string{"schemas"}, commandPath...)
 	parts = append(parts, role+".schema.json")
-	return readEmbeddedSchema(filepath.ToSlash(filepath.Join(parts...)))
+	path := filepath.ToSlash(filepath.Join(parts...))
+	if data, err := readEmbeddedSchema(path); err == nil {
+		return data, nil
+	} else if len(commandPath) == 2 && commandPath[0] == "mail" {
+		// Mail result schemas were historically generated as flat files under
+		// cmd/gc. Keep the canonical embedded schemas authoritative while
+		// accepting the old test/consumer lookup shape.
+		legacy := filepath.ToSlash(filepath.Join("schemas", commandPath[0], commandPath[1], role+".schema.json"))
+		return readEmbeddedSchema(legacy)
+	} else {
+		return nil, err
+	}
 }
 
 func readSharedFailureSchema() (json.RawMessage, error) {
