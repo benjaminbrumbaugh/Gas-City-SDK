@@ -207,7 +207,12 @@
               "whoami",
               "runtime-heartbeat",
               "pack-registry-requests",
-              "events-reemit-execution"
+              "events-reemit-execution",
+              "routing-decisions",
+              "routing-eligible",
+              "routing-ingest",
+              "routing-status",
+              "routing-targets"
             ]
           },
           "event_id": {
