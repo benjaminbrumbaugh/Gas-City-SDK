@@ -90,6 +90,7 @@ type CityRuntime struct {
 	routingDecisionStore    *routingdecision.Store
 	routingDecisionVerifier *routingdecision.Verifier // nil is intentional default-deny
 	routingDecisionNowFn    func() time.Time
+	routingDecisionService  *cityRoutingDecisionService
 
 	orderSweepWatchdogLast             time.Time
 	orderTrackingRetentionWatchdogLast time.Time
@@ -370,6 +371,7 @@ func newCityRuntime(p CityRuntimeParams) *CityRuntime {
 		stdout:            p.Stdout,
 		stderr:            p.Stderr,
 	}
+	initializeRoutingDecisionService(cr)
 	cr.svc = workspacesvc.NewManager(&serviceRuntime{cr: cr})
 	if err := cr.svc.Reload(); err != nil {
 		fmt.Fprintf(cr.stderr, "%s: service init: %v\n", cr.logPrefix, err) //nolint:errcheck // best-effort stderr
@@ -382,6 +384,12 @@ func newCityRuntime(p CityRuntimeParams) *CityRuntime {
 // before run starts, and never replaced afterward.
 func (cr *CityRuntime) setControllerState(cs *controllerState) {
 	cr.cs = cs
+	if cs == nil {
+		return
+	}
+	cs.mu.Lock()
+	cs.routingDecisionService = cr.routingDecisionService
+	cs.mu.Unlock()
 }
 
 // crashTracker returns the crash tracker for API server wiring.
@@ -560,7 +568,7 @@ func (cr *CityRuntime) run(ctx context.Context) {
 	// code remains the sole path that can create or start a worker session.
 	startupRoutingDecisionStart := time.Now()
 	cr.safeTick(func() {
-		cr.applyApprovedRoutingDecisionsAndLog()
+		cr.reconcileRoutingDecisionsAndLog()
 	}, "startup-routing-decision-admission")
 	logPhaseElapsed("startup-routing-decision-admission", startupRoutingDecisionStart)
 	if ctx.Err() != nil {
@@ -1147,7 +1155,7 @@ func (cr *CityRuntime) tick(
 	// normal gc.routed_to demand signal. It cannot start, stop, or migrate a
 	// session; the existing reconciliation path remains lifecycle authority.
 	phaseStart = time.Now()
-	cr.applyApprovedRoutingDecisionsAndLog()
+	cr.reconcileRoutingDecisionsAndLog()
 	recordPhase(TraceSiteControllerTickPhase, "apply_approved_routing_decisions", phaseStart, nil)
 	if ctx.Err() != nil {
 		return
@@ -3674,6 +3682,11 @@ func (cr *CityRuntime) shutdown() {
 	cr.shutdownOnce.Do(func() {
 		asyncStartsDrained := cr.waitForAsyncStarts()
 		cr.waitForAsyncStops()
+		if cr.routingDecisionService != nil {
+			cr.routingDecisionService.Close()
+			cr.routingDecisionStore = nil
+			cr.routingDecisionVerifier = nil
+		}
 		preserveSessions := cr.preserveSessionsShutdown.Load()
 		if preserveSessions {
 			cr.recordPreservedShutdownTrace()

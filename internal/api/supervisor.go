@@ -240,6 +240,10 @@ func (sm *SupervisorMux) Handler() http.Handler {
 	if sm.writeAuth != nil {
 		root = writeAuthMiddleware(sm.writeAuth, sm.readOnly, root)
 	}
+	// Routing decision ingest is stricter than ordinary local mutations. This
+	// wrapper stays outside writeAuthMiddleware so locality/configuration
+	// rejection cannot consume a valid single-use write grant.
+	root = routingDecisionIngestPerimeter(sm.writeAuth, root)
 	// When a verifying key is configured, gate city-scoped reads on a signed
 	// grant. Disjoint from the write gate by method (GET/HEAD vs mutations), so
 	// the relative wrap order is correctness-irrelevant; both stay innermost

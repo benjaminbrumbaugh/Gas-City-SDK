@@ -25,6 +25,7 @@ var requireIdempotency = map[string]bool{
 	"register-extmsg-adapter": true,
 	"emit-event":              true,
 	"post-v0-city":            true,
+	"ingest-routing-decision": true,
 }
 
 // pendingIdempotency lists known create operations that are deliberately NOT

@@ -181,4 +181,11 @@ func TestDecisionValidationRejectsBindingAndTemporalDrift(t *testing.T) {
 	if err := badAlternativeAudit.Validate(); err == nil {
 		t.Fatal("Validate accepted control-bearing alternative audit text")
 	}
+	outsideIndexRange := testDecisionPayload(t)
+	outsideIndexRange.CreatedAt = time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC)
+	outsideIndexRange.ExpiresAt = outsideIndexRange.CreatedAt.Add(time.Hour)
+	outsideIndexRange.BindingID = BindingID(outsideIndexRange)
+	if err := outsideIndexRange.Validate(); err == nil {
+		t.Fatal("Validate accepted time outside the durable expiry index range")
+	}
 }

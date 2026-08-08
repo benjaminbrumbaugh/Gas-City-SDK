@@ -3,7 +3,7 @@ title: "API Control Plane"
 description: "Current-state architecture for Gas City's CLI, HTTP, SSE, generated client, and typed-wire contract."
 ---
 
-> Last verified against code: 2026-04-22
+> Last verified against code: 2026-08-07
 
 This architecture doc captures the API control-plane invariants Gas
 City has converged on. It is normative current-state documentation:
@@ -147,6 +147,17 @@ The generated client is not promoted as a public Go SDK for
 external consumers. External Go consumers, if they ever appear,
 get a supported surface at that point; until then the `internal/`
 location is load-bearing.
+
+Durable routing decisions are a live-only typed projection over the
+controller-owned routing service. `gc routing` calls the adapter in
+`internal/api/client_routing.go`; it never opens the routing ledger directly.
+The four read resources follow the normal city read-auth policy. The ingest
+resource is deliberately stricter: the direct socket peer must be loopback, a
+city-write verifier must be installed, and the normal request-bound write
+grant, CSRF, read-only, validation, and idempotency gates all remain in force.
+Only after those request gates does the domain verify the independent signed
+routing approval. `X-Forwarded-For` and related headers do not establish the
+loopback property.
 
 ### The dashboard projection
 

@@ -46,11 +46,11 @@ type TokenSource func() (string, error)
 // the lowercase hex sha256 of the body; ReqDigest is citywriteauth.ReqDigest
 // over the four — the same value the server independently recomputes.
 type GrantBinding struct {
-	Method         string
-	Path           string
-	CanonicalQuery string
-	BodySHA256     string
-	ReqDigest      string
+	Method         string `json:"method"`
+	Path           string `json:"path"`
+	CanonicalQuery string `json:"canonical_query"`
+	BodySHA256     string `json:"body_sha256"`
+	ReqDigest      string `json:"req_digest"`
 }
 
 // GrantSource mints a single-use X-GC-City-Write grant for one mutating request.
@@ -123,6 +123,39 @@ func NewRemoteCityScopedClient(baseURL, cityName string, opts RemoteOptions) (*C
 	return c, nil
 }
 
+// NewInProcessCityScopedClient builds a typed city client over an in-memory
+// RoundTripper. It is intended for callers that already own an API handler or
+// another request recorder and need the generated-client path without opening
+// a listener. Mutations may install a grant source later with SetGrantSource.
+func NewInProcessCityScopedClient(cityName string, transport http.RoundTripper) (*Client, error) {
+	if strings.TrimSpace(cityName) == "" {
+		return nil, fmt.Errorf("building in-process client: city name is required")
+	}
+	if transport == nil {
+		return nil, fmt.Errorf("building in-process client: transport is required")
+	}
+	const baseURL = "http://gascity.in-process"
+	c := &Client{
+		baseURL:  baseURL,
+		cityName: cityName,
+		isRemote: true,
+	}
+	cw, err := genclient.NewClientWithResponses(
+		baseURL,
+		genclient.WithHTTPClient(&http.Client{Transport: transport}),
+		genclient.WithRequestEditorFn(func(_ context.Context, req *http.Request) error {
+			req.Header.Set("X-GC-Request", "true")
+			return nil
+		}),
+		genclient.WithRequestEditorFn(remoteGrantEditor(c)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("building in-process client: %w", err)
+	}
+	c.cw = cw
+	return c, nil
+}
+
 // NewRemoteEventsClient builds a genclient for the events feed against a remote
 // city. It is backed by the NO-TIMEOUT stream HTTP client — a --follow SSE
 // stream must not be cut by the bounded REST timeout — and carries the same auth
@@ -184,7 +217,10 @@ func remoteAuthEditor(c *Client) genclient.RequestEditorFn {
 // grant is minted live per request.
 func remoteGrantEditor(c *Client) genclient.RequestEditorFn {
 	return func(_ context.Context, req *http.Request) error {
-		if c.grantSource == nil || !isMutatingMethod(req.Method) {
+		c.grantMu.RLock()
+		grantSource := c.grantSource
+		c.grantMu.RUnlock()
+		if grantSource == nil || !isMutatingMethod(req.Method) {
 			return nil
 		}
 		body, err := bufferRequestBody(req)
@@ -192,7 +228,7 @@ func remoteGrantEditor(c *Client) genclient.RequestEditorFn {
 			return err
 		}
 		sum := sha256.Sum256(body)
-		token, err := c.grantSource(GrantBinding{
+		token, err := grantSource(GrantBinding{
 			Method:         req.Method,
 			Path:           req.URL.Path,
 			CanonicalQuery: req.URL.RawQuery,

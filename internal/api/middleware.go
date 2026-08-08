@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"log"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/api/apierr"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/telemetry"
 )
@@ -30,6 +32,14 @@ func (p problemBody) writeTo(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/problem+json; charset=utf-8")
 	w.WriteHeader(p.status)
 	_, _ = w.Write(p.body)
+}
+
+func registeredProblemBody(problem apierr.ProblemType, detail string) problemBody {
+	body, err := json.Marshal(problem.Msg(detail))
+	if err != nil {
+		panic("api: registered problem serialization failed")
+	}
+	return problemBody{status: problem.Status, body: body}
 }
 
 var (

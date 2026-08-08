@@ -70,6 +70,7 @@ gc [flags]
 | [gc restart](#gc-restart) | Restart all agent sessions in the city |
 | [gc resume](#gc-resume) | Resume a suspended city |
 | [gc rig](#gc-rig) | Manage rigs (projects) |
+| [gc routing](#gc-routing) | Inspect and ingest live durable routing decisions |
 | [gc runtime](#gc-runtime) | Process-intrinsic runtime operations |
 | [gc service](#gc-service) | Inspect workspace services |
 | [gc session](#gc-session) | Manage interactive chat sessions |
@@ -3535,6 +3536,88 @@ gc rig suspend [name] [flags]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--json` | bool |  | Output in JSONL format |
+
+## gc routing
+
+Inspect and ingest live durable routing decisions
+
+```
+gc routing
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| [gc routing decisions](#gc-routing-decisions) | List durable routing decisions |
+| [gc routing eligible](#gc-routing-eligible) | Show deterministic eligible work and target inputs |
+| [gc routing ingest](#gc-routing-ingest) | Ingest one externally signed routing decision |
+| [gc routing status](#gc-routing-status) | Show live routing authority and ledger status |
+| [gc routing targets](#gc-routing-targets) | List deterministic selection-safe targets |
+
+## gc routing decisions
+
+List durable routing decisions
+
+```
+gc routing decisions [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--cursor` | string |  | Opaque decision-ID cursor |
+| `--json` | bool |  | Output in JSON format |
+| `--limit` | int | `100` | Maximum rows to scan and return (1-256) |
+| `--state` | string |  | Filter by exact lifecycle state |
+
+## gc routing eligible
+
+Show deterministic eligible work and target inputs
+
+```
+gc routing eligible [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | bool |  | Output in JSON format |
+
+## gc routing ingest
+
+Ingest one externally signed routing decision
+
+```
+gc routing ingest [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--file` | string |  | Typed signed-decision JSON file |
+| `--idempotency-key` | string |  | Required stable retry key |
+| `--json` | bool |  | Output in JSON format |
+| `--write-grant-command` | string |  | Command that reads GrantBinding JSON on stdin and prints one city-write token |
+
+## gc routing status
+
+Show live routing authority and ledger status
+
+```
+gc routing status [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | bool |  | Output in JSON format |
+
+## gc routing targets
+
+List deterministic selection-safe targets
+
+```
+gc routing targets [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | bool |  | Output in JSON format |
 
 ## gc runtime
 

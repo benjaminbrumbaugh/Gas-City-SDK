@@ -9,10 +9,11 @@ ledger:
 <city-root>/.gc/routing-decisions.db
 ```
 
-The controller is default-deny. Its verifier is an explicitly injected
-dependency whose production value remains nil in this integration. Neither a
-ledger record nor an authority file enables routing by itself. Enabling a
-production signer and verifier remains a separate key-custody decision.
+The controller is default-deny. At CityRuntime construction it boot-latches the
+public authority file and, only after that succeeds, opens one process-lifetime
+ledger handle shared by controller ticks and the live API. Missing, unsafe, or
+malformed authority input leaves the service denied and does not create a
+ledger. Gas City never owns a private key or signs an approval.
 
 An admitted decision only adds the existing route metadata to fresh, ready
 work. It does not launch or stop an Agent, invoke Sling, change capacity,
@@ -37,8 +38,9 @@ The authority file must be an owner-only regular file (`0400` or `0600`) and is
 opened without following symlinks. Its strict schema accepts only an exact
 schema version and a bounded list of canonical lowercase authority IDs with
 base64-encoded Ed25519 public keys. Unknown, duplicate, case-variant, malformed,
-or trailing JSON is rejected. Gas City never creates this file and never loads
-it into the running controller automatically.
+or trailing JSON is rejected. Gas City never creates this file. The running
+controller loads it once at boot; changes require a CityRuntime restart and
+cannot partially replace the active verifier.
 
 ## Signed contract
 
@@ -74,7 +76,7 @@ record revision used for lifecycle compare-and-swap.
 The exact lifecycle graph is:
 
 ```text
-proposed ──> approved ──> admitted ──> claimed
+proposed ──> approved ──> admitted ──> claimed ──> outcome_recorded
     │           │             └──────> outcome_recorded
     │           ├────────────> refused_after_race
     │           ├────────────> revoked
@@ -83,15 +85,23 @@ proposed ──> approved ──> admitted ──> claimed
     └──────────> expired
 ```
 
-All other edges are invalid. `claimed`, `outcome_recorded`,
-`refused_after_race`, `revoked`, and `expired` are terminal in this slice. The
-store exposes `admitted -> claimed` and `admitted -> outcome_recorded`, but the
-controller does not infer either fact without an unambiguous owning event.
+All other edges are invalid. `proposed`, `approved`, `admitted`, and `claimed`
+are active. `outcome_recorded`, `refused_after_race`, `revoked`, and `expired`
+are terminal. The controller records claim and outcome transitions only from an
+exact carrier marker, target, original stamped fence, and unambiguous live work
+status; missing or contradictory facts leave the decision active for a later
+pass.
 
 Active-approved queries seek directly into the state/expiry index, return a
 bounded deterministic result, and reverify every signature. A bounded expiry
 sweep moves due proposed or approved records to `expired`. Payload bytes never
 change during a lifecycle transition.
+
+Terminal records and their transition audits are retained for six calendar
+months from the latest terminal transition. Each controller pass scans at most
+256 decision rows from a keyset cursor, deletes the record, state index, audits,
+and indexed live-ingest receipts atomically, and categorically excludes active
+states even when they are old.
 
 ## Controller admission
 
@@ -132,6 +142,39 @@ If the ledger commit fails, it clears only those four values through another
 readiness/revision CAS when the bead still has that exact revision, marker,
 target, and fence. If exact compensation cannot be proved, the marker remains;
 the controller never guesses at a newer revision.
+
+## Live API and CLI
+
+The supervisor exposes the controller-owned service through typed city routes:
+
+```text
+GET  /v0/city/{cityName}/routing/status
+GET  /v0/city/{cityName}/routing/targets
+GET  /v0/city/{cityName}/routing/eligible
+GET  /v0/city/{cityName}/routing/decisions
+POST /v0/city/{cityName}/routing/decisions
+```
+
+Target responses expose only canonical identity, Rig, description, resolved
+provider name, and the one-way config digest. Eligible responses pair one
+observation time with bounded, deterministically ordered ready-work and target
+snapshots. Decision listing uses decision-ID keyset pagination and includes the
+ordered transition audits.
+
+Ingest has two independent authorization layers. The supervisor accepts it only
+from the direct loopback peer when a city-write verifier is configured, and the
+normal request-bound write grant, CSRF, read-only, Huma validation, and
+idempotency gates still apply. The routing service then verifies the separate
+Ed25519 decision signature against the boot-latched authority. Forwarded-address
+headers never establish locality.
+
+The public projection is `gc routing status|targets|eligible|decisions|ingest`.
+These commands use only the live typed API and have no stopped-city or direct
+ledger fallback. Ingest obtains a request-bound city-write grant from the
+operator-supplied `--write-grant-command`; the command receives the exact typed
+request binding as JSON on stdin, and its token is neither placed in argv nor
+printed. The hidden `gc route-decision` group remains the stopped-city
+maintenance surface described below.
 
 ## Restart recovery
 

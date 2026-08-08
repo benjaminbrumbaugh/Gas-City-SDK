@@ -86,16 +86,23 @@ var (
 	NotImplemented = Register(ProblemType{Code: "not-implemented", Status: http.StatusNotImplemented, Title: "Not Implemented"})
 
 	// Idempotency (two-phase reserve/complete).
-	IdempotencyInFlight = Register(ProblemType{Code: "idempotency-in-flight", Status: http.StatusConflict, Title: "Idempotency Key In Flight"})
-	IdempotencyMismatch = Register(ProblemType{Code: "idempotency-mismatch", Status: http.StatusUnprocessableEntity, Title: "Idempotency Key Body Mismatch"})
+	IdempotencyInFlight        = Register(ProblemType{Code: "idempotency-in-flight", Status: http.StatusConflict, Title: "Idempotency Key In Flight"})
+	IdempotencyMismatch        = Register(ProblemType{Code: "idempotency-mismatch", Status: http.StatusUnprocessableEntity, Title: "Idempotency Key Body Mismatch"})
+	RoutingIdempotencyConflict = Register(ProblemType{Code: "routing-idempotency-conflict", Status: http.StatusConflict, Title: "Routing Idempotency Conflict"})
 
 	// Backend availability. store-unavailable is the bead-store-not-live 503 emitted
 	// by the shared cacheLiveOr503 helper; service-unavailable is the generic 503
 	// that every other converted plain 503 uses — its title matches http.StatusText
 	// so the wire title is preserved.
-	StoreUnavailable   = Register(ProblemType{Code: "store-unavailable", Status: http.StatusServiceUnavailable, Title: "Store Unavailable"})
-	ServiceUnavailable = Register(ProblemType{Code: "service-unavailable", Status: http.StatusServiceUnavailable, Title: "Service Unavailable"})
-	Internal           = Register(ProblemType{Code: "internal", Status: http.StatusInternalServerError, Title: "Internal Server Error"})
+	StoreUnavailable        = Register(ProblemType{Code: "store-unavailable", Status: http.StatusServiceUnavailable, Title: "Store Unavailable"})
+	ServiceUnavailable      = Register(ProblemType{Code: "service-unavailable", Status: http.StatusServiceUnavailable, Title: "Service Unavailable"})
+	RoutingUnavailable      = Register(ProblemType{Code: "routing-unavailable", Status: http.StatusServiceUnavailable, Title: "Routing Service Unavailable"})
+	RoutingIngestUnhardened = Register(ProblemType{Code: "routing-ingest-unhardened", Status: http.StatusServiceUnavailable, Title: "Routing Ingest Unhardened"})
+	Internal                = Register(ProblemType{Code: "internal", Status: http.StatusInternalServerError, Title: "Internal Server Error"})
+
+	RoutingDecisionInvalid   = Register(ProblemType{Code: "routing-decision-invalid", Status: http.StatusUnprocessableEntity, Title: "Routing Decision Invalid"})
+	RoutingSignatureRefused  = Register(ProblemType{Code: "routing-signature-refused", Status: http.StatusForbidden, Title: "Routing Signature Refused"})
+	RoutingIngestNonloopback = Register(ProblemType{Code: "routing-ingest-nonloopback", Status: http.StatusForbidden, Title: "Routing Ingest Non-Loopback"})
 
 	// Generic transport statuses. Titles match http.StatusText so converting a
 	// plain error of these statuses preserves the wire title.

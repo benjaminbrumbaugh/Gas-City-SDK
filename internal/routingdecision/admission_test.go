@@ -108,7 +108,9 @@ func TestFinalAdmissionSerializesVerifierCallbackAndLifecycleCommit(t *testing.T
 	}
 	replay, err := store.FinalAdmission(FinalAdmissionRequest{
 		DecisionID: record.Payload.DecisionID, ExpectedRevision: record.RecordRevision,
-		Now: now, IdempotencyToken: "admission-final",
+		// Observation time is not part of request identity: a legitimate retry
+		// necessarily occurs later but must replay the same durable receipt.
+		Now: now.Add(time.Second), IdempotencyToken: "admission-final",
 	}, verifier, func(Record) (AdmissionCallbackResult, error) {
 		t.Fatal("idempotent replay called admission callback")
 		return AdmissionCallbackResult{}, nil

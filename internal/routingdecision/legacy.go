@@ -168,6 +168,9 @@ func (store *Store) ImportLegacy(source LegacySource, payloads []DecisionPayload
 			if err := putRecord(tx, record); err != nil {
 				return err
 			}
+			if err := adjustStateCount(tx, StateProposed, 1); err != nil {
+				return err
+			}
 			audit := TransitionAudit{DecisionID: payload.DecisionID, To: StateProposed, At: store.now().UTC(), Reason: "imported from unsigned legacy routing intent", RecordRevision: 1, StoreRevision: storeRevision}
 			if err := putAudit(tx, audit); err != nil {
 				return err

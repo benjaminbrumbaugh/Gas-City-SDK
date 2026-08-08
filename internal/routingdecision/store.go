@@ -3,6 +3,7 @@ package routingdecision
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,6 +23,7 @@ const (
 	StoreRelativePath  = ".gc/routing-decisions.db"
 	defaultLockTimeout = 250 * time.Millisecond
 	maxActiveQuery     = 256
+	retentionMonths    = 6
 )
 
 var (
@@ -49,16 +52,21 @@ var (
 )
 
 var (
-	bucketMeta          = []byte("meta")
-	bucketDecisions     = []byte("decisions")
-	bucketStateExpiry   = []byte("state_expiry")
-	bucketIdempotency   = []byte("idempotency")
-	bucketTransitions   = []byte("transitions")
-	bucketImports       = []byte("imports")
-	keySchemaVersion    = []byte("schema_version")
-	keyStoreRevision    = []byte("store_revision")
-	requiredBucketNames = [][]byte{
-		bucketMeta, bucketDecisions, bucketStateExpiry, bucketIdempotency, bucketTransitions, bucketImports,
+	bucketMeta              = []byte("meta")
+	bucketDecisions         = []byte("decisions")
+	bucketStateExpiry       = []byte("state_expiry")
+	bucketStateCounts       = []byte("state_counts")
+	bucketIdempotency       = []byte("idempotency")
+	bucketReceiptByDecision = []byte("receipt_by_decision")
+	bucketTransitions       = []byte("transitions")
+	bucketImports           = []byte("imports")
+	bucketPurgedDecisions   = []byte("purged_decisions")
+	keySchemaVersion        = []byte("schema_version")
+	keyStoreRevision        = []byte("store_revision")
+	keyReceiptIndexFloor    = []byte("receipt_index_floor_revision")
+	requiredBucketNames     = [][]byte{
+		bucketMeta, bucketDecisions, bucketStateExpiry, bucketStateCounts, bucketIdempotency, bucketReceiptByDecision,
+		bucketTransitions, bucketImports, bucketPurgedDecisions,
 	}
 )
 
@@ -92,9 +100,23 @@ func IsAllowedTransition(from, to State) bool {
 		return to == StateAdmitted || to == StateRefusedAfterRace || to == StateRevoked || to == StateExpired
 	case StateAdmitted:
 		return to == StateClaimed || to == StateOutcomeRecorded
+	case StateClaimed:
+		return to == StateOutcomeRecorded
 	default:
 		return false
 	}
+}
+
+// IsActiveState reports whether a decision still participates in admission or
+// lifecycle reconciliation and is therefore categorically retention-immune.
+func IsActiveState(state State) bool {
+	return state == StateProposed || state == StateApproved || state == StateAdmitted || state == StateClaimed
+}
+
+// IsTerminalState reports whether a decision has completed its lifecycle and
+// may become eligible for retention purge.
+func IsTerminalState(state State) bool {
+	return state == StateRefusedAfterRace || state == StateExpired || state == StateRevoked || state == StateOutcomeRecorded
 }
 
 // TransitionAudit records one immutable lifecycle change.
@@ -138,6 +160,70 @@ type TransitionReceipt struct {
 	StoreRevision  uint64 `json:"store_revision"`
 }
 
+// IngestApprovedRequest is one externally signed, currently valid decision
+// envelope plus its request-bound idempotency token.
+type IngestApprovedRequest struct {
+	Payload          DecisionPayload `json:"payload"`
+	Approval         ApprovalPayload `json:"approval"`
+	Signature        Signature       `json:"signature"`
+	Now              time.Time       `json:"-"`
+	IdempotencyToken string          `json:"-"`
+}
+
+// IngestApprovedResult contains the immutable approved record and receipt
+// produced by atomic ingest.
+type IngestApprovedResult struct {
+	Record  Record            `json:"record"`
+	Receipt TransitionReceipt `json:"receipt"`
+}
+
+// DecisionWithAudits is one full decision plus its ordered transition history.
+type DecisionWithAudits struct {
+	Record Record            `json:"record"`
+	Audits []TransitionAudit `json:"audits"`
+}
+
+// ListOptions controls one bounded decision-ID keyset page.
+type ListOptions struct {
+	State  State
+	Limit  int
+	Cursor string
+}
+
+// DecisionPage is one snapshot-consistent keyset page.
+type DecisionPage struct {
+	Items      []DecisionWithAudits `json:"items"`
+	Total      int                  `json:"total"`
+	NextCursor string               `json:"next_cursor,omitempty"`
+}
+
+// StateCount is one exact lifecycle-state cardinality.
+type StateCount struct {
+	State State  `json:"state"`
+	Count uint64 `json:"count"`
+}
+
+// StoreStatus is the exact current ledger summary used by the live status API.
+type StoreStatus struct {
+	SchemaVersion uint64       `json:"schema_version"`
+	StoreRevision uint64       `json:"store_revision"`
+	StateCounts   []StateCount `json:"state_counts"`
+}
+
+// PurgeOptions controls one bounded terminal-retention page.
+type PurgeOptions struct {
+	Now    time.Time
+	Limit  int
+	Cursor string
+}
+
+// PurgeResult reports bounded scan and deletion progress.
+type PurgeResult struct {
+	Scanned    int    `json:"scanned"`
+	Deleted    int    `json:"deleted"`
+	NextCursor string `json:"next_cursor,omitempty"`
+}
+
 // FinalAdmissionRequest identifies the approved CAS coordinated with one bead write.
 type FinalAdmissionRequest struct {
 	DecisionID       string    `json:"decision_id"`
@@ -172,8 +258,252 @@ type Store struct {
 type idempotencyRecord struct {
 	Kind        string             `json:"kind"`
 	Fingerprint string             `json:"fingerprint"`
+	DecisionID  string             `json:"decision_id,omitempty"`
 	Created     *Record            `json:"created,omitempty"`
 	Transition  *TransitionReceipt `json:"transition,omitempty"`
+}
+
+// IngestApproved atomically validates and persists one currently valid signed
+// decision. It records the proposed and approved lifecycle edges in the same
+// writer transaction, so no unsigned intermediate state is externally visible.
+func (store *Store) IngestApproved(request IngestApprovedRequest, verifier Verifier) (IngestApprovedResult, error) {
+	useStoreClock := request.Now.IsZero()
+	if !useStoreClock {
+		request.Now = request.Now.UTC()
+	}
+	if err := validateText("idempotency token", request.IdempotencyToken, true); err != nil {
+		return IngestApprovedResult{}, err
+	}
+	if err := request.Payload.Validate(); err != nil {
+		return IngestApprovedResult{}, err
+	}
+	if err := request.Approval.Validate(); err != nil {
+		return IngestApprovedResult{}, err
+	}
+	approvedAt := request.Approval.ApprovedAt.UTC()
+	if approvedAt.Before(request.Payload.CreatedAt.UTC()) || !approvedAt.Before(request.Payload.ExpiresAt.UTC()) {
+		return IngestApprovedResult{}, invalidf("approval time is outside the current decision window")
+	}
+	if err := verifier.Verify(request.Payload, request.Approval, request.Signature); err != nil {
+		return IngestApprovedResult{}, err
+	}
+	fingerprint, err := ingestFingerprint(request.Payload, request.Approval, request.Signature)
+	if err != nil {
+		return IngestApprovedResult{}, err
+	}
+
+	payload := canonicalPayloadCopy(request.Payload)
+	approval := canonicalApprovalCopy(request.Approval)
+	signature := *cloneSignature(&request.Signature)
+	var result IngestApprovedResult
+	err = store.db.Update(func(tx *bbolt.Tx) error {
+		transactionNow := request.Now
+		if useStoreClock {
+			transactionNow = store.now().UTC()
+		}
+		if !payload.IsActiveAt(transactionNow) || approvedAt.After(transactionNow) {
+			return invalidf("decision or approval is not current")
+		}
+		if replay, found, err := readIdempotency(tx, request.IdempotencyToken, fingerprint); err != nil {
+			return err
+		} else if found {
+			if replay.Kind != "ingest" || replay.Transition == nil || replay.DecisionID != payload.DecisionID {
+				return ErrIdempotencyConflict
+			}
+			result = ingestResultFromReceipt(payload, approval, signature, *replay.Transition)
+			return nil
+		}
+		if tx.Bucket(bucketPurgedDecisions).Get([]byte(payload.DecisionID)) != nil || tx.Bucket(bucketDecisions).Get([]byte(payload.DecisionID)) != nil {
+			return ErrDecisionExists
+		}
+
+		proposedStoreRevision, err := nextStoreRevision(tx)
+		if err != nil {
+			return err
+		}
+		proposedAudit := TransitionAudit{
+			DecisionID: payload.DecisionID, To: StateProposed, At: transactionNow,
+			Reason: "ingested signed decision", RecordRevision: 1, StoreRevision: proposedStoreRevision,
+		}
+		if err := putAudit(tx, proposedAudit); err != nil {
+			return err
+		}
+
+		approvedStoreRevision, err := nextStoreRevision(tx)
+		if err != nil {
+			return err
+		}
+		record := Record{
+			Payload: payload, Approval: &approval, Signature: &signature, State: StateApproved,
+			RecordRevision: 2, StoreRevision: approvedStoreRevision,
+		}
+		if err := putRecord(tx, record); err != nil {
+			return err
+		}
+		if err := adjustStateCount(tx, StateApproved, 1); err != nil {
+			return err
+		}
+		approvedAudit := TransitionAudit{
+			DecisionID: payload.DecisionID, From: StateProposed, To: StateApproved, At: transactionNow,
+			Reason: "signature admitted", RecordRevision: 2, StoreRevision: approvedStoreRevision,
+		}
+		if err := putAudit(tx, approvedAudit); err != nil {
+			return err
+		}
+		receipt := TransitionReceipt{
+			DecisionID: payload.DecisionID, State: StateApproved,
+			RecordRevision: record.RecordRevision, StoreRevision: record.StoreRevision,
+		}
+		storedReceipt := idempotencyRecord{
+			Kind: "ingest", Fingerprint: fingerprint, DecisionID: payload.DecisionID, Transition: &receipt,
+		}
+		if err := putIdempotency(tx, request.IdempotencyToken, storedReceipt); err != nil {
+			return err
+		}
+		result = IngestApprovedResult{Record: record, Receipt: receipt}
+		return nil
+	})
+	return result, classifyStoreError(err)
+}
+
+// ListDecisions returns one snapshot-consistent page in decision-ID order.
+// Each call examines at most maxActiveQuery rows even when a state filter is
+// sparse; the returned cursor advances by the last scanned ID.
+func (store *Store) ListDecisions(options ListOptions) (DecisionPage, error) {
+	if options.Limit <= 0 || options.Limit > maxActiveQuery {
+		return DecisionPage{}, invalidf("decision list limit must be between 1 and %d", maxActiveQuery)
+	}
+	if options.State != "" && !knownState(options.State) {
+		return DecisionPage{}, invalidf("unknown decision state")
+	}
+	after, err := decodeKeysetCursor(options.Cursor)
+	if err != nil {
+		return DecisionPage{}, err
+	}
+	page := DecisionPage{Items: make([]DecisionWithAudits, 0, options.Limit)}
+	err = store.db.View(func(tx *bbolt.Tx) error {
+		cursor := tx.Bucket(bucketDecisions).Cursor()
+		key, value := cursor.First()
+		if after != "" {
+			key, value = cursor.Seek([]byte(after))
+			if key != nil && string(key) == after {
+				key, value = cursor.Next()
+			}
+		}
+		scanned := 0
+		lastScanned := ""
+		for key != nil && scanned < maxActiveQuery && len(page.Items) < options.Limit {
+			var record Record
+			if err := decodeRecord(value, &record); err != nil || string(key) != record.Payload.DecisionID {
+				return ErrStoreCorrupt
+			}
+			scanned++
+			lastScanned = string(key)
+			if options.State == "" || record.State == options.State {
+				audits, err := auditsForDecision(tx, record.Payload.DecisionID)
+				if err != nil {
+					return err
+				}
+				page.Items = append(page.Items, DecisionWithAudits{Record: record, Audits: audits})
+			}
+			key, value = cursor.Next()
+		}
+		if key != nil && lastScanned != "" {
+			page.NextCursor = encodeKeysetCursor(lastScanned)
+		}
+		return nil
+	})
+	page.Total = len(page.Items)
+	return page, classifyStoreError(err)
+}
+
+// Status returns exact counts from the transactionally maintained state index.
+func (store *Store) Status() (StoreStatus, error) {
+	status := StoreStatus{StateCounts: make([]StateCount, 0, len(AllStates()))}
+	err := store.db.View(func(tx *bbolt.Tx) error {
+		var ok bool
+		status.SchemaVersion, ok = decodeUint64(tx.Bucket(bucketMeta).Get(keySchemaVersion))
+		if !ok || status.SchemaVersion != SchemaVersion {
+			return ErrStoreCorrupt
+		}
+		status.StoreRevision, ok = decodeUint64(tx.Bucket(bucketMeta).Get(keyStoreRevision))
+		if !ok {
+			return ErrStoreCorrupt
+		}
+		for _, state := range AllStates() {
+			count, ok := decodeUint64(tx.Bucket(bucketStateCounts).Get([]byte(state)))
+			if !ok {
+				return ErrStoreCorrupt
+			}
+			status.StateCounts = append(status.StateCounts, StateCount{State: state, Count: count})
+		}
+		return nil
+	})
+	return status, classifyStoreError(err)
+}
+
+// PurgeTerminal scans one bounded decision-ID page and atomically deletes
+// terminal records whose latest transition is at least six calendar months
+// old, together with their state index, audits, and indexed receipts.
+func (store *Store) PurgeTerminal(options PurgeOptions) (PurgeResult, error) {
+	if options.Limit <= 0 || options.Limit > maxActiveQuery {
+		return PurgeResult{}, invalidf("purge limit must be between 1 and %d", maxActiveQuery)
+	}
+	if options.Now.IsZero() {
+		options.Now = store.now().UTC()
+	} else {
+		options.Now = options.Now.UTC()
+	}
+	after, err := decodeKeysetCursor(options.Cursor)
+	if err != nil {
+		return PurgeResult{}, err
+	}
+	cutoff := subtractCalendarMonths(options.Now, retentionMonths)
+	result := PurgeResult{}
+	err = store.db.Update(func(tx *bbolt.Tx) error {
+		type candidate struct {
+			record Record
+		}
+		candidates := make([]candidate, 0, options.Limit)
+		cursor := tx.Bucket(bucketDecisions).Cursor()
+		key, value := cursor.First()
+		if after != "" {
+			key, value = cursor.Seek([]byte(after))
+			if key != nil && string(key) == after {
+				key, value = cursor.Next()
+			}
+		}
+		lastScanned := ""
+		for key != nil && result.Scanned < options.Limit {
+			var record Record
+			if err := decodeRecord(value, &record); err != nil || string(key) != record.Payload.DecisionID {
+				return ErrStoreCorrupt
+			}
+			result.Scanned++
+			lastScanned = string(key)
+			if IsTerminalState(record.State) {
+				audit, err := latestAudit(tx, record)
+				if err != nil {
+					return err
+				}
+				if !audit.At.After(cutoff) {
+					candidates = append(candidates, candidate{record: record})
+				}
+			}
+			key, value = cursor.Next()
+		}
+		if key != nil && lastScanned != "" {
+			result.NextCursor = encodeKeysetCursor(lastScanned)
+		}
+		for _, candidate := range candidates {
+			if err := purgeDecisionTx(tx, candidate.record); err != nil {
+				return err
+			}
+			result.Deleted++
+		}
+		return nil
+	})
+	return result, classifyStoreError(err)
 }
 
 // FinalAdmission holds the bbolt writer transaction while rechecking the exact
@@ -181,9 +511,8 @@ type idempotencyRecord struct {
 // committing admitted/refused lifecycle state. The callback must not reenter
 // this store or perform provider/network work.
 func (store *Store) FinalAdmission(request FinalAdmissionRequest, verifier Verifier, callback func(Record) (AdmissionCallbackResult, error)) (TransitionReceipt, error) {
-	if request.Now.IsZero() {
-		request.Now = store.now().UTC()
-	} else {
+	useStoreClock := request.Now.IsZero()
+	if !useStoreClock {
 		request.Now = request.Now.UTC()
 	}
 	var receipt TransitionReceipt
@@ -192,9 +521,10 @@ func (store *Store) FinalAdmission(request FinalAdmissionRequest, verifier Verif
 			return fmt.Errorf("%w: incomplete final admission", ErrInvalidDecision)
 		}
 		fingerprint := fingerprintOf(struct {
-			Kind    string                `json:"kind"`
-			Request FinalAdmissionRequest `json:"request"`
-		}{Kind: "admission", Request: request})
+			Kind             string `json:"kind"`
+			DecisionID       string `json:"decision_id"`
+			ExpectedRevision uint64 `json:"expected_revision"`
+		}{Kind: "admission", DecisionID: request.DecisionID, ExpectedRevision: request.ExpectedRevision})
 		if replay, found, err := readIdempotency(tx, request.IdempotencyToken, fingerprint); err != nil {
 			return err
 		} else if found {
@@ -221,11 +551,15 @@ func (store *Store) FinalAdmission(request FinalAdmissionRequest, verifier Verif
 		if err := verifier.Verify(record.Payload, *record.Approval, *record.Signature); err != nil {
 			return err
 		}
+		transactionNow := request.Now
+		if useStoreClock {
+			transactionNow = store.now().UTC()
+		}
 		result := AdmissionCallbackResult{}
-		if !request.Now.Before(record.Payload.ExpiresAt.UTC()) {
+		if !transactionNow.Before(record.Payload.ExpiresAt.UTC()) {
 			result = AdmissionCallbackResult{State: StateExpired, Reason: "validity window elapsed"}
 		} else {
-			if request.Now.Before(record.Payload.CreatedAt.UTC()) {
+			if transactionNow.Before(record.Payload.CreatedAt.UTC()) {
 				return ErrInvalidTransition
 			}
 			var callbackErr error
@@ -257,13 +591,16 @@ func (store *Store) FinalAdmission(request FinalAdmissionRequest, verifier Verif
 		if err := putRecord(tx, record); err != nil {
 			return err
 		}
-		audit := TransitionAudit{DecisionID: record.Payload.DecisionID, From: StateApproved, To: result.State, At: store.now().UTC(), Reason: result.Reason, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
+		if err := moveStateCount(tx, StateApproved, result.State); err != nil {
+			return err
+		}
+		audit := TransitionAudit{DecisionID: record.Payload.DecisionID, From: StateApproved, To: result.State, At: transactionNow, Reason: result.Reason, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
 		if err := putAudit(tx, audit); err != nil {
 			return err
 		}
 		receipt = TransitionReceipt{DecisionID: record.Payload.DecisionID, State: record.State, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
-		idempotency := idempotencyRecord{Kind: "admission", Fingerprint: fingerprint, Transition: &receipt}
-		return putJSON(tx.Bucket(bucketIdempotency), []byte(request.IdempotencyToken), idempotency)
+		idempotency := idempotencyRecord{Kind: "admission", Fingerprint: fingerprint, DecisionID: record.Payload.DecisionID, Transition: &receipt}
+		return putIdempotency(tx, request.IdempotencyToken, idempotency)
 	})
 	return receipt, classifyStoreError(err)
 }
@@ -308,12 +645,24 @@ func OpenStore(cityRoot string, options StoreOptions) (*Store, error) {
 
 func (store *Store) initialize() error {
 	return store.db.Update(func(tx *bbolt.Tx) error {
+		meta := tx.Bucket(bucketMeta)
+		if meta != nil && meta.Get(keySchemaVersion) != nil {
+			schema, ok := decodeUint64(meta.Get(keySchemaVersion))
+			if !ok {
+				return ErrStoreCorrupt
+			}
+			if schema != SchemaVersion {
+				return ErrUnsupportedSchema
+			}
+		}
+		hadReceiptIndex := tx.Bucket(bucketReceiptByDecision) != nil
+		hadStateCounts := tx.Bucket(bucketStateCounts) != nil
 		for _, name := range requiredBucketNames {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("%w: initialize bucket", ErrStoreCorrupt)
 			}
 		}
-		meta := tx.Bucket(bucketMeta)
+		meta = tx.Bucket(bucketMeta)
 		rawSchema := meta.Get(keySchemaVersion)
 		if rawSchema == nil {
 			if err := meta.Put(keySchemaVersion, encodeUint64(SchemaVersion)); err != nil {
@@ -321,6 +670,14 @@ func (store *Store) initialize() error {
 			}
 			if err := meta.Put(keyStoreRevision, encodeUint64(0)); err != nil {
 				return err
+			}
+			if err := meta.Put(keyReceiptIndexFloor, encodeUint64(0)); err != nil {
+				return err
+			}
+			for _, state := range AllStates() {
+				if err := tx.Bucket(bucketStateCounts).Put([]byte(state), encodeUint64(0)); err != nil {
+					return ErrStoreCorrupt
+				}
 			}
 			return nil
 		}
@@ -333,6 +690,25 @@ func (store *Store) initialize() error {
 		}
 		if _, ok := decodeUint64(meta.Get(keyStoreRevision)); !ok {
 			return ErrStoreCorrupt
+		}
+		if !hadReceiptIndex {
+			floor, _ := decodeUint64(meta.Get(keyStoreRevision))
+			if err := meta.Put(keyReceiptIndexFloor, encodeUint64(floor)); err != nil {
+				return ErrStoreCorrupt
+			}
+		} else if _, ok := decodeUint64(meta.Get(keyReceiptIndexFloor)); !ok {
+			return ErrStoreCorrupt
+		}
+		if !hadStateCounts {
+			if err := rebuildStateCounts(tx); err != nil {
+				return err
+			}
+		} else {
+			for _, state := range AllStates() {
+				if _, ok := decodeUint64(tx.Bucket(bucketStateCounts).Get([]byte(state))); !ok {
+					return ErrStoreCorrupt
+				}
+			}
 		}
 		return nil
 	})
@@ -381,12 +757,15 @@ func (store *Store) Create(payload DecisionPayload, token string) (Record, error
 		if err := putRecord(tx, result); err != nil {
 			return err
 		}
+		if err := adjustStateCount(tx, StateProposed, 1); err != nil {
+			return err
+		}
 		audit := TransitionAudit{DecisionID: payload.DecisionID, To: StateProposed, At: store.now().UTC(), Reason: "created", RecordRevision: 1, StoreRevision: storeRevision}
 		if err := putAudit(tx, audit); err != nil {
 			return err
 		}
-		receipt := idempotencyRecord{Kind: "create", Fingerprint: fingerprint, Created: &result}
-		return putJSON(tx.Bucket(bucketIdempotency), []byte(token), receipt)
+		receipt := idempotencyRecord{Kind: "create", Fingerprint: fingerprint, DecisionID: payload.DecisionID, Created: &result}
+		return putIdempotency(tx, token, receipt)
 	})
 	return result, classifyStoreError(err)
 }
@@ -416,8 +795,14 @@ func (store *Store) Transition(request TransitionRequest, verifier Verifier) (Tr
 }
 
 func (store *Store) transitionTx(tx *bbolt.Tx, request TransitionRequest, verifier Verifier) (TransitionReceipt, error) {
-	if strings.TrimSpace(request.DecisionID) == "" || strings.TrimSpace(request.IdempotencyToken) == "" || strings.TrimSpace(request.Reason) == "" {
+	if strings.TrimSpace(request.DecisionID) == "" {
 		return TransitionReceipt{}, fmt.Errorf("%w: incomplete transition", ErrInvalidDecision)
+	}
+	if err := validateText("idempotency token", request.IdempotencyToken, true); err != nil {
+		return TransitionReceipt{}, err
+	}
+	if err := validateText("transition reason", request.Reason, true); err != nil {
+		return TransitionReceipt{}, err
 	}
 	fingerprint := fingerprintOf(request)
 	if replay, found, err := readIdempotency(tx, request.IdempotencyToken, fingerprint); err != nil {
@@ -468,13 +853,16 @@ func (store *Store) transitionTx(tx *bbolt.Tx, request TransitionRequest, verifi
 	if err := putRecord(tx, record); err != nil {
 		return TransitionReceipt{}, err
 	}
+	if err := moveStateCount(tx, request.From, request.To); err != nil {
+		return TransitionReceipt{}, err
+	}
 	audit := TransitionAudit{DecisionID: record.Payload.DecisionID, From: request.From, To: request.To, At: store.now().UTC(), Reason: request.Reason, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
 	if err := putAudit(tx, audit); err != nil {
 		return TransitionReceipt{}, err
 	}
 	receipt := TransitionReceipt{DecisionID: record.Payload.DecisionID, State: record.State, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
-	idempotency := idempotencyRecord{Kind: "transition", Fingerprint: fingerprint, Transition: &receipt}
-	if err := putJSON(tx.Bucket(bucketIdempotency), []byte(request.IdempotencyToken), idempotency); err != nil {
+	idempotency := idempotencyRecord{Kind: "transition", Fingerprint: fingerprint, DecisionID: record.Payload.DecisionID, Transition: &receipt}
+	if err := putIdempotency(tx, request.IdempotencyToken, idempotency); err != nil {
 		return TransitionReceipt{}, err
 	}
 	return receipt, nil
@@ -555,6 +943,211 @@ func (store *Store) ExpireDue(now time.Time, limit int, tokenFor func(string) st
 	return expired, nil
 }
 
+func ingestFingerprint(payload DecisionPayload, approval ApprovalPayload, signature Signature) (string, error) {
+	signing, err := SigningBytes(payload, approval)
+	if err != nil {
+		return "", err
+	}
+	return fingerprintOf(struct {
+		Kind        string `json:"kind"`
+		Signing     []byte `json:"signing"`
+		Algorithm   string `json:"algorithm"`
+		AuthorityID string `json:"authority_id"`
+		Signature   []byte `json:"signature"`
+	}{
+		Kind: "ingest", Signing: signing, Algorithm: signature.Algorithm,
+		AuthorityID: signature.AuthorityID, Signature: append([]byte(nil), signature.Value...),
+	}), nil
+}
+
+func canonicalPayloadCopy(payload DecisionPayload) DecisionPayload {
+	payload.Evidence = append([]string{}, payload.Evidence...)
+	payload.Alternatives = append([]Alternative{}, payload.Alternatives...)
+	payload.Options = append([]AuditOption{}, payload.Options...)
+	sort.Slice(payload.Options, func(i, j int) bool { return payload.Options[i].Key < payload.Options[j].Key })
+	payload.CreatedAt = payload.CreatedAt.UTC().Round(0)
+	payload.ExpiresAt = payload.ExpiresAt.UTC().Round(0)
+	return payload
+}
+
+func canonicalApprovalCopy(approval ApprovalPayload) ApprovalPayload {
+	approval.ApprovedAt = approval.ApprovedAt.UTC().Round(0)
+	return approval
+}
+
+func ingestResultFromReceipt(payload DecisionPayload, approval ApprovalPayload, signature Signature, receipt TransitionReceipt) IngestApprovedResult {
+	record := Record{
+		Payload: payload, Approval: &approval, Signature: &signature, State: receipt.State,
+		RecordRevision: receipt.RecordRevision, StoreRevision: receipt.StoreRevision,
+	}
+	return IngestApprovedResult{Record: record, Receipt: receipt}
+}
+
+func putIdempotency(tx *bbolt.Tx, token string, receipt idempotencyRecord) error {
+	if receipt.DecisionID == "" {
+		return ErrStoreCorrupt
+	}
+	if err := putJSON(tx.Bucket(bucketIdempotency), []byte(token), receipt); err != nil {
+		return err
+	}
+	return tx.Bucket(bucketReceiptByDecision).Put(receiptIndexKey(receipt.DecisionID, token), []byte(token))
+}
+
+func receiptIndexKey(decisionID, token string) []byte {
+	key := make([]byte, 0, len(decisionID)+len(token)+1)
+	key = append(key, decisionID...)
+	key = append(key, 0)
+	return append(key, token...)
+}
+
+func auditsForDecision(tx *bbolt.Tx, decisionID string) ([]TransitionAudit, error) {
+	result := make([]TransitionAudit, 0, 4)
+	prefix := append([]byte(decisionID), 0)
+	cursor := tx.Bucket(bucketTransitions).Cursor()
+	for key, value := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, value = cursor.Next() {
+		var audit TransitionAudit
+		if err := strictUnmarshal(value, &audit); err != nil || !bytes.Equal(key, transitionAuditKey(audit.DecisionID, audit.RecordRevision)) {
+			return nil, ErrStoreCorrupt
+		}
+		result = append(result, audit)
+	}
+	return result, nil
+}
+
+func latestAudit(tx *bbolt.Tx, record Record) (TransitionAudit, error) {
+	var audit TransitionAudit
+	value := tx.Bucket(bucketTransitions).Get(transitionAuditKey(record.Payload.DecisionID, record.RecordRevision))
+	if value == nil || strictUnmarshal(value, &audit) != nil || audit.To != record.State || audit.RecordRevision != record.RecordRevision {
+		return TransitionAudit{}, ErrStoreCorrupt
+	}
+	return audit, nil
+}
+
+func purgeDecisionTx(tx *bbolt.Tx, record Record) error {
+	decisionID := record.Payload.DecisionID
+	if !IsTerminalState(record.State) {
+		return ErrInvalidTransition
+	}
+	if err := tx.Bucket(bucketStateExpiry).Delete(stateIndexKey(record)); err != nil {
+		return ErrStoreCorrupt
+	}
+	if err := tx.Bucket(bucketDecisions).Delete([]byte(decisionID)); err != nil {
+		return ErrStoreCorrupt
+	}
+	transitionPrefix := append([]byte(decisionID), 0)
+	transitionCursor := tx.Bucket(bucketTransitions).Cursor()
+	for key, _ := transitionCursor.Seek(transitionPrefix); key != nil && bytes.HasPrefix(key, transitionPrefix); key, _ = transitionCursor.Next() {
+		if err := transitionCursor.Delete(); err != nil {
+			return ErrStoreCorrupt
+		}
+	}
+	receiptPrefix := append([]byte(decisionID), 0)
+	receiptCursor := tx.Bucket(bucketReceiptByDecision).Cursor()
+	for key, value := receiptCursor.Seek(receiptPrefix); key != nil && bytes.HasPrefix(key, receiptPrefix); key, value = receiptCursor.Next() {
+		if err := tx.Bucket(bucketIdempotency).Delete(append([]byte(nil), value...)); err != nil {
+			return ErrStoreCorrupt
+		}
+		if err := receiptCursor.Delete(); err != nil {
+			return ErrStoreCorrupt
+		}
+	}
+	if err := tx.Bucket(bucketPurgedDecisions).Put([]byte(decisionID), []byte(fingerprintOf(normalizedDecision(record.Payload, true)))); err != nil {
+		return ErrStoreCorrupt
+	}
+	if err := adjustStateCount(tx, record.State, -1); err != nil {
+		return err
+	}
+	_, err := nextStoreRevision(tx)
+	return err
+}
+
+func adjustStateCount(tx *bbolt.Tx, state State, delta int64) error {
+	if !knownState(state) {
+		return ErrStoreCorrupt
+	}
+	bucket := tx.Bucket(bucketStateCounts)
+	current, ok := decodeUint64(bucket.Get([]byte(state)))
+	if !ok {
+		return ErrStoreCorrupt
+	}
+	if delta < 0 {
+		decrement := uint64(-delta)
+		if current < decrement {
+			return ErrStoreCorrupt
+		}
+		current -= decrement
+	} else {
+		increment := uint64(delta)
+		if current > ^uint64(0)-increment {
+			return ErrStoreCorrupt
+		}
+		current += increment
+	}
+	if err := bucket.Put([]byte(state), encodeUint64(current)); err != nil {
+		return ErrStoreCorrupt
+	}
+	return nil
+}
+
+func moveStateCount(tx *bbolt.Tx, from, to State) error {
+	if err := adjustStateCount(tx, from, -1); err != nil {
+		return err
+	}
+	return adjustStateCount(tx, to, 1)
+}
+
+func rebuildStateCounts(tx *bbolt.Tx) error {
+	counts := make(map[State]uint64, len(AllStates()))
+	if err := tx.Bucket(bucketDecisions).ForEach(func(_, value []byte) error {
+		var record Record
+		if err := decodeRecord(value, &record); err != nil {
+			return err
+		}
+		counts[record.State]++
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, state := range AllStates() {
+		if err := tx.Bucket(bucketStateCounts).Put([]byte(state), encodeUint64(counts[state])); err != nil {
+			return ErrStoreCorrupt
+		}
+	}
+	return nil
+}
+
+func encodeKeysetCursor(decisionID string) string {
+	return "v1." + base64.RawURLEncoding.EncodeToString([]byte(decisionID))
+}
+
+func decodeKeysetCursor(cursor string) (string, error) {
+	if cursor == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(cursor, "v1.") {
+		return "", invalidf("invalid decision cursor")
+	}
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(strings.TrimPrefix(cursor, "v1."))
+	if err != nil || len(decoded) == 0 || encodeKeysetCursor(string(decoded)) != cursor {
+		return "", invalidf("invalid decision cursor")
+	}
+	if err := validateText("decision cursor", string(decoded), true); err != nil {
+		return "", err
+	}
+	return string(decoded), nil
+}
+
+func subtractCalendarMonths(value time.Time, months int) time.Time {
+	value = value.UTC()
+	year, month, day := value.Date()
+	first := time.Date(year, month-time.Month(months), 1, value.Hour(), value.Minute(), value.Second(), value.Nanosecond(), time.UTC)
+	lastDay := first.AddDate(0, 1, -1).Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return time.Date(first.Year(), first.Month(), day, value.Hour(), value.Minute(), value.Second(), value.Nanosecond(), time.UTC)
+}
+
 func putRecord(tx *bbolt.Tx, record Record) error {
 	if err := putJSON(tx.Bucket(bucketDecisions), []byte(record.Payload.DecisionID), record); err != nil {
 		return err
@@ -575,8 +1168,11 @@ func decodeRecord(data []byte, record *Record) error {
 }
 
 func putAudit(tx *bbolt.Tx, audit TransitionAudit) error {
-	key := []byte(fmt.Sprintf("%s\x00%020d", audit.DecisionID, audit.RecordRevision))
-	return putJSON(tx.Bucket(bucketTransitions), key, audit)
+	return putJSON(tx.Bucket(bucketTransitions), transitionAuditKey(audit.DecisionID, audit.RecordRevision), audit)
+}
+
+func transitionAuditKey(decisionID string, revision uint64) []byte {
+	return []byte(fmt.Sprintf("%s\x00%020d", decisionID, revision))
 }
 
 func putJSON(bucket *bbolt.Bucket, key []byte, value any) error {

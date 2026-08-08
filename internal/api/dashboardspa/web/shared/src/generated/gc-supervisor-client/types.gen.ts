@@ -205,6 +205,17 @@ export type AgentUpdateQualifiedInputBody = {
     suspended?: boolean;
 };
 
+export type Alternative = {
+    account: string;
+    endpoint: string;
+    model: string;
+    provider: string;
+    reason: string;
+    serve_as: string;
+    source: string;
+    target: string;
+};
+
 export type AnnotatedAgentResponse = {
     dir?: string;
     is_pool?: boolean;
@@ -236,6 +247,14 @@ export type AnnotatedProviderResponse = {
     ready_delay_ms?: number;
 };
 
+export type ApprovalPayload = {
+    approved_at: string;
+    authority_id: string;
+    binding_id: string;
+    decision_id: string;
+    schema: number;
+};
+
 export type AsyncAcceptedBody = {
     /**
      * City event-stream sequence captured before the async request was accepted. Pass this value as after_seq to /v0/city/{cityName}/events/stream to receive the request result without replaying unrelated historical backlog. A value of 0 can also mean no event provider is configured or the event log is empty.
@@ -260,6 +279,11 @@ export type AsyncAcceptedResponse = {
      * Correlation ID. Watch /v0/events/stream for request.result.city.create, request.result.city.unregister, or request.failed with this request_id.
      */
     request_id: string;
+};
+
+export type AuditOption = {
+    key: string;
+    value: string;
 };
 
 export type Bead = {
@@ -753,6 +777,35 @@ export type ConvoyRemoveInputBody = {
     items?: Array<string> | null;
 };
 
+export type DecisionPayload = {
+    account: string;
+    alternatives: Array<Alternative> | null;
+    binding_id: string;
+    city: string;
+    claim_fence: number;
+    created_at: string;
+    decision_id: string;
+    endpoint: string;
+    evidence: Array<string> | null;
+    expires_at: string;
+    model: string;
+    no_migration: boolean;
+    observation_digest: string;
+    options: Array<AuditOption> | null;
+    policy_digest: string;
+    provider: string;
+    reason: string;
+    rig: string;
+    schema: number;
+    serve_as: string;
+    source: string;
+    target: string;
+    target_config_digest: string;
+    work_bead_id: string;
+    work_revision: number;
+    work_state_digest: string;
+};
+
 export type DeliveryContextRecord = {
     BindingGeneration: number;
     Conversation: ConversationRef;
@@ -771,6 +824,15 @@ export type Dep = {
     depends_on_id: string;
     issue_id: string;
     type: string;
+};
+
+export type EligibleWorkSnapshot = {
+    claim_fence: number;
+    rig: string;
+    scope: string;
+    work_bead_id: string;
+    work_revision: number;
+    work_state_digest: string;
 };
 
 export type ErrorDetail = {
@@ -1695,6 +1757,16 @@ export type ListBodyWireEvent = {
      * Total number of items matching the query.
      */
     total: number;
+};
+
+export type LiveStatus = {
+    authority_ready: boolean;
+    reason: string;
+    retention_months: number;
+    schema: number;
+    status: string;
+    store: StoreStatus;
+    terminal_state_basis: string;
 };
 
 export type LogicalNode = {
@@ -2772,6 +2844,41 @@ export type RotatedPayload = {
     prior_last_seq: number;
 };
 
+export type RoutingDecisionIngestBody = {
+    approval: ApprovalPayload;
+    payload: DecisionPayload;
+    signature: Signature;
+};
+
+export type RoutingDecisionIngestResult = {
+    receipt: TransitionReceipt;
+    record: RoutingDecisionRecord;
+};
+
+export type RoutingDecisionListBody = {
+    items: Array<RoutingDecisionWithAudits> | null;
+    next_cursor?: string;
+    total: number;
+};
+
+export type RoutingDecisionRecord = {
+    approval?: ApprovalPayload;
+    payload: DecisionPayload;
+    record_revision: number;
+    signature?: Signature;
+    state: string;
+    store_revision: number;
+};
+
+export type RoutingDecisionTargetsBody = {
+    items: Array<TargetSnapshot> | null;
+};
+
+export type RoutingDecisionWithAudits = {
+    audits: Array<TransitionAudit> | null;
+    record: RoutingDecisionRecord;
+};
+
 export type Run = {
     /**
      * Formula name driving the run, when known.
@@ -2978,6 +3085,12 @@ export type RunsListOutputBody = {
 
 export type ScopeGroup = {
     [key: string]: never;
+};
+
+export type SelectionSnapshot = {
+    observed_at: string;
+    targets: Array<TargetSnapshot> | null;
+    work: Array<EligibleWorkSnapshot> | null;
 };
 
 export type ServiceRestartOutputBody = {
@@ -4430,6 +4543,12 @@ export type SessionUnknownStatePayload = {
     state: string;
 };
 
+export type Signature = {
+    algorithm: string;
+    authority_id: string;
+    value: string;
+};
+
 export type SlingInputBody = {
     /**
      * Bead ID to attach a formula to.
@@ -4513,6 +4632,11 @@ export type SlingResponse = {
     target: string;
     warnings?: Array<string> | null;
     workflow_id?: string;
+};
+
+export type StateCount = {
+    count: number;
+    state: string;
 };
 
 export type Status = {
@@ -4907,6 +5031,12 @@ export type StoreMaintenanceFailedPayload = {
     stage: string;
 };
 
+export type StoreStatus = {
+    schema_version: number;
+    state_counts: Array<StateCount> | null;
+    store_revision: number;
+};
+
 export type SubmissionCapabilities = {
     supports_follow_up: boolean;
     supports_interrupt_now: boolean;
@@ -5095,6 +5225,14 @@ export type TaggedEventStreamEnvelope = {
     workflow?: WorkflowEventProjection;
 };
 
+export type TargetSnapshot = {
+    config_digest: string;
+    description: string;
+    resolved_provider: string;
+    rig: string;
+    target: string;
+};
+
 /**
  * Direction of a transcript entry.
  */
@@ -5104,6 +5242,23 @@ export type TranscriptMessageKind = 'inbound' | 'outbound';
  * Provenance of a transcript entry (freshly observed vs. replayed from persisted history).
  */
 export type TranscriptProvenance = 'live' | 'hydrated';
+
+export type TransitionAudit = {
+    at: string;
+    decision_id: string;
+    from: string;
+    reason: string;
+    record_revision: number;
+    store_revision: number;
+    to: string;
+};
+
+export type TransitionReceipt = {
+    decision_id: string;
+    record_revision: number;
+    state: string;
+    store_revision: number;
+};
 
 /**
  * Typed city event stream envelope
@@ -15991,6 +16146,259 @@ export type CreateRigResponses = {
 };
 
 export type CreateRigResponse = CreateRigResponses[keyof CreateRigResponses];
+
+export type ListRoutingDecisionsData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: {
+        /**
+         * Filter by exact lifecycle state.
+         */
+        state?: 'proposed' | 'approved' | 'admitted' | 'refused_after_race' | 'expired' | 'revoked' | 'claimed' | 'outcome_recorded';
+        /**
+         * Maximum decision rows to scan and return.
+         */
+        limit?: number;
+        /**
+         * Opaque decision-ID keyset cursor.
+         */
+        cursor?: string;
+    };
+    url: '/v0/city/{cityName}/routing/decisions';
+};
+
+export type ListRoutingDecisionsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type ListRoutingDecisionsError = ListRoutingDecisionsErrors[keyof ListRoutingDecisionsErrors];
+
+export type ListRoutingDecisionsResponses = {
+    /**
+     * OK
+     */
+    200: RoutingDecisionListBody;
+};
+
+export type ListRoutingDecisionsResponse = ListRoutingDecisionsResponses[keyof ListRoutingDecisionsResponses];
+
+export type IngestRoutingDecisionData = {
+    body: RoutingDecisionIngestBody;
+    headers: {
+        /**
+         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+         */
+        'X-GC-Request': string;
+        /**
+         * Required stable key for exact signed-envelope retries.
+         */
+        'Idempotency-Key': string;
+    };
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/routing/decisions';
+};
+
+export type IngestRoutingDecisionErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Unauthorized
+     */
+    401: ErrorModel;
+    /**
+     * Forbidden
+     */
+    403: ErrorModel;
+    /**
+     * Conflict
+     */
+    409: ErrorModel;
+    /**
+     * Request Entity Too Large
+     */
+    413: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type IngestRoutingDecisionError = IngestRoutingDecisionErrors[keyof IngestRoutingDecisionErrors];
+
+export type IngestRoutingDecisionResponses = {
+    /**
+     * Created
+     */
+    201: RoutingDecisionIngestResult;
+};
+
+export type IngestRoutingDecisionResponse = IngestRoutingDecisionResponses[keyof IngestRoutingDecisionResponses];
+
+export type GetRoutingEligibleData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/routing/eligible';
+};
+
+export type GetRoutingEligibleErrors = {
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type GetRoutingEligibleError = GetRoutingEligibleErrors[keyof GetRoutingEligibleErrors];
+
+export type GetRoutingEligibleResponses = {
+    /**
+     * OK
+     */
+    200: SelectionSnapshot;
+};
+
+export type GetRoutingEligibleResponse = GetRoutingEligibleResponses[keyof GetRoutingEligibleResponses];
+
+export type GetRoutingStatusData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/routing/status';
+};
+
+export type GetRoutingStatusErrors = {
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type GetRoutingStatusError = GetRoutingStatusErrors[keyof GetRoutingStatusErrors];
+
+export type GetRoutingStatusResponses = {
+    /**
+     * OK
+     */
+    200: LiveStatus;
+};
+
+export type GetRoutingStatusResponse = GetRoutingStatusResponses[keyof GetRoutingStatusResponses];
+
+export type ListRoutingTargetsData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/routing/targets';
+};
+
+export type ListRoutingTargetsErrors = {
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type ListRoutingTargetsError = ListRoutingTargetsErrors[keyof ListRoutingTargetsErrors];
+
+export type ListRoutingTargetsResponses = {
+    /**
+     * OK
+     */
+    200: RoutingDecisionTargetsBody;
+};
+
+export type ListRoutingTargetsResponse = ListRoutingTargetsResponses[keyof ListRoutingTargetsResponses];
 
 export type GetV0CityByCityNameRunsData = {
     body?: never;

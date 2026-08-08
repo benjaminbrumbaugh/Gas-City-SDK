@@ -38,6 +38,38 @@ func (sm *SupervisorMux) registerCityRoutes() {
 	cityGet(sm, "/health", (*Server).humaHandleHealth, errorStatuses(http.StatusNotFound))
 	cityGet(sm, "/usage", (*Server).humaHandleUsage, errorStatuses(http.StatusNotFound, http.StatusServiceUnavailable))
 
+	// Durable routing decisions. Reads follow the normal city read-auth policy;
+	// ingest additionally passes the dedicated direct-loopback perimeter before
+	// the normal write-auth, CSRF, read-only, Huma, and routing-signature gates.
+	cityRegister(sm, huma.Operation{
+		OperationID: "get-routing-status", Method: http.MethodGet, Path: "/routing/status",
+		Summary: "Get durable routing-decision status",
+		Errors:  []int{http.StatusNotFound, http.StatusServiceUnavailable},
+	}, (*Server).humaHandleRoutingDecisionStatus)
+	cityRegister(sm, huma.Operation{
+		OperationID: "list-routing-targets", Method: http.MethodGet, Path: "/routing/targets",
+		Summary:     "List deterministic static routing targets",
+		Description: "Returns only selection-safe target identity and labels plus the one-way exact config digest. Results are ordered by rig ASC, target ASC.",
+		Errors:      []int{http.StatusNotFound, http.StatusServiceUnavailable},
+	}, (*Server).humaHandleRoutingDecisionTargets)
+	cityRegister(sm, huma.Operation{
+		OperationID: "get-routing-eligible", Method: http.MethodGet, Path: "/routing/eligible",
+		Summary:     "Get deterministic eligible-work and target inputs",
+		Description: "Returns one observation timestamp, work ordered by rig ASC, work_bead_id ASC, and targets ordered by rig ASC, target ASC.",
+		Errors:      []int{http.StatusNotFound, http.StatusServiceUnavailable},
+	}, (*Server).humaHandleRoutingDecisionEligible)
+	cityRegister(sm, huma.Operation{
+		OperationID: "list-routing-decisions", Method: http.MethodGet, Path: "/routing/decisions",
+		Summary:     "List durable routing decisions",
+		Description: "Results are ordered by decision_id ASC. A truncated response carries next_cursor; passing it back returns the next page in the same order. Invalid or legacy cursors are rejected with the typed 400 invalid-cursor problem.",
+		Errors:      []int{http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable},
+	}, (*Server).humaHandleRoutingDecisionList)
+	cityRegister(sm, huma.Operation{
+		OperationID: "ingest-routing-decision", Method: http.MethodPost, Path: "/routing/decisions",
+		Summary: "Ingest one signed routing decision", DefaultStatus: http.StatusCreated,
+		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity, http.StatusServiceUnavailable},
+	}, (*Server).humaHandleRoutingDecisionIngest)
+
 	// City detail.
 	cityGet(sm, "", (*Server).humaHandleCityGet, errorStatuses(http.StatusNotFound))
 	cityPatch(sm, "", (*Server).humaHandleCityPatch, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusNotImplemented))

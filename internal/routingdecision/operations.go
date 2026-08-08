@@ -133,8 +133,13 @@ func (store *Store) Verify(verifier Verifier) (VerifyReport, error) {
 		if !ok {
 			return ErrStoreCorrupt
 		}
+		receiptIndexFloor, ok := decodeUint64(tx.Bucket(bucketMeta).Get(keyReceiptIndexFloor))
+		if !ok || receiptIndexFloor > report.StoreRevision {
+			return ErrStoreCorrupt
+		}
 
 		records := make(map[string]Record)
+		stateCounts := make(map[State]uint64, len(AllStates()))
 		if err := tx.Bucket(bucketDecisions).ForEach(func(key, value []byte) error {
 			var record Record
 			if err := decodeRecord(value, &record); err != nil || string(key) != record.Payload.DecisionID {
@@ -159,6 +164,7 @@ func (store *Store) Verify(verifier Verifier) (VerifyReport, error) {
 				return ErrStoreCorrupt
 			}
 			records[record.Payload.DecisionID] = record
+			stateCounts[record.State]++
 			report.Decisions++
 			return nil
 		}); err != nil {
@@ -176,16 +182,33 @@ func (store *Store) Verify(verifier Verifier) (VerifyReport, error) {
 		}); err != nil || indexCount != len(records) {
 			return ErrStoreCorrupt
 		}
+		countEntries := 0
+		if err := tx.Bucket(bucketStateCounts).ForEach(func(key, value []byte) error {
+			state := State(key)
+			count, ok := decodeUint64(value)
+			if !ok || !knownState(state) || count != stateCounts[state] {
+				return ErrStoreCorrupt
+			}
+			countEntries++
+			return nil
+		}); err != nil || countEntries != len(AllStates()) {
+			return ErrStoreCorrupt
+		}
 
 		auditCount := make(map[string]uint64, len(records))
 		lastState := make(map[string]State, len(records))
-		if err := tx.Bucket(bucketTransitions).ForEach(func(_, value []byte) error {
+		if err := tx.Bucket(bucketTransitions).ForEach(func(key, value []byte) error {
 			var audit TransitionAudit
-			if err := strictUnmarshal(value, &audit); err != nil || audit.DecisionID == "" || audit.RecordRevision == 0 || audit.StoreRevision == 0 || audit.StoreRevision > report.StoreRevision {
+			if err := strictUnmarshal(value, &audit); err != nil || audit.DecisionID == "" || audit.RecordRevision == 0 || audit.StoreRevision == 0 || audit.StoreRevision > report.StoreRevision || audit.At.IsZero() || !bytes.Equal(key, transitionAuditKey(audit.DecisionID, audit.RecordRevision)) {
+				return ErrStoreCorrupt
+			}
+			if _, exists := records[audit.DecisionID]; !exists || !knownState(audit.To) || validateText("transition reason", audit.Reason, true) != nil {
 				return ErrStoreCorrupt
 			}
 			expectedRevision := auditCount[audit.DecisionID] + 1
-			if audit.RecordRevision != expectedRevision || (expectedRevision == 1 && audit.From != "") || (expectedRevision > 1 && lastState[audit.DecisionID] != audit.From) {
+			if audit.RecordRevision != expectedRevision ||
+				(expectedRevision == 1 && (audit.From != "" || audit.To != StateProposed)) ||
+				(expectedRevision > 1 && (lastState[audit.DecisionID] != audit.From || !IsAllowedTransition(audit.From, audit.To))) {
 				return ErrStoreCorrupt
 			}
 			auditCount[audit.DecisionID] = expectedRevision
@@ -201,12 +224,46 @@ func (store *Store) Verify(verifier Verifier) (VerifyReport, error) {
 			}
 		}
 
-		if err := tx.Bucket(bucketIdempotency).ForEach(func(_, value []byte) error {
+		if err := tx.Bucket(bucketIdempotency).ForEach(func(key, value []byte) error {
 			var receipt idempotencyRecord
-			if err := strictUnmarshal(value, &receipt); err != nil || !validDigest(receipt.Fingerprint) || receipt.Kind != "create" && receipt.Kind != "transition" && receipt.Kind != "admission" {
+			if err := strictUnmarshal(value, &receipt); err != nil || !validDigest(receipt.Fingerprint) {
 				return ErrStoreCorrupt
 			}
+			decisionID, revision, valid := receiptIdentity(receipt)
+			if !valid || revision == 0 || revision > report.StoreRevision {
+				return ErrStoreCorrupt
+			}
+			if revision > receiptIndexFloor {
+				if receipt.DecisionID == "" || receipt.DecisionID != decisionID || !bytes.Equal(tx.Bucket(bucketReceiptByDecision).Get(receiptIndexKey(decisionID, string(key))), key) {
+					return ErrStoreCorrupt
+				}
+			}
 			report.Idempotency++
+			return nil
+		}); err != nil {
+			return err
+		}
+		if err := tx.Bucket(bucketReceiptByDecision).ForEach(func(key, value []byte) error {
+			separator := bytes.IndexByte(key, 0)
+			if separator <= 0 || separator == len(key)-1 || !bytes.Equal(key[separator+1:], value) {
+				return ErrStoreCorrupt
+			}
+			raw := tx.Bucket(bucketIdempotency).Get(value)
+			if raw == nil {
+				return ErrStoreCorrupt
+			}
+			var receipt idempotencyRecord
+			if strictUnmarshal(raw, &receipt) != nil || receipt.DecisionID != string(key[:separator]) {
+				return ErrStoreCorrupt
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if err := tx.Bucket(bucketPurgedDecisions).ForEach(func(key, value []byte) error {
+			if len(key) == 0 || !validDigest(string(value)) || tx.Bucket(bucketDecisions).Get(key) != nil {
+				return ErrStoreCorrupt
+			}
 			return nil
 		}); err != nil {
 			return err
@@ -223,6 +280,26 @@ func (store *Store) Verify(verifier Verifier) (VerifyReport, error) {
 		return nil
 	})
 	return report, classifyStoreError(err)
+}
+
+func receiptIdentity(receipt idempotencyRecord) (string, uint64, bool) {
+	switch receipt.Kind {
+	case "create":
+		if receipt.Created == nil || receipt.Transition != nil {
+			return "", 0, false
+		}
+		return receipt.Created.Payload.DecisionID, receipt.Created.StoreRevision, true
+	case "transition", "admission", "ingest":
+		if receipt.Created != nil || receipt.Transition == nil {
+			return "", 0, false
+		}
+		if receipt.Kind == "ingest" && receipt.Transition.State != StateApproved {
+			return "", 0, false
+		}
+		return receipt.Transition.DecisionID, receipt.Transition.StoreRevision, true
+	default:
+		return "", 0, false
+	}
 }
 
 func strictUnmarshal(data []byte, destination any) error {

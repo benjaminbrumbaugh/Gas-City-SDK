@@ -293,6 +293,9 @@ func (payload DecisionPayload) Validate() error {
 	if payload.CreatedAt.IsZero() || payload.ExpiresAt.IsZero() || !payload.ExpiresAt.After(payload.CreatedAt) {
 		return invalidf("expires_at must be after created_at")
 	}
+	if !unixNanoRepresentable(payload.CreatedAt) || !unixNanoRepresentable(payload.ExpiresAt) {
+		return invalidf("validity window is outside the durable index range")
+	}
 	if !payload.NoMigration {
 		return invalidf("no_migration must be true")
 	}
@@ -333,6 +336,10 @@ func (payload DecisionPayload) Validate() error {
 		return invalidf("binding_id does not match decision fields")
 	}
 	return nil
+}
+
+func unixNanoRepresentable(value time.Time) bool {
+	return time.Unix(0, value.UTC().UnixNano()).UTC().Equal(value.UTC())
 }
 
 // Validate checks approval shape independently of a decision.

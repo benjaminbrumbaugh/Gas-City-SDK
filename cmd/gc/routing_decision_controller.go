@@ -51,11 +51,7 @@ func (cr *CityRuntime) decisionStoreForPass() (*routingdecision.Store, bool, err
 	if cr.routingDecisionStore != nil {
 		return cr.routingDecisionStore, false, nil
 	}
-	store, err := routingdecision.OpenStore(cr.cityPath, routingdecision.StoreOptions{})
-	if err != nil {
-		return nil, false, errors.New("routing decision ledger unavailable")
-	}
-	return store, true, nil
+	return nil, false, errors.New("routing decision ledger unavailable")
 }
 
 // applyApprovedRoutingDecisions coordinates the signed local ledger with one
@@ -116,7 +112,7 @@ func (cr *CityRuntime) applyApprovedRoutingDecisions() (int, error) {
 		}
 		attempt := routingDecisionAdmissionAttempt{}
 		receipt, admissionErr := decisionStore.FinalAdmission(routingdecision.FinalAdmissionRequest{
-			DecisionID: payload.DecisionID, ExpectedRevision: record.RecordRevision, Now: cr.routingDecisionNow(),
+			DecisionID: payload.DecisionID, ExpectedRevision: record.RecordRevision,
 			IdempotencyToken: fmt.Sprintf("controller-admit:%s:%d", payload.DecisionID, record.RecordRevision),
 		}, *cr.routingDecisionVerifier, func(gated routingdecision.Record) (routingdecision.AdmissionCallbackResult, error) {
 			return cr.routeDecisionAtAdmissionBoundary(scope, gated, &attempt)
@@ -273,5 +269,15 @@ func (cr *CityRuntime) applyApprovedRoutingDecisionsAndLog() {
 	}
 	if applied > 0 {
 		fmt.Fprintf(cr.stderr, "%s: routing decision admission routed %d newly ready work bead(s)\n", cr.logPrefix, applied) //nolint:errcheck // best-effort diagnostics
+	}
+}
+
+func (cr *CityRuntime) reconcileRoutingDecisionsAndLog() {
+	cr.applyApprovedRoutingDecisionsAndLog()
+	if _, err := cr.reconcileRoutingDecisionLifecycle(); err != nil {
+		fmt.Fprintf(cr.stderr, "%s: routing decision lifecycle refused\n", cr.logPrefix) //nolint:errcheck // best-effort sanitized diagnostics
+	}
+	if err := cr.advanceRoutingDecisionPurge(); err != nil {
+		fmt.Fprintf(cr.stderr, "%s: routing decision retention refused\n", cr.logPrefix) //nolint:errcheck // best-effort sanitized diagnostics
 	}
 }

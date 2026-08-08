@@ -167,6 +167,9 @@ func TestStoreAllowedTransitionGraphAndExpireDue(t *testing.T) {
 		{StateApproved, StateExpired}:          true,
 		{StateAdmitted, StateClaimed}:          true,
 		{StateAdmitted, StateOutcomeRecorded}:  true,
+		// Claimed is active until the controller observes an exact terminal
+		// carrier; the product contract therefore permits recording its outcome.
+		{StateClaimed, StateOutcomeRecorded}: true,
 	}
 	for _, from := range AllStates() {
 		for _, to := range AllStates() {

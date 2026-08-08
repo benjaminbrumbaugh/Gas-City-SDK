@@ -373,6 +373,7 @@ func newRootCmdWithOptions(stdout, stderr io.Writer, options rootCommandOptions)
 		newDoltCleanupCmd(stdout, stderr),
 		newDoltConfigCmd(stdout, stderr),
 		newDoltStateCmd(stdout, stderr),
+		newRoutingCmd(stdout, stderr),
 		newRouteDecisionCmd(stdout, stderr),
 		newShellCmd(stdout, stderr),
 		newAnalyzeCmd(stdout, stderr),
