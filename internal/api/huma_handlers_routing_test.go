@@ -206,7 +206,7 @@ func TestRoutingRoutesExposeExactTypedContract(t *testing.T) {
 	}
 }
 
-func TestRoutingIngestPerimeterRejectsBeforeWriteGrantConsumption(t *testing.T) {
+func TestRoutingIngestPerimeterAcceptsSignedLoopbackWithoutGlobalWriteVerifier(t *testing.T) {
 	now := time.Now().UTC()
 	state, routingPrivate := newRoutingTestState(t, now)
 	body, err := json.Marshal(signedRoutingIngest(t, now, routingPrivate))
@@ -222,9 +222,18 @@ func TestRoutingIngestPerimeterRejectsBeforeWriteGrantConsumption(t *testing.T) 
 	req.RemoteAddr = "127.0.0.1:9000"
 	rec := httptest.NewRecorder()
 	withoutVerifier.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "routing-ingest-unhardened") {
-		t.Fatalf("missing write verifier = %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("signed loopback ingest without global verifier = %d %s", rec.Code, rec.Body.String())
 	}
+
+	// The hardened-verifier assertions use an independent store so the signature-only
+	// success above does not consume their decision ID or idempotency key.
+	state, routingPrivate = newRoutingTestState(t, now)
+	body, err = json.Marshal(signedRoutingIngest(t, now, routingPrivate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path = cityURL(state, "/routing/decisions")
 
 	writePublic, writePrivate := mustKeypair(t)
 	writeVerifier := realClockVerifier(t, writePublic)
