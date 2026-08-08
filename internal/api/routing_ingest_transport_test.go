@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -21,6 +22,17 @@ func TestRoutingDecisionIngestAllowsConfiguredLoopbackAuthorityTransport(t *test
 	handler.ServeHTTP(rec, req)
 	if !called || rec.Code != http.StatusNoContent {
 		t.Fatalf("called=%v status=%d body=%s", called, rec.Code, rec.Body.String())
+	}
+
+	called = false
+	duplicate := httptest.NewRequest(http.MethodPost, "/v0/city/Gas-City/routing/decisions", nil)
+	duplicate.RemoteAddr = "127.0.0.1:9000"
+	duplicate.Header.Add(writeAuthHeader, key)
+	duplicate.Header.Add(strings.ToLower(writeAuthHeader), key)
+	duplicateRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(duplicateRecorder, duplicate)
+	if called || duplicateRecorder.Code < 400 {
+		t.Fatalf("duplicate header called=%v status=%d", called, duplicateRecorder.Code)
 	}
 
 	called = false

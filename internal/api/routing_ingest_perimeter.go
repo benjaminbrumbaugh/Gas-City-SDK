@@ -44,7 +44,12 @@ func routingDecisionIngestPerimeter(verifier *citywriteauth.Verifier, next http.
 			problemRoutingIngestNonloopback.writeTo(w)
 			return
 		}
-		if verifier == nil && !validRoutingTransportKey(transportKey, r.Header.Get(writeAuthHeader)) {
+		values := r.Header.Values(writeAuthHeader)
+		if len(values) != 1 {
+			problemRoutingIngestUnhardened.writeTo(w)
+			return
+		}
+		if verifier == nil && !validRoutingTransportKey(transportKey, values[0]) {
 			problemRoutingIngestUnhardened.writeTo(w)
 			return
 		}
