@@ -3,6 +3,8 @@ package citylayout
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/gastownhall/gascity/internal/pathutil"
 )
 
 func TestCityRuntimeEnv(t *testing.T) {
@@ -218,8 +220,9 @@ func TestTrustedAmbientCityRuntimeDirAcceptsLegacyCityRootAnchor(t *testing.T) {
 	t.Setenv("GC_CITY_ROOT", cityRoot)
 	t.Setenv("GC_CITY_RUNTIME_DIR", runtimeDir)
 
-	if got := TrustedAmbientCityRuntimeDir(cityRoot); got != runtimeDir {
-		t.Fatalf("TrustedAmbientCityRuntimeDir() = %q, want %q", got, runtimeDir)
+	want := pathutil.NormalizePathForCompare(runtimeDir)
+	if got := TrustedAmbientCityRuntimeDir(cityRoot); got != want {
+		t.Fatalf("TrustedAmbientCityRuntimeDir() = %q, want %q", got, want)
 	}
 }
 

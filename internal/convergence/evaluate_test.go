@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gastownhall/gascity/internal/pathutil"
 	"github.com/gastownhall/gascity/internal/testutil"
 )
 
@@ -20,7 +21,7 @@ func TestResolveEvaluateStep_DefaultPath(t *testing.T) {
 	if step.Name != EvaluateStepName {
 		t.Errorf("Name = %q, want %q", step.Name, EvaluateStepName)
 	}
-	want := filepath.Join("/home/user/city", DefaultEvaluatePromptPath)
+	want := pathutil.NormalizePathForCompare(filepath.Join("/home/user/city", DefaultEvaluatePromptPath))
 	if step.PromptPath != want {
 		t.Errorf("PromptPath = %q, want %q", step.PromptPath, want)
 	}
@@ -39,7 +40,7 @@ func TestResolveEvaluateStep_CustomPath(t *testing.T) {
 	if step.Name != EvaluateStepName {
 		t.Errorf("Name = %q, want %q", step.Name, EvaluateStepName)
 	}
-	want := filepath.Join("/home/user/city", "custom/my-evaluate.md")
+	want := pathutil.NormalizePathForCompare(filepath.Join("/home/user/city", "custom/my-evaluate.md"))
 	if step.PromptPath != want {
 		t.Errorf("PromptPath = %q, want %q", step.PromptPath, want)
 	}
@@ -137,7 +138,7 @@ func TestResolveEvaluateStep_RelativeCityPathReturnsAbsolutePromptPath(t *testin
 	if !filepath.IsAbs(step.PromptPath) {
 		t.Fatalf("PromptPath = %q, want an absolute path — cityPath must be canonicalized to absolute before joining, not left relative", step.PromptPath)
 	}
-	want := filepath.Join(dir, DefaultEvaluatePromptPath)
+	want := pathutil.NormalizePathForCompare(filepath.Join(dir, DefaultEvaluatePromptPath))
 	if step.PromptPath != want {
 		t.Errorf("PromptPath = %q, want %q", step.PromptPath, want)
 	}
