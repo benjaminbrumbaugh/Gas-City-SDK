@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +67,10 @@ type Deps struct {
 	// self-read would 401. Nil falls back to the default network transport, which
 	// the package tests rely on.
 	SelfReadTransport http.RoundTripper
+	// RoutingDaemonBaseURL is the fixed loopback URL of the supervised
+	// deterministic routing daemon (for example http://127.0.0.1:8383). Empty
+	// keeps the dashboard routing surface present but fail-closed/unavailable.
+	RoutingDaemonBaseURL string
 
 	// Runtime-config projection inputs. Neutral defaults are supplied by the
 	// caller from gc config/env (ZERO hardcoded roles).
@@ -85,6 +90,7 @@ type Plane struct {
 	samplers   *samplerManager
 	runTailers *runTailerManager
 	localTools *localToolsCache
+	routing    *routingProxy
 	// healthSnapshot is a per-plane seam so sampler failures can be exercised
 	// without mutating package-global state or the host running the test.
 	healthSnapshot func(context.Context) (systemHealth, error)
@@ -103,6 +109,7 @@ func New(deps Deps) *Plane {
 		localTools:     &localToolsCache{},
 		healthSnapshot: currentSystemHealth,
 	}
+	p.routing = newRoutingProxy(deps.RoutingDaemonBaseURL)
 	p.samplers = newSamplerManager(deps, p.exec)
 	p.runTailers = newRunTailerManager(deps)
 	p.registerRoutes()
@@ -146,6 +153,10 @@ func (p *Plane) Stop() {
 // forgotten.
 func (p *Plane) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/routing/") && path.Clean(r.URL.Path) != r.URL.Path {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
 		default:
@@ -204,6 +215,7 @@ func (p *Plane) registerRoutes() {
 	p.registerRunSummary()
 	p.registerRunDetail()
 	p.registerRunDetailStream()
+	p.registerRoutingProxy()
 }
 
 // resolveCityPath validates a city name and resolves its host root path. It

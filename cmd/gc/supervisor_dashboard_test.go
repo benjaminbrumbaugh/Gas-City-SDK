@@ -60,6 +60,19 @@ func TestDashboardDepsWiresSupervisorBaseURL(t *testing.T) {
 	}
 }
 
+func TestDashboardDepsWiresRoutingDaemonLoopback(t *testing.T) {
+	t.Setenv("GC_ROUTING_DAEMON_URL", "")
+	deps := dashboardDeps(fakeDashResolver{}, false, "127.0.0.1", 8372, nil)
+	if deps.RoutingDaemonBaseURL != "http://127.0.0.1:8383" {
+		t.Fatalf("RoutingDaemonBaseURL = %q", deps.RoutingDaemonBaseURL)
+	}
+	t.Setenv("GC_ROUTING_DAEMON_URL", "http://127.0.0.1:9383")
+	deps = dashboardDeps(fakeDashResolver{}, false, "127.0.0.1", 8372, nil)
+	if deps.RoutingDaemonBaseURL != "http://127.0.0.1:9383" {
+		t.Fatalf("RoutingDaemonBaseURL override = %q", deps.RoutingDaemonBaseURL)
+	}
+}
+
 // TestDashboardDepsWiresSelfReadTransport is the regression guard for the
 // read-auth finding: attachDashboard must give the plane the supervisor's
 // in-process loopback transport, or the host-side samplers' loopback self-reads
