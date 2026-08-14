@@ -82,3 +82,29 @@ func TestResolveRunID(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveRunIdentityReportsTheWinningSource(t *testing.T) {
+	cases := []struct {
+		name       string
+		metadata   map[string]string
+		selfID     string
+		fallbackID string
+		wantID     string
+		wantSource RunIdentityKind
+	}{
+		{"workflow", map[string]string{"workflow_id": "wf-1", MoleculeIDMetadataKey: "mol-1"}, "self", "session", "wf-1", RunIdentityWorkflow},
+		{"molecule", map[string]string{MoleculeIDMetadataKey: "mol-1"}, "self", "session", "mol-1", RunIdentityMolecule},
+		{"root", map[string]string{RootBeadIDMetadataKey: "root-1"}, "self", "session", "root-1", RunIdentityRootBead},
+		{"self", nil, "bead-1", "session", "bead-1", RunIdentitySelfBead},
+		{"session fallback", nil, "", "session-1", "session-1", RunIdentitySessionFallback},
+		{"unknown", nil, "", "", "", RunIdentityUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ResolveRunIdentity(tc.metadata, tc.selfID, tc.fallbackID)
+			if got.ID != tc.wantID || got.Source != tc.wantSource {
+				t.Fatalf("ResolveRunIdentity() = %+v, want ID=%q source=%q", got, tc.wantID, tc.wantSource)
+			}
+		})
+	}
+}

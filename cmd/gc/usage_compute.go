@@ -127,9 +127,10 @@ func emitComputeFactForBead(ctx context.Context, sink usage.Sink, store beads.St
 	if wall < 0 {
 		wall = 0
 	}
-	runID := beadmeta.ResolveRunID(bead.Metadata, bead.ID, "")
+	runIdentity := beadmeta.ResolveRunIdentity(bead.Metadata, bead.ID, "")
 	fact := usage.Fact{
-		RunID: runID,
+		RunID:     runIdentity.ID,
+		RunSource: string(runIdentity.Source),
 		// The reconcile snapshot hands us the session bead directly, so bead.ID IS
 		// the session bead id — the same value RunID resolution and the idempotency
 		// key already consume below. Stamp it so compute facts carry the session
@@ -138,13 +139,16 @@ func emitComputeFactForBead(ctx context.Context, sink usage.Sink, store beads.St
 		// cost from the join).
 		SessionID:      strings.TrimSpace(bead.ID),
 		Worker:         strings.TrimSpace(meta["session_name"]),
+		AgentName:      strings.TrimSpace(meta["agent_name"]),
+		Template:       strings.TrimSpace(meta["template"]),
 		City:           city,
 		Kind:           usage.KindCompute,
 		Runtime:        runtimeKind,
 		WallSeconds:    wall,
 		UpstreamReqID:  bead.ID + ":" + startRaw,
+		AwakeEpoch:     startRaw,
 		At:             now.UnixMilli(),
-		IdempotencyKey: usage.ComputeIdempotencyKey(runID, bead.ID, startRaw),
+		IdempotencyKey: usage.ComputeIdempotencyKey(runIdentity.ID, bead.ID, startRaw),
 	}
 	if err := sink.Record(ctx, fact); err != nil {
 		// Surface the failure instead of dropping it silently; leave the marker

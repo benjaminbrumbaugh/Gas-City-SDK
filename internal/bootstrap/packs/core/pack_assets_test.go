@@ -124,6 +124,7 @@ func TestFindBareBDCommands(t *testing.T) {
 func TestCoreMaintenanceExecAssets(t *testing.T) {
 	required := []string{
 		"assets/scripts/_bd_trace.sh",
+		"assets/scripts/alert-state.sh",
 		"assets/scripts/dolt-target.sh",
 		"assets/scripts/escalate.sh",
 		"assets/scripts/jsonl-export.sh",

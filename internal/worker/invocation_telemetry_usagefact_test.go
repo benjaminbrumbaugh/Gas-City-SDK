@@ -211,7 +211,12 @@ func TestModelUsageFact(t *testing.T) {
 	}
 	// modelUsageFact resolves RunID from the run chain; StepID is intentionally
 	// left unset — model usage is attributed at run level, not per formula step.
-	bead := beads.Bead{ID: "b1", Metadata: map[string]string{"molecule_id": "mol-7"}}
+	bead := beads.Bead{ID: "b1", Metadata: map[string]string{
+		"molecule_id":      "mol-7",
+		"agent_name":       "myrig/polecat-1",
+		"template":         "polecat",
+		"awake_started_at": "2026-08-01T00:00:00Z",
+	}}
 
 	priced := modelUsageFact(u, bead.Metadata, bead.ID, "session-1", "myrig/polecat-1", "claude", 0.02, true, now)
 	if priced.Kind != usage.KindModel {
@@ -219,6 +224,9 @@ func TestModelUsageFact(t *testing.T) {
 	}
 	if priced.RunID != "mol-7" {
 		t.Fatalf("RunID = %q, want mol-7 (resolved through the shared run-id chain)", priced.RunID)
+	}
+	if priced.RunSource != "molecule_id" || priced.AgentName != "myrig/polecat-1" || priced.Template != "polecat" || priced.AwakeEpoch != "2026-08-01T00:00:00Z" {
+		t.Fatalf("provenance = source=%q agent=%q template=%q awake=%q", priced.RunSource, priced.AgentName, priced.Template, priced.AwakeEpoch)
 	}
 	// SessionID is the session bead id (the sessionID arg), distinct from RunID
 	// (the resolved run root) and from Worker (the session NAME). It is the join

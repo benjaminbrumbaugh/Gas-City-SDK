@@ -101,6 +101,8 @@ func TestEmitComputeFactForBead(t *testing.T) {
 		Metadata: map[string]string{
 			"state":            "asleep",
 			"session_name":     "s-x",
+			"agent_name":       "gastown/witness",
+			"template":         "witness",
 			"awake_started_at": start.Format(time.RFC3339),
 			"slept_at":         slept.Format(time.RFC3339),
 			"molecule_id":      "mol-7",
@@ -133,7 +135,7 @@ func TestEmitComputeFactForBead(t *testing.T) {
 	if f.SessionID != b.ID {
 		t.Fatalf("SessionID = %q, want the session bead id %q", f.SessionID, b.ID)
 	}
-	if f.Runtime != "fake" || f.City != "demo" || f.Worker != "s-x" {
+	if f.Runtime != "fake" || f.City != "demo" || f.Worker != "s-x" || f.AgentName != "gastown/witness" || f.Template != "witness" || f.AwakeEpoch != start.Format(time.RFC3339) || f.RunSource != "molecule_id" {
 		t.Fatalf("unexpected fact fields: %+v", f)
 	}
 	if f.IdempotencyKey == "" {

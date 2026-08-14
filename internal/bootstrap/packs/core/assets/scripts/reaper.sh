@@ -40,6 +40,15 @@ resolve_escalate_script() {
 
 ESCALATE_SCRIPT="$(resolve_escalate_script)"
 
+# Reaper owns a core-pack state file.  Keep this under the projected pack
+# runtime directory so it survives order ticks and is isolated from Dolt
+# backup/doctor alert state.
+PACK_STATE_DIR="${GC_PACK_STATE_DIR:-${GC_CITY_RUNTIME_DIR:-$CITY_ABS/.gc/runtime}/packs/core}"
+REAPER_ALERT_STATE_FILE="${GC_REAPER_ALERT_STATE_FILE:-$PACK_STATE_DIR/reaper-alert-state.json}"
+REAPER_ALERT_TIMEOUT_SECONDS="${GC_REAPER_ALERT_TIMEOUT_SECONDS:-5}"
+# shellcheck disable=SC1091
+. "${GC_ALERT_STATE_SCRIPT:-$SCRIPT_DIR/alert-state.sh}"
+
 maintenance_done() {
     local summary="$1"
     local target="${GC_MAINTENANCE_DONE_TARGET:-}"
@@ -199,6 +208,44 @@ record_anomaly() {
 }
 
 CITY_DB_ANOMALY_RECORDED=0
+
+reaper_alert_fingerprint() {
+    local normalized
+
+    normalized=$(alert_state_normalize_body "$ANOMALIES")
+    alert_state_fingerprint "reaper-anomalies|$normalized"
+}
+
+reaper_report_alert() {
+    local fingerprint
+    local message
+
+    if [ -n "$ANOMALIES" ]; then
+        fingerprint=$(reaper_alert_fingerprint)
+        alert_state_failure \
+            "$REAPER_ALERT_STATE_FILE" \
+            "$fingerprint" \
+            "$REAPER_ALERT_TIMEOUT_SECONDS" \
+            "ESCALATION: Reaper anomalies detected [MEDIUM]" \
+            "$ANOMALIES" \
+            "$ESCALATE_SCRIPT"
+        if [ "$ALERT_STATE_DELIVERY" != "delivered" ] && [ "$ALERT_STATE_RESULT" != "suppressed" ]; then
+            echo "reaper: anomaly alert delivery failed or timed out" >&2
+        fi
+        return 0
+    fi
+
+    message="Reaper anomaly conditions cleared; maintenance completed without anomalies."
+    alert_state_recovery \
+        "$REAPER_ALERT_STATE_FILE" \
+        "$REAPER_ALERT_TIMEOUT_SECONDS" \
+        "RECOVERY: Reaper anomalies cleared [MEDIUM]" \
+        "$message" \
+        "$ESCALATE_SCRIPT"
+    if [ "$ALERT_STATE_DELIVERY" != "delivered" ] && [ "$ALERT_STATE_RESULT" != "none" ]; then
+        echo "reaper: recovery alert delivery failed or timed out" >&2
+    fi
+}
 
 valid_database_identifier() {
     local name="$1"
@@ -1279,15 +1326,12 @@ if [ -d "$CITY_BEADS_DIR" ] && [ -z "$DRY_RUN" ] && command -v gc >/dev/null 2>&
 fi
 
 if [ "$HAD_DATABASES" -eq 0 ] && [ "$SESSION_PRUNE_ATTEMPTED" -eq 0 ]; then
+    reaper_report_alert
     exit 0
 fi
 
 # Report.
-if [ -n "$ANOMALIES" ]; then
-    "$ESCALATE_SCRIPT" \
-        --subject "ESCALATION: Reaper anomalies detected [MEDIUM]" \
-        --message "$ANOMALIES" 2>/dev/null || true
-fi
+reaper_report_alert
 
 SUMMARY="reaper — stale_wisps:$TOTAL_STALE_WISPS, closed_wisps:$TOTAL_CLOSED_WISPS, workflow_roots:$TOTAL_WORKFLOW_ROOTS_CLOSED, skipped_cross_store_workflow_roots:$TOTAL_WORKFLOW_ROOTS_STORE_REF_SKIPPED, skipped_non_city_workflow_issue_roots:$TOTAL_WORKFLOW_ISSUE_ROOTS_SKIPPED, purged:$TOTAL_PURGED, sessions-pruned:$TOTAL_SESSIONS_PRUNED, closed:$TOTAL_ISSUES_CLOSED, expired:$TOTAL_EXPIRED_ISSUES_CLOSED, expired_skipped:$TOTAL_EXPIRED_ISSUES_SKIPPED, skipped_non_city_issues:$TOTAL_STALE_ISSUES_SKIPPED, mail_wisps:$TOTAL_MAIL_WISPS"
 if [ -n "$DRY_RUN" ]; then

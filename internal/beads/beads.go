@@ -240,11 +240,11 @@ func ReadyConditionalWriterFor(store Store) (ReadyConditionalWriter, bool) {
 	mode, _ := carrier.conditionalWritesMode()
 	switch mode {
 	case gate.Require, gate.Auto:
-		conditional, _, err := ResolveConditionalWriter(store)
-		if err != nil || conditional == nil {
-			return nil, false
-		}
-		return readyConditionalWriterFrom(conditional)
+		// A ready-admission fence is deliberately narrower than the full
+		// ConditionalWriter trio. Resolve it directly so a backend can expose
+		// safe routing admission without claiming it can fence every update,
+		// close, and delete operation.
+		return readyConditionalWriterFrom(resolved)
 	default: // unset/off are not authorization for a controller mutation.
 		return nil, false
 	}
