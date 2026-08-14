@@ -1,0 +1,151 @@
+{
+  "fixture_version": 1,
+  "scenarios": [
+    {
+      "name": "fresh-authoritative",
+      "as_of": "2026-08-13T20:00:00Z",
+      "city_hash": "ed2882eee5f989c5",
+      "observations": [
+        {
+          "envelope": {
+            "seq": 1,
+            "type": "execution.work_associated",
+            "ts": "2026-08-13T19:59:50Z",
+            "actor_hash": "1bc6ba6974444ef6",
+            "ref": "mc-work",
+            "run_id": "gcg-run"
+          },
+          "provenance": "authoritative",
+          "freshness": "fresh",
+          "observed_at": "2026-08-13T19:59:59Z"
+        },
+        {
+          "envelope": {
+            "seq": 2,
+            "type": "execution.step_defined",
+            "ts": "2026-08-13T19:59:51Z",
+            "actor_hash": "1bc6ba6974444ef6",
+            "ref": "gcg-step-root",
+            "run_id": "gcg-run",
+            "step_id": "prepare",
+            "depends_on_step_ids": []
+          },
+          "provenance": "authoritative",
+          "freshness": "fresh",
+          "observed_at": "2026-08-13T19:59:59Z"
+        },
+        {
+          "envelope": {
+            "seq": 3,
+            "type": "execution.step_defined",
+            "ts": "2026-08-13T19:59:52Z",
+            "actor_hash": "1bc6ba6974444ef6",
+            "ref": "gcg-step-build",
+            "run_id": "gcg-run",
+            "step_id": "build",
+            "depends_on_step_ids": ["prepare"]
+          },
+          "provenance": "authoritative",
+          "freshness": "fresh",
+          "observed_at": "2026-08-13T19:59:59Z"
+        },
+        {
+          "envelope": {
+            "seq": 4,
+            "type": "execution.step_started",
+            "ts": "2026-08-13T19:59:53Z",
+            "actor_hash": "1bc6ba6974444ef6",
+            "ref": "gcg-step-build-attempt",
+            "run_id": "gcg-run",
+            "session_id": "gcs-session",
+            "step_id": "build",
+            "depends_on_step_ids": ["prepare"]
+          },
+          "provenance": "authoritative",
+          "freshness": "fresh",
+          "observed_at": "2026-08-13T19:59:59Z"
+        },
+        {
+          "envelope": {
+            "seq": 5,
+            "type": "execution.step_completed",
+            "ts": "2026-08-13T19:59:58Z",
+            "actor_hash": "1bc6ba6974444ef6",
+            "ref": "gcg-step-build-attempt",
+            "run_id": "gcg-run",
+            "session_id": "gcs-session",
+            "step_id": "build",
+            "depends_on_step_ids": ["prepare"]
+          },
+          "provenance": "authoritative",
+          "freshness": "fresh",
+          "observed_at": "2026-08-13T19:59:59Z"
+        }
+      ]
+    },
+    {
+      "name": "unknown-topology",
+      "as_of": "2026-08-13T20:00:00Z",
+      "city_hash": "ed2882eee5f989c5",
+      "observations": [
+        {
+          "envelope": {
+            "seq": 11,
+            "type": "execution.step_defined",
+            "ts": "2026-08-13T19:00:00Z",
+            "actor_hash": "1bc6ba6974444ef6",
+            "ref": "gcg-step-unknown",
+            "run_id": "gcg-run",
+            "step_id": "build"
+          },
+          "provenance": "authoritative",
+          "freshness": "unknown"
+        }
+      ]
+    },
+    {
+      "name": "stale-derived",
+      "as_of": "2026-08-13T20:00:00Z",
+      "city_hash": "ed2882eee5f989c5",
+      "observations": [
+        {
+          "envelope": {
+            "seq": 21,
+            "type": "execution.step_completed",
+            "ts": "2026-08-13T18:00:00Z",
+            "actor_hash": "bbfe3d520086dc3a",
+            "ref": "gcg-step-build-attempt",
+            "run_id": "gcg-run",
+            "session_id": "gcs-session",
+            "step_id": "build",
+            "depends_on_step_ids": ["prepare"]
+          },
+          "provenance": "derived",
+          "freshness": "stale",
+          "observed_at": "2026-08-13T18:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "unknown-provenance",
+      "as_of": "2026-08-13T20:00:00Z",
+      "city_hash": "ed2882eee5f989c5",
+      "observations": [
+        {
+          "envelope": {
+            "seq": 31,
+            "type": "execution.step_defined",
+            "ts": "2026-08-13T19:30:00Z",
+            "actor_hash": "35b43942e5948df9",
+            "ref": "gcg-step-unknown-source",
+            "run_id": "gcg-run",
+            "step_id": "verify",
+            "depends_on_step_ids": []
+          },
+          "provenance": "unknown",
+          "freshness": "unknown"
+        }
+      ]
+    }
+  ]
+}
