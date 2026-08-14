@@ -17,10 +17,6 @@ func TestNativeDoltStoreReadyConditionalUpdateRejectsDependencyRaceAgainstRealDo
 	if err != nil {
 		t.Fatalf("Create candidate: %v", err)
 	}
-	before, err := store.Get(candidate.ID)
-	if err != nil {
-		t.Fatalf("Get candidate before dependency: %v", err)
-	}
 	if err := store.DepAdd(candidate.ID, blocker.ID, "blocks"); err != nil {
 		t.Fatalf("DepAdd: %v", err)
 	}
@@ -28,9 +24,9 @@ func TestNativeDoltStoreReadyConditionalUpdateRejectsDependencyRaceAgainstRealDo
 	if err != nil {
 		t.Fatalf("Get candidate after dependency: %v", err)
 	}
-	if afterDependency.Revision == before.Revision {
-		t.Fatalf("dependency projection left readiness revision unchanged: %d", afterDependency.Revision)
-	}
+	// Dependency/is_blocked projection writes are derived state and are allowed
+	// not to change RowVersion. This is the important case for the ready fence:
+	// readiness must be checked independently of the caller's revision token.
 	if err := store.UpdateIfReadyAndMatch(candidate.ID, afterDependency.Revision, UpdateOpts{Metadata: map[string]string{"route": "must-not-land"}}); !errors.Is(err, ErrNotReadyForConditionalUpdate) {
 		t.Fatalf("blocked admission update error = %v, want ErrNotReadyForConditionalUpdate", err)
 	}
@@ -45,6 +41,27 @@ func TestNativeDoltStoreReadyConditionalUpdateRejectsDependencyRaceAgainstRealDo
 
 func TestNativeDoltStoreReadyConditionalUpdateAgainstRealDolt(t *testing.T) {
 	store := openRealNativeDoltStoreForCAS(t, "ready-admission")
+	staleCandidate, err := store.Create(Bead{Title: "stale revision candidate"})
+	if err != nil {
+		t.Fatalf("Create stale candidate: %v", err)
+	}
+	staleSnapshot, err := store.Get(staleCandidate.ID)
+	if err != nil {
+		t.Fatalf("Get stale candidate: %v", err)
+	}
+	changedTitle := "changed before conditional admission"
+	if err := store.Update(staleCandidate.ID, UpdateOpts{Title: &changedTitle}); err != nil {
+		t.Fatalf("update stale candidate: %v", err)
+	}
+	if err := store.UpdateIfReadyAndMatch(staleCandidate.ID, staleSnapshot.Revision, UpdateOpts{Metadata: map[string]string{"route": "must-not-land"}}); err == nil {
+		t.Fatal("stale revision admission succeeded")
+	} else {
+		var pfe *PreconditionFailedError
+		if !errors.As(err, &pfe) {
+			t.Fatalf("stale revision admission error = %v, want *PreconditionFailedError", err)
+		}
+	}
+
 	created, err := store.Create(Bead{Title: "ready routing candidate"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
