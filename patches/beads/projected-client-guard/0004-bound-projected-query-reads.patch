@@ -1,0 +1,91 @@
+From 206f33f4c9630a0fa162a47cd4024cef99bcb204 Mon Sep 17 00:00:00 2001
+From: Benjamin Brumbaugh <benbrumbaugh@gmail.com>
+Date: Fri, 14 Aug 2026 03:27:06 -0700
+Subject: [PATCH] fix: bound projected query reads
+
+---
+ cmd/bd/projected_client_guard.go      | 13 +++++++++---
+ cmd/bd/projected_client_guard_test.go | 29 +++++++++++++++++++++++++++
+ 2 files changed, 39 insertions(+), 3 deletions(-)
+
+diff --git a/cmd/bd/projected_client_guard.go b/cmd/bd/projected_client_guard.go
+index 4b327b6f..dac6689e 100644
+--- a/cmd/bd/projected_client_guard.go
++++ b/cmd/bd/projected_client_guard.go
+@@ -10,9 +10,10 @@ import (
+ )
+ 
+ const (
+-	projectedClientGuardEnv   = "GC_BD_CLIENT_GUARD"
+-	projectedClientMarkerName = ".gc-projected-client-policy"
+-	projectedClientMarkerV1   = "v1\n"
++	projectedClientGuardEnv      = "GC_BD_CLIENT_GUARD"
++	projectedClientMarkerName    = ".gc-projected-client-policy"
++	projectedClientMarkerV1      = "v1\n"
++	projectedClientMaxQueryLimit = 1000
+ )
+ 
+ var projectedClientAllowedTopLevel = map[string]struct{}{
+@@ -65,6 +66,12 @@ func enforceProjectedClientCommand(cmd *cobra.Command) error {
+ 		return nil
+ 	}
+ 	if _, ok := projectedClientAllowedTopLevel[top]; ok {
++		if top == "query" {
++			limit, err := cmd.Flags().GetInt("limit")
++			if err != nil || limit < 1 || limit > projectedClientMaxQueryLimit {
++				return fmt.Errorf("projected client policy refuses unbounded bd query limit %d; use 1..%d", limit, projectedClientMaxQueryLimit)
++			}
++		}
+ 		return nil
+ 	}
+ 	return fmt.Errorf("projected client policy refuses bd %s; use an approved canonical maintenance path", cmd.CommandPath())
+diff --git a/cmd/bd/projected_client_guard_test.go b/cmd/bd/projected_client_guard_test.go
+index 261edce8..73361d99 100644
+--- a/cmd/bd/projected_client_guard_test.go
++++ b/cmd/bd/projected_client_guard_test.go
+@@ -14,6 +14,9 @@ func projectedGuardCommand(path ...string) *cobra.Command {
+ 	parent := root
+ 	for _, name := range path {
+ 		child := &cobra.Command{Use: name}
++		if name == "query" {
++			child.Flags().Int("limit", 50, "")
++		}
+ 		parent.AddCommand(child)
+ 		parent = child
+ 	}
+@@ -55,6 +58,32 @@ func TestProjectedClientGuardRefusesAdminAndUnknownCommands(t *testing.T) {
+ 	}
+ }
+ 
++func TestProjectedClientGuardAllowsBoundedQueryLimits(t *testing.T) {
++	t.Setenv(projectedClientGuardEnv, "1")
++	for _, limit := range []string{"1", "50", "1000"} {
++		cmd := projectedGuardCommand("query")
++		if err := cmd.Flags().Set("limit", limit); err != nil {
++			t.Fatal(err)
++		}
++		if err := enforceProjectedClientCommand(cmd); err != nil {
++			t.Errorf("query --limit %s: unexpected error: %v", limit, err)
++		}
++	}
++}
++
++func TestProjectedClientGuardRefusesUnboundedOrOversizedQueries(t *testing.T) {
++	t.Setenv(projectedClientGuardEnv, "1")
++	for _, limit := range []string{"-1", "0", "1001"} {
++		cmd := projectedGuardCommand("query")
++		if err := cmd.Flags().Set("limit", limit); err != nil {
++			t.Fatal(err)
++		}
++		if err := enforceProjectedClientCommand(cmd); err == nil {
++			t.Errorf("query --limit %s: expected refusal", limit)
++		}
++	}
++}
++
+ func TestProjectedClientGuardActivatesFromMarker(t *testing.T) {
+ 	t.Setenv(projectedClientGuardEnv, "")
+ 	beadsDir := t.TempDir()
+-- 
+2.39.5 (Apple Git-154)
+
