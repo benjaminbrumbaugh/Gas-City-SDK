@@ -10,11 +10,12 @@ store has a colocated legacy Dolt data root and workers use an endpoint-only
 - Version: `v1.1.1-0.20260808152808-869020c2213d`
 - Origin commit: `869020c2213db2bfd9e1ba0aa54c7e60d52e5f2c`
 - Module sum: `h1:A+v6IXiGqyGAwuL99RbyplQjAGblyfkbiTgU5GKB1gA=`
-- Patch source series: `0d4bfe34566649ca3074e924b9df4fa8b7c7143d` → `67f41ae7c48ee510a9877646919f6680e27dd322`
-- Final patch tree: `2d47220a10836d93d66868047e2c98f51b515727`
-- Series diff SHA-256: `21fccebea8372e46abf2ed485a9384d533a4d9710c04414897dc16b2a4719b3a`
+- Patch source series: `0d4bfe34566649ca3074e924b9df4fa8b7c7143d` → `67f41ae7c48ee510a9877646919f6680e27dd322` → `b79df684c908002b5c51fa26746b730319986c46`
+- Final patch tree: `987ff25f5d64b8394a7dd3ec168f405028a000b2`
+- Series diff SHA-256: `6ad3139afe7d3b722db58c63dc98ceb4edcd5b11d8000692ab397b207ed6370d`
 - Format-patch 0001 SHA-256: `587a64a9114f6fcfb260b3537716ed425dfdacfc0406210081d1fb9098b535ac`
 - Format-patch 0002 SHA-256: `fb27d8d326787fdba696ba5b033269735e6c8a3b0ffaa81e497229ea9be6705a`
+- Format-patch 0003 SHA-256: `487a5db67fe722fdb19dc3885cd2de3cce501cf58bf0c0897cbda8d784e4d80f`
 
 ## Contract
 
@@ -23,8 +24,8 @@ contains exactly `v1\n`, the real `bd` binary enforces a strict top-level
 issue-command allowlist in root `PersistentPreRunE`, before telemetry, store
 open, or local file writes. Unknown, future, config, backup, migration, doctor,
 Dolt, and other administrative commands fail closed. Normal issue commands
-such as `show`, singular/plural `comment(s)`, `gate check`, `update`, `close`,
-`create`, `dep`, and `list`
+such as `show`, singular/plural `comment(s)`, `gate check`, bounded read-only
+`query`, `update`, `close`, `create`, `dep`, and `list`
 continue to use the canonical server-backed database.
 
 This is the hard gate below PATH/process-name resolution. Gas City's `bd` PATH
@@ -38,14 +39,15 @@ TMPDIR=/private/tmp go test -v ./cmd/bd -run '^TestProjectedClientGuard' -count=
 
 Expected: five guard tests pass.
 
-Build with the installed compatibility identity preserved:
+Build from exact commit `b79df684c908002b5c51fa26746b730319986c46`
+with VCS stamping retained:
 
 ```sh
 go build -tags gms_pure_go \
-  -ldflags '-X main.Version=v1.1.1 -X main.Build=gas-city-routing -X main.Commit=869020c2213db2bfd9e1ba0aa54c7e60d52e5f2c -X main.Branch=fix/gascity-projected-client-guard' \
+  -ldflags '-X main.Version=v1.1.1-0.20260808152808-869020c2213d -X main.Build=gascity-compat' \
   -o ./bd ./cmd/bd
 codesign --force --sign - ./bd
 ```
 
-The guarded candidate built on 2026-08-13 had SHA-256:
-`9bc1d973dec11af31d3da6aa5b96c426a791ff4ab22515efe03c7291d72be558`.
+The query-capable VCS-stamped candidate built on 2026-08-14 had SHA-256:
+`4dad15bf61c08f77749177eeda331b7eb1f2d6d546b9fc131f56120c95dc0e84`.
