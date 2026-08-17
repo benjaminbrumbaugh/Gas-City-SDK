@@ -24,6 +24,7 @@ import (
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/suspensionstate"
 	"gopkg.in/yaml.v3"
 )
 
@@ -172,6 +173,27 @@ func TestStartBeadsLifecycleDelegatesCompleteStorageBindingWithoutMutation(t *te
 	}
 	if !bytes.Equal(got, metadata) {
 		t.Fatalf("metadata changed: got %s, want %s", got, metadata)
+	}
+}
+
+func TestShouldInitializeRigBeadsUsesEffectiveSuspension(t *testing.T) {
+	cases := []struct {
+		name  string
+		rig   config.Rig
+		state suspensionstate.State
+		want  bool
+	}{
+		{name: "active rig", rig: config.Rig{Name: "active"}, want: true},
+		{name: "suspended on start", rig: config.Rig{Name: "cutover", SuspendedOnStart: true}, want: false},
+		{name: "runtime suspension", rig: config.Rig{Name: "runtime"}, state: suspensionstate.State{Rigs: map[string]suspensionstate.Override{"runtime": {Suspended: boolPtr(true)}}}, want: false},
+		{name: "runtime resume overrides config", rig: config.Rig{Name: "resumed", SuspendedOnStart: true}, state: suspensionstate.State{Rigs: map[string]suspensionstate.Override{"resumed": {Suspended: boolPtr(false)}}}, want: true},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldInitializeRigBeads(tt.state, tt.rig); got != tt.want {
+				t.Fatalf("shouldInitializeRigBeads() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

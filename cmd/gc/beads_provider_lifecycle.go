@@ -25,6 +25,7 @@ import (
 	"github.com/gastownhall/gascity/internal/doctor"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/pidutil"
+	"github.com/gastownhall/gascity/internal/suspensionstate"
 )
 
 // providerLifecycleLaunchctlGetenv reads a value from `launchctl getenv` on
@@ -182,7 +183,7 @@ func isRetryableManagedDoltLifecycleError(err error) bool {
 //   stop          — stop the backing service
 
 // startBeadsLifecycle runs the full bead store startup sequence:
-// start → init+hooks(city) → init+hooks(each rig) → regenerate routes.
+// start → init+hooks(city) → init+hooks(each active rig) → regenerate routes.
 // Called by gc start and controller config reload. Rigs must have absolute
 // paths before calling (resolve relative paths first).
 func startBeadsLifecycle(cityPath, _ string, cfg *config.City, stderr io.Writer) error {
@@ -236,7 +237,11 @@ func startBeadsLifecycle(cityPath, _ string, cfg *config.City, stderr io.Writer)
 	if err := initAndHookDir(cityPath, cityPath, beadsPrefix); err != nil {
 		return fmt.Errorf("init city beads: %w", err)
 	}
+	suspState, _ := loadSuspensionState(fsys.OSFS{}, cityPath)
 	for i := range cfg.Rigs {
+		if !shouldInitializeRigBeads(suspState, cfg.Rigs[i]) {
+			continue
+		}
 		if strings.TrimSpace(cfg.Rigs[i].Path) == "" {
 			continue
 		}
@@ -256,6 +261,13 @@ func startBeadsLifecycle(cityPath, _ string, cfg *config.City, stderr io.Writer)
 		}
 	}
 	return nil
+}
+
+// shouldInitializeRigBeads keeps suspended rig stores outside the city
+// lifecycle. A suspended rig may be under an independent migration or
+// cutover owner; GC must not open, normalize, or otherwise inspect its store.
+func shouldInitializeRigBeads(state suspensionstate.State, rig config.Rig) bool {
+	return !suspensionstate.EffectiveRigSuspended(state, rig.Name, rig.EffectiveSuspendedOnStart())
 }
 
 // initDirIfReady initializes beads for a single directory, ensuring the
@@ -1714,7 +1726,7 @@ func enforceCanonicalScopeMetadataForInit(fs fsys.FS, scopeRoot, doltDatabase st
 }
 
 // normalizeCanonicalBdScopeFiles reconciles canonical bd metadata/config/port
-// mirrors under the city and each rig. warn receives operator-visible WARN
+// mirrors under the city and each active rig. warn receives operator-visible WARN
 // lines when port-file rewrites change on-disk contents (pass io.Discard to
 // suppress, or a stderr writer from the caller to show them). When omitted,
 // warning output is suppressed.
@@ -1744,7 +1756,11 @@ func normalizeCanonicalBdScopeFiles(cityPath string, cfg *config.City, warns ...
 			}
 		}
 	}
+	suspState, _ := loadSuspensionState(fsys.OSFS{}, cityPath)
 	for i := range cfg.Rigs {
+		if !shouldInitializeRigBeads(suspState, cfg.Rigs[i]) {
+			continue
+		}
 		if !rigUsesManagedBdStoreContract(cityPath, cfg.Rigs[i]) {
 			continue
 		}
@@ -1832,8 +1848,12 @@ func syncConfiguredDoltPortFiles(cityPath string, cityDolt config.DoltConfig, ci
 		removeDoltPortFile(cityPath)
 	}
 
+	suspState, _ := loadSuspensionState(fsys.OSFS{}, cityPath)
 	for i := range rigs {
 		rig := normalizedRigConfig(cityPath, rigs[i])
+		if !shouldInitializeRigBeads(suspState, rig) {
+			continue
+		}
 		if strings.TrimSpace(rig.Path) == "" {
 			continue
 		}
