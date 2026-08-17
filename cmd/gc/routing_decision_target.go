@@ -122,9 +122,9 @@ func routingDecisionTargetConfigDigest(agent config.Agent, cfg *config.City) (st
 		ResolvedProvider: providerValue, EffectiveUpstreamName: upstreamName, EffectiveUpstream: upstreamValue,
 		ResolvedMaxActiveSessions: agent.ResolvedMaxActiveSessions(cfg), EffectiveMinActiveSessions: agent.EffectiveMinActiveSessions(),
 		SupportsGenericSessions: agent.SupportsGenericEphemeralSessions(), SupportsInstanceExpansion: agent.SupportsInstanceExpansion(),
-		EffectiveWorkQuery: agent.EffectiveWorkQueryForBeads(cfg.Beads), EffectiveAssignedInProgress: agent.EffectiveAssignedInProgressQueryForBeads(cfg.Beads),
-		EffectiveAssignedReady: agent.EffectiveAssignedReadyQueryForBeads(cfg.Beads), EffectiveRoutedPool: agent.EffectiveRoutedPoolQueryForBeads(cfg.Beads),
-		EffectivePoolDemand: agent.EffectivePoolDemandQueryForBeads(cfg.Beads), EffectiveSlingQuery: agent.EffectiveSlingQuery(), Beads: beadsValue,
+		EffectiveWorkQuery: agent.EffectiveWorkQueryFor(config.QueryTopology{Beads: cfg.Beads}), EffectiveAssignedInProgress: agent.EffectiveAssignedInProgressQueryFor(config.QueryTopology{Beads: cfg.Beads}),
+		EffectiveAssignedReady: agent.EffectiveAssignedReadyQueryFor(config.QueryTopology{Beads: cfg.Beads}), EffectiveRoutedPool: agent.EffectiveRoutedPoolQueryFor(config.QueryTopology{Beads: cfg.Beads}),
+		EffectivePoolDemand: agent.EffectivePoolDemandQueryFor(config.QueryTopology{Beads: cfg.Beads}), EffectiveSlingQuery: agent.EffectiveSlingQuery(), Beads: beadsValue,
 	}
 	encoded, err := json.Marshal(projection)
 	if err != nil {

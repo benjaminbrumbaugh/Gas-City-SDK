@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gastownhall/gascity/internal/pathutil"
 	"github.com/gastownhall/gascity/internal/testutil"
 )
 
@@ -21,10 +20,9 @@ func TestResolveEvaluateStep_DefaultPath(t *testing.T) {
 	if step.Name != EvaluateStepName {
 		t.Errorf("Name = %q, want %q", step.Name, EvaluateStepName)
 	}
-	want := pathutil.NormalizePathForCompare(filepath.Join("/home/user/city", DefaultEvaluatePromptPath))
-	if step.PromptPath != want {
-		t.Errorf("PromptPath = %q, want %q", step.PromptPath, want)
-	}
+	// production paths are NormalizePathForCompare form; compare firmlink-aware (#4934)
+	want := filepath.Join("/home/user/city", DefaultEvaluatePromptPath)
+	testutil.AssertSamePath(t, step.PromptPath, want)
 }
 
 func TestResolveEvaluateStep_CustomPath(t *testing.T) {
@@ -40,10 +38,8 @@ func TestResolveEvaluateStep_CustomPath(t *testing.T) {
 	if step.Name != EvaluateStepName {
 		t.Errorf("Name = %q, want %q", step.Name, EvaluateStepName)
 	}
-	want := pathutil.NormalizePathForCompare(filepath.Join("/home/user/city", "custom/my-evaluate.md"))
-	if step.PromptPath != want {
-		t.Errorf("PromptPath = %q, want %q", step.PromptPath, want)
-	}
+	want := filepath.Join("/home/user/city", "custom/my-evaluate.md")
+	testutil.AssertSamePath(t, step.PromptPath, want)
 }
 
 func TestResolveEvaluateStep_PathTraversal(t *testing.T) {
@@ -138,10 +134,8 @@ func TestResolveEvaluateStep_RelativeCityPathReturnsAbsolutePromptPath(t *testin
 	if !filepath.IsAbs(step.PromptPath) {
 		t.Fatalf("PromptPath = %q, want an absolute path — cityPath must be canonicalized to absolute before joining, not left relative", step.PromptPath)
 	}
-	want := pathutil.NormalizePathForCompare(filepath.Join(dir, DefaultEvaluatePromptPath))
-	if step.PromptPath != want {
-		t.Errorf("PromptPath = %q, want %q", step.PromptPath, want)
-	}
+	want := filepath.Join(dir, DefaultEvaluatePromptPath)
+	testutil.AssertSamePath(t, step.PromptPath, want)
 }
 
 // Pins the symlink-presence rejection itself, which the comparison above sits
