@@ -37,9 +37,9 @@ func newHCAShowCmd(stdout, _ io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := apiClient(cityPath)
+			client, reason := maintenanceAPIClient(cityPath)
 			if client == nil {
-				return fmt.Errorf("city API unavailable: %s", apiClientFallbackReason(cityPath))
+				return fmt.Errorf("city API unavailable: %s", reason)
 			}
 			signifier, err := client.GetHCAAffordance()
 			if err != nil {
@@ -97,9 +97,9 @@ func newHCARequestCmd(stdout, _ io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := apiClient(cityPath)
+			client, reason := maintenanceAPIClient(cityPath)
 			if client == nil {
-				return fmt.Errorf("city API unavailable: %s", apiClientFallbackReason(cityPath))
+				return fmt.Errorf("city API unavailable: %s", reason)
 			}
 			body := genclient.HCARequestBody{
 				SourceAgent:      flags.sourceAgent,
@@ -155,9 +155,9 @@ func newHCAListCmd(stdout, _ io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client := apiClient(cityPath)
+			client, reason := maintenanceAPIClient(cityPath)
 			if client == nil {
-				return fmt.Errorf("city API unavailable: %s", apiClientFallbackReason(cityPath))
+				return fmt.Errorf("city API unavailable: %s", reason)
 			}
 			items, err := client.ListHCARequests(state)
 			if err != nil {
