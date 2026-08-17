@@ -1394,6 +1394,37 @@ export type GroupRouteDecision = {
     UpdateCursor: boolean;
 };
 
+export type HcaRequestBody = {
+    allowed_tools?: Array<string> | null;
+    city?: string;
+    content_retention?: string;
+    correlation_id?: string;
+    delivery_mode?: string;
+    expires_at?: string;
+    idempotency_key?: string;
+    prompt: string;
+    reason: string;
+    repository?: string;
+    result_destination?: string;
+    rig?: string;
+    route_identity?: {
+        [key: string]: string;
+    };
+    session_mode?: string;
+    source_agent: string;
+    target?: Target;
+    work_ref?: string;
+};
+
+export type HcaRequestListOutputBody = {
+    items: Array<RequestRecord> | null;
+    total: number;
+};
+
+export type HcaResponseOutputBody = {
+    status: string;
+};
+
 export type HealthOutputBody = {
     /**
      * City name.
@@ -1418,6 +1449,29 @@ export type HeartbeatEvent = {
      * ISO 8601 timestamp when the heartbeat was sent.
      */
     timestamp: string;
+};
+
+export type HumanCoordinatorCapabilities = {
+    can_create_session: boolean;
+    can_interrupt: boolean;
+    can_receive_events: boolean;
+    can_resume_session: boolean;
+    can_return_results: boolean;
+    can_submit_prompt: boolean;
+};
+
+export type HumanCoordinatorSignifier = {
+    adapter: string;
+    available: boolean;
+    capabilities: HumanCoordinatorCapabilities;
+    config_revision: number;
+    delivery: string;
+    instruction: string;
+    interrupt_policy: string;
+    logical_role: string;
+    session_policy: string;
+    target: string;
+    triggers: Array<string> | null;
 };
 
 export type InboundEventPayload = {
@@ -2634,6 +2688,30 @@ export type Record = {
     source_pid?: number;
 };
 
+export type Request = {
+    allowed_tools?: Array<string> | null;
+    city?: string;
+    content_retention: string;
+    correlation_id: string;
+    created_at: string;
+    delivery_mode: string;
+    expires_at: string;
+    idempotency_key: string;
+    prompt: string;
+    reason: string;
+    repository?: string;
+    request_id: string;
+    result_destination?: string;
+    rig?: string;
+    route_identity?: {
+        [key: string]: string;
+    };
+    session_mode: string;
+    source_agent: string;
+    target: Target;
+    work_ref?: string;
+};
+
 export type RequestFailedPayload = {
     /**
      * Machine-readable error code.
@@ -2651,6 +2729,27 @@ export type RequestFailedPayload = {
      * Correlation ID from the 202 response.
      */
     request_id: string;
+};
+
+export type RequestRecord = {
+    attempt: number;
+    claimed_at?: string;
+    claimed_by?: string;
+    delivered_at?: string;
+    error?: string;
+    id: string;
+    request: Request;
+    state: string;
+};
+
+export type Response = {
+    content_retention?: string;
+    follow_up_required: boolean;
+    received_at: string;
+    request_id: string;
+    response_id: string;
+    state: string;
+    summary?: string;
 };
 
 export type RigActionBody = {
@@ -5223,6 +5322,19 @@ export type TaggedEventStreamEnvelope = {
     ts: string;
     type: string;
     workflow?: WorkflowEventProjection;
+};
+
+export type Target = {
+    account_id: string;
+    adapter: string;
+    config_revision: number;
+    conversation_id: string;
+    delivery_mode: string;
+    interrupt_allowed: boolean;
+    logical_role: string;
+    provider: string;
+    session_mode: string;
+    target_id: string;
 };
 
 export type TargetSnapshot = {
@@ -13204,6 +13316,211 @@ export type PostV0CityByCityNameFormulasByNameValidateResponses = {
 };
 
 export type PostV0CityByCityNameFormulasByNameValidateResponse = PostV0CityByCityNameFormulasByNameValidateResponses[keyof PostV0CityByCityNameFormulasByNameValidateResponses];
+
+export type GetV0CityByCityNameHcaData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/hca';
+};
+
+export type GetV0CityByCityNameHcaErrors = {
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type GetV0CityByCityNameHcaError = GetV0CityByCityNameHcaErrors[keyof GetV0CityByCityNameHcaErrors];
+
+export type GetV0CityByCityNameHcaResponses = {
+    /**
+     * OK
+     */
+    200: HumanCoordinatorSignifier;
+};
+
+export type GetV0CityByCityNameHcaResponse = GetV0CityByCityNameHcaResponses[keyof GetV0CityByCityNameHcaResponses];
+
+export type GetV0CityByCityNameHcaRequestsData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: {
+        /**
+         * Optional delivery state filter.
+         */
+        state?: string;
+    };
+    url: '/v0/city/{cityName}/hca/requests';
+};
+
+export type GetV0CityByCityNameHcaRequestsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type GetV0CityByCityNameHcaRequestsError = GetV0CityByCityNameHcaRequestsErrors[keyof GetV0CityByCityNameHcaRequestsErrors];
+
+export type GetV0CityByCityNameHcaRequestsResponses = {
+    /**
+     * OK
+     */
+    200: HcaRequestListOutputBody;
+};
+
+export type GetV0CityByCityNameHcaRequestsResponse = GetV0CityByCityNameHcaRequestsResponses[keyof GetV0CityByCityNameHcaRequestsResponses];
+
+export type PostV0CityByCityNameHcaRequestsData = {
+    body: HcaRequestBody;
+    headers: {
+        /**
+         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+         */
+        'X-GC-Request': string;
+        /**
+         * Idempotency key for safe retries.
+         */
+        'Idempotency-Key'?: string;
+    };
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/hca/requests';
+};
+
+export type PostV0CityByCityNameHcaRequestsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type PostV0CityByCityNameHcaRequestsError = PostV0CityByCityNameHcaRequestsErrors[keyof PostV0CityByCityNameHcaRequestsErrors];
+
+export type PostV0CityByCityNameHcaRequestsResponses = {
+    /**
+     * OK
+     */
+    200: RequestRecord;
+};
+
+export type PostV0CityByCityNameHcaRequestsResponse = PostV0CityByCityNameHcaRequestsResponses[keyof PostV0CityByCityNameHcaRequestsResponses];
+
+export type PostV0CityByCityNameHcaResponsesData = {
+    body: Response;
+    headers: {
+        /**
+         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+         */
+        'X-GC-Request': string;
+        /**
+         * Idempotency key for safe retries.
+         */
+        'Idempotency-Key'?: string;
+    };
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/hca/responses';
+};
+
+export type PostV0CityByCityNameHcaResponsesErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type PostV0CityByCityNameHcaResponsesError = PostV0CityByCityNameHcaResponsesErrors[keyof PostV0CityByCityNameHcaResponsesErrors];
+
+export type PostV0CityByCityNameHcaResponsesResponses = {
+    /**
+     * OK
+     */
+    200: HcaResponseOutputBody;
+};
+
+export type PostV0CityByCityNameHcaResponsesResponse = PostV0CityByCityNameHcaResponsesResponses[keyof PostV0CityByCityNameHcaResponsesResponses];
 
 export type GetV0CityByCityNameHealthData = {
     body?: never;

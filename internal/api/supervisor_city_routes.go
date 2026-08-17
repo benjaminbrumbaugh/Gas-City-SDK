@@ -507,4 +507,10 @@ func (sm *SupervisorMux) registerCityRoutes() {
 		Errors: []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable},
 	}, (*Server).humaHandleExtMsgAdapterRegister)
 	cityDelete(sm, "/extmsg/adapters", (*Server).humaHandleExtMsgAdapterUnregister, errorStatuses(http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable))
+
+	// Human Coordinator Agent affordance.
+	cityGet(sm, "/hca", (*Server).humaHandleHCAAffordance, errorStatuses(http.StatusNotFound, http.StatusServiceUnavailable))
+	cityPost(sm, "/hca/requests", (*Server).humaHandleHCARequest, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
+	cityGet(sm, "/hca/requests", (*Server).humaHandleHCARequestList, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
+	cityPost(sm, "/hca/responses", (*Server).humaHandleHCAResponse, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
 }

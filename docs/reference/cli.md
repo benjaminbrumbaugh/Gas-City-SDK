@@ -38,7 +38,7 @@ gc [flags]
 | [gc context](#gc-context) | Manage named remote cities (~/.gc/contexts.toml) |
 | [gc converge](#gc-converge) | Manage convergence loops (bounded iterative refinement) |
 | [gc convoy](#gc-convoy) | Manage convoys — graphs of related work |
-| [gc costs](#gc-costs) | Show per-run usage and estimated cost for this city |
+| [gc costs](#gc-costs) | Show usage entities and estimated cost for this city |
 | [gc dashboard](#gc-dashboard) | Open the web dashboard in your browser |
 | [gc doctor](#gc-doctor) | Check workspace health |
 | [gc dolt-cleanup](#gc-dolt-cleanup) | Find and remove orphaned Dolt databases (Go-side core) |
@@ -49,6 +49,7 @@ gc [flags]
 | [gc github](#gc-github) | GitHub integration commands |
 | [gc graph](#gc-graph) | Show dependency graph for beads |
 | [gc handoff](#gc-handoff) | Send handoff mail and restart controller-managed sessions |
+| [gc hca](#gc-hca) | Use the Human Coordinator Agent affordance |
 | [gc help](#gc-help) | Help about any command |
 | [gc hook](#gc-hook) | Find routed work for an agent |
 | [gc import](#gc-import) | Manage pack imports |
@@ -1231,7 +1232,7 @@ gc convoy target <convoy-id> <branch> [flags]
 ## gc costs
 
 Aggregate recorded usage facts (model tokens and compute wall-seconds)
-by run for local cost insight.
+by an explicitly labeled usage entity for local cost insight.
 
 Reads .gc/usage.jsonl (the local usage sink) and groups facts by run id. This
 reflects facts only under the default "local" usage provider; with an "exec:"
@@ -1242,15 +1243,24 @@ Cost is a list-price estimate for decision support, not an authoritative
 charge; invocations with no pricing are flagged "unpriced" and excluded from
 the cost total.
 
+The default report is all recorded history in the append-only sink. It does not
+reset or rotate usage. Rows expose identity evidence and first/last observation
+timestamps so a persistent named session is not presented as a fresh current
+run. Use --json for the versioned machine-readable projection.
+
 ```
-gc costs
+gc costs [flags]
 ```
 
 **Example:**
 
 ```
-gc costs
+gc costs --json
 ```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | bool |  | emit the versioned machine-readable projection |
 
 ## gc dashboard
 
@@ -1834,6 +1844,67 @@ gc handoff [subject] [message] [flags]
 | `--hook-format` | string |  | format hook output for a provider |
 | `--json` | bool |  | emit JSON summary |
 | `--target` | string |  | Remote session alias or ID to handoff (kills only controller-restartable sessions) |
+
+## gc hca
+
+Discover and enqueue causally linked requests for the configured external Human Coordinator Agent.
+
+```
+gc hca
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| [gc hca list](#gc-hca-list) | List durable HCA requests |
+| [gc hca request](#gc-hca-request) | Queue a request for the HCA |
+| [gc hca show](#gc-hca-show) | Show the configured HCA signifier |
+
+## gc hca list
+
+List durable HCA requests
+
+```
+gc hca list [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | bool |  | Output JSON |
+| `--state` | string |  | Filter by delivery state |
+
+## gc hca request
+
+Queue a request for the HCA
+
+```
+gc hca request [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--allowed-tool` | stringSlice |  | Tool explicitly allowed to the HCA (repeatable) |
+| `--content-retention` | string | `ephemeral` | Content retention: ephemeral or durable |
+| `--correlation-id` | string |  | Stable causal correlation ID |
+| `--idempotency-key` | string |  | Stable retry key (required) |
+| `--json` | bool |  | Output JSON |
+| `--prompt` | string |  | Decision or assistance request for the HCA |
+| `--reason` | string | `escalation` | Why the HCA is needed |
+| `--repository` | string |  | Repository scope |
+| `--result-destination` | string |  | Where the correlated response should be recorded |
+| `--source-agent` | string |  | Authenticated orchestrator identity (default: GC_AGENT) |
+| `--work-ref` | string |  | Bead or work reference |
+
+## gc hca show
+
+Show the configured HCA signifier
+
+```
+gc hca show [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | bool |  | Output JSON |
 
 ## gc help
 
