@@ -123,6 +123,11 @@ func computePoolDesiredStates(
 	assigneeToSessionBeadID := make(map[string]string)
 	sessionBeadTemplate := make(map[string]string)
 	namedSessionBeadIDs := make(map[string]bool)
+	// deferredAliasOwner maps a pool_alias_conflict alias to the single live
+	// session deferring it, or to "" when more than one session defers the same
+	// alias. Resolved into assigneeToSessionBeadID after the loop below, once
+	// every stamped identity is known — see the fallback comment there.
+	var deferredAliasOwner map[string]string
 	for _, sb := range sessionInfos {
 		if sb.Closed {
 			continue
@@ -140,6 +145,48 @@ func computePoolDesiredStates(
 		if isNamedSessionInfo(sb) {
 			namedSessionBeadIDs[sb.ID] = true
 		}
+		// Named-session beads are excluded: their demand is materialized by the
+		// named-session loop in buildDesiredState, and a resolved sessionBeadID
+		// hits the namedSessionBeadIDs skip below. Admitting one here could only
+		// turn a wake-known-identity request the pool path used to emit into a
+		// skip, so the fallback stays confined to pool instances.
+		if deferred := strings.TrimSpace(sb.PoolAliasConflict); deferred != "" && !isNamedSessionInfo(sb) {
+			if deferredAliasOwner == nil {
+				deferredAliasOwner = make(map[string]string, 1)
+			}
+			if prior, seen := deferredAliasOwner[deferred]; seen && prior != sb.ID {
+				deferredAliasOwner[deferred] = ""
+			} else {
+				deferredAliasOwner[deferred] = sb.ID
+			}
+		}
+	}
+
+	// A pool session that loses the namepool alias slot race never gets its
+	// canonical alias stamped: the deferred value survives only in
+	// pool_alias_conflict, so session.AssigneeIdentities emits {ID, session_name}
+	// and nothing else. Its polecat still claims work under the alias it believes
+	// it owns, so that assignee resolves to no session bead, the resume tier is
+	// skipped, control reaches the "orphaned work" branch below, demand for the
+	// template drops to zero, and the reconciler drains the very session doing
+	// the work for "no-wake-reason" — after which the reclaim reopens the bead
+	// and the cycle repeats (gc-3040). Treating the deferred alias as an identity
+	// keeps the live worker awake; the collision itself is gc-b237.
+	//
+	// Fallback only, and never on ambiguity. A stamped alias always wins, so this
+	// can add resolutions but never move one: otherwise a session that lost the
+	// race could take over work belonging to the session that won it. Two
+	// sessions deferring the same alias resolve to neither, because map iteration
+	// order is unspecified and an arbitrary winner would make demand
+	// nondeterministic from tick to tick — the failure this repairs.
+	for alias, sessionBeadID := range deferredAliasOwner {
+		if sessionBeadID == "" {
+			continue
+		}
+		if _, stamped := assigneeToSessionBeadID[alias]; stamped {
+			continue
+		}
+		assigneeToSessionBeadID[alias] = sessionBeadID
 	}
 
 	aliasHeldTemplates := canonicalSingletonAliasHeldTemplates(cfg, sessionInfos)
@@ -224,6 +271,19 @@ func computePoolDesiredStates(
 				// legacy bound form of this template eligible for the
 				// wake-known-identity tier; the emitted request carries the
 				// canonical template.
+				//
+				// Traced rather than silently skipped: this is where demand for a
+				// template disappears, and while it was a bare continue the only
+				// symptom was a session drained for "no-wake-reason" with nothing
+				// naming the bead or the assignee that failed to resolve. The
+				// gc-3040 loop had to be diagnosed from correlated log counts
+				// because of that silence.
+				if trace != nil {
+					trace.RecordDecision(TraceSitePoolOrphanedWork, TraceReasonOrphaned, TraceOutcomeSkipped, template, "", traceRecordPayload{
+						"work_bead": wb.ID,
+						"assignee":  assignee,
+					})
+				}
 				continue
 			}
 			if _, ok := wakeRequestedTemplates[template]; ok {
