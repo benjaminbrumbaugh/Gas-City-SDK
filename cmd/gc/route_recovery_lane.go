@@ -233,6 +233,11 @@ func (r routeRecoveryReport) outcome() TraceOutcomeCode {
 	}
 }
 
+// routeRecoveryAuthorization is supplied by the controller for each pass. A nil
+// authorization function preserves the lane's legacy test-only behavior; the
+// production CityRuntime always supplies one, so marked routes fail closed.
+type routeRecoveryAuthorization func(rig string, bead beads.Bead) bool
+
 // routeRecoveryLane holds the cadence and accounting state the two passes share.
 // It owns no stores and opens nothing: a caller hands it the plan for the pass,
 // which keeps the suspension frame told-not-decided exactly as the census arms
@@ -521,6 +526,17 @@ func planeLegLabel(ref storeref.StoreRef) string {
 	return "city"
 }
 
+func routeRecoveryRigForLegLabel(label string) string {
+	label = strings.TrimSpace(label)
+	if strings.HasPrefix(label, "rig ") {
+		return strings.TrimSpace(strings.TrimPrefix(label, "rig "))
+	}
+	if rig, ok := storeref.ScopeRigContext(label); ok {
+		return rig
+	}
+	return ""
+}
+
 // walkPlaneLegs runs visit over the legs THIS PLANE may read, in the resolver's
 // order and under the resolver's per-leg error policy. Every tick lane that
 // repairs routed work walks its plan through here, so the invariant below has
@@ -600,6 +616,10 @@ func planeReadsLeg(plane storePlane, ref storeref.StoreRef, bindingOnly bool) bo
 // The steady-state property this whole slice exists for lives in the first two
 // lines: no candidates, no plan, no store read at all.
 func (l *routeRecoveryLane) deltaPass(plan storeref.ResolvedPlan, candidates []string) routeRecoveryReport {
+	return l.deltaPassWithAuthorization(plan, candidates, nil)
+}
+
+func (l *routeRecoveryLane) deltaPassWithAuthorization(plan storeref.ResolvedPlan, candidates []string, authorization routeRecoveryAuthorization) routeRecoveryReport {
 	report := routeRecoveryReport{lane: "delta", candidates: len(candidates)}
 	if len(candidates) == 0 {
 		return report
@@ -615,7 +635,7 @@ func (l *routeRecoveryLane) deltaPass(plan storeref.ResolvedPlan, candidates []s
 		}
 		for _, row := range rows {
 			resolved[row.ID] = struct{}{}
-			outcome := l.restoreRoute(leg.store, row, false)
+			outcome := l.restoreRouteWithAuthorization(leg.store, row, false, leg.label, authorization)
 			report.legReads += outcome.writes
 			switch {
 			case outcome.restored:
@@ -643,18 +663,26 @@ func (l *routeRecoveryLane) deltaPass(plan storeref.ResolvedPlan, candidates []s
 // read of every work leg, with the per-candidate Get fan-out replaced by one
 // batched IN-list re-verify per leg.
 func (l *routeRecoveryLane) backstopPass(plan storeref.ResolvedPlan, reason string) routeRecoveryReport {
-	return l.backstopPassOnPlane(plan, reason, reconcilePlane)
+	return l.backstopPassWithAuthorization(plan, reason, nil)
+}
+
+func (l *routeRecoveryLane) backstopPassWithAuthorization(plan storeref.ResolvedPlan, reason string, authorization routeRecoveryAuthorization) routeRecoveryReport {
+	return l.backstopPassOnPlaneWithAuthorization(plan, reason, reconcilePlane, authorization)
 }
 
 // backstopPassOnPlane is the scan restricted to one plane's legs. Only the
 // convergence lane's plane is used in production; the parameter exists so the
 // invariant can be asserted from both sides of it.
 func (l *routeRecoveryLane) backstopPassOnPlane(plan storeref.ResolvedPlan, reason string, plane storePlane) routeRecoveryReport {
+	return l.backstopPassOnPlaneWithAuthorization(plan, reason, plane, nil)
+}
+
+func (l *routeRecoveryLane) backstopPassOnPlaneWithAuthorization(plan storeref.ResolvedPlan, reason string, plane storePlane, authorization routeRecoveryAuthorization) routeRecoveryReport {
 	report := routeRecoveryReport{lane: "backstop", reason: reason}
 	var errs []error
 	partial, walkErr := walkPlaneLegs(plan, plane, func(leg planeLeg) error {
 		report.legs++
-		legReport := l.backstopLeg(leg)
+		legReport := l.backstopLegWithAuthorization(leg, authorization)
 		report.candidates += legReport.candidates
 		report.restored += legReport.restored
 		report.quarantined += legReport.quarantined
@@ -693,6 +721,10 @@ func (l *routeRecoveryLane) backstopPassOnPlane(plan storeref.ResolvedPlan, reas
 // re-stamp stays monotonic (never worse than the prior blind write), so the
 // residual degrades to the pre-guard behavior rather than a new failure.
 func (l *routeRecoveryLane) backstopLeg(leg planeLeg) routeRecoveryReport {
+	return l.backstopLegWithAuthorization(leg, nil)
+}
+
+func (l *routeRecoveryLane) backstopLegWithAuthorization(leg planeLeg, authorization routeRecoveryAuthorization) routeRecoveryReport {
 	report := routeRecoveryReport{lane: "backstop"}
 	store := leg.store
 	if store == nil {
@@ -737,7 +769,7 @@ func (l *routeRecoveryLane) backstopLeg(leg planeLeg) routeRecoveryReport {
 	returned := make(map[string]struct{}, len(rows))
 	for _, row := range rows {
 		returned[row.ID] = struct{}{}
-		outcome := l.restoreRoute(store, row, true)
+		outcome := l.restoreRouteWithAuthorization(store, row, true, leg.label, authorization)
 		report.legReads += outcome.writes
 		switch {
 		case outcome.restored:
@@ -824,6 +856,10 @@ type routeRestoreOutcome struct {
 // flips the bead to in_progress and consumes gc.routed_to in one update (ga-sa0,
 // ga-bgu).
 func (l *routeRecoveryLane) restoreRoute(store beads.Store, live beads.Bead, backstop bool) routeRestoreOutcome {
+	return l.restoreRouteWithAuthorization(store, live, backstop, "", nil)
+}
+
+func (l *routeRecoveryLane) restoreRouteWithAuthorization(store beads.Store, live beads.Bead, backstop bool, legLabel string, authorization routeRecoveryAuthorization) routeRestoreOutcome {
 	route := carriedPoolRoute(live)
 	if route == "" || live.Status != "open" || strings.TrimSpace(live.Assignee) != "" {
 		if backstop {
@@ -834,6 +870,15 @@ func (l *routeRecoveryLane) restoreRoute(store beads.Store, live beads.Bead, bac
 			return routeRestoreOutcome{err: err}
 		}
 		return routeRestoreOutcome{}
+	}
+
+	decisionMarked := strings.TrimSpace(live.Metadata[beadmeta.RoutingDecisionIDMetadataKey]) != ""
+	if decisionMarked {
+		if authorization == nil || !authorization(routeRecoveryRigForLegLabel(legLabel), live) {
+			// Marked routes are controller-authorized records. A missing or
+			// failed verifier is a refusal, never legacy compatibility.
+			return routeRestoreOutcome{}
+		}
 	}
 
 	l.mu.Lock()
@@ -863,7 +908,19 @@ func (l *routeRecoveryLane) restoreRoute(store beads.Store, live beads.Bead, bac
 		writes[beadmeta.RouteQuarantineMetadataKey] = ""
 		writes[beadmeta.RouteQuarantineReasonMetadataKey] = ""
 	}
-	if err := store.SetMetadataBatch(live.ID, writes); err != nil {
+	if decisionMarked {
+		writer, ok := beads.ReadyConditionalWriterFor(store)
+		if !ok {
+			// A marked route never falls back to an unconditional metadata write.
+			return routeRestoreOutcome{}
+		}
+		if err := writer.UpdateIfReadyAndMatch(live.ID, live.Revision, beads.UpdateOpts{Metadata: writes}); err != nil {
+			if beads.IsPreconditionFailed(err) || errors.Is(err, beads.ErrNotReadyForConditionalUpdate) {
+				return routeRestoreOutcome{}
+			}
+			return routeRestoreOutcome{writes: 1, err: fmt.Errorf("bead %s: atomically restoring marked gc.routed_to=%q: %w", live.ID, route, err)}
+		}
+	} else if err := store.SetMetadataBatch(live.ID, writes); err != nil {
 		return routeRestoreOutcome{writes: 1, err: fmt.Errorf("bead %s: restoring gc.routed_to=%q: %w", live.ID, route, err)}
 	}
 	return routeRestoreOutcome{restored: true, writes: 1}
