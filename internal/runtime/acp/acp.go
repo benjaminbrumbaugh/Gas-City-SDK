@@ -172,6 +172,10 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 
 	cmd := exec.Command("sh", "-c", command)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Bound os/exec's pipe cleanup when descendants inherit stdout. Without a
+	// WaitDelay, cmd.Wait can retain a reader goroutine indefinitely after the
+	// process group has been killed.
+	cmd.WaitDelay = runtime.ManagedProcessReapGrace
 	if cfg.WorkDir != "" {
 		cmd.Dir = cfg.WorkDir
 	}
@@ -198,6 +202,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	}
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdinPipe.Close()
 		clearSentinel()
 		return fmt.Errorf("creating stdout pipe for %q: %w", name, err)
 	}
@@ -206,6 +211,8 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	// block waiting for the stderr copy to finish after process kill.
 	stderrR, stderrW, err := os.Pipe()
 	if err != nil {
+		_ = stdinPipe.Close()
+		_ = stdoutPipe.Close()
 		clearSentinel()
 		return fmt.Errorf("creating stderr pipe for %q: %w", name, err)
 	}
@@ -227,7 +234,10 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	}()
 
 	if err := cmd.Start(); err != nil {
+		_ = stdinPipe.Close()
+		_ = stdoutPipe.Close()
 		stderrW.Close() //nolint:errcheck
+		stderrR.Close() //nolint:errcheck
 		clearSentinel()
 		return fmt.Errorf("starting session %q: %w", name, err)
 	}
@@ -240,6 +250,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	if err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = cmd.Wait()
+		_ = stderrR.Close()
 		clearSentinel()
 		return fmt.Errorf("creating control socket for %q: %w", name, err)
 	}
@@ -258,6 +269,10 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	// IsRunning falls through to socketAlive and returns true.
 	go func() {
 		_ = cmd.Wait()
+		// stderr is an explicit os.Pipe, so os/exec cannot close it for us.
+		// Descendants may retain the write end after the direct child exits;
+		// close the read end to release the drain goroutine.
+		_ = stderrR.Close()
 		// Order the read loop's exit ahead of the publisher's final flush so a
 		// session/update the loop did dispatch cannot race publication
 		// shutdown. This is ordering, not a drain guarantee: cmd.Wait closes

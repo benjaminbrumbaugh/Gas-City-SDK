@@ -1,10 +1,16 @@
 package runtime
 
 import (
+	"errors"
 	"os/exec"
 	"syscall"
 	"time"
 )
+
+// ErrManagedProcessReapTimeout reports that a managed process did not signal
+// completion within the bounded post-SIGKILL reap window. Callers must not
+// treat this as proof that the process is gone.
+var ErrManagedProcessReapTimeout = errors.New("managed process reap timed out")
 
 // ManagedProcessStopGrace is the shared grace period before escalating
 // provider-managed process termination from SIGTERM to SIGKILL.
@@ -45,6 +51,12 @@ func TerminateManagedProcess(cmd *exec.Cmd, done <-chan struct{}, grace time.Dur
 	}
 
 	_ = SignalProcessGroup(cmd, syscall.SIGKILL)
-	<-done
-	return nil
+	reapTimer := time.NewTimer(ManagedProcessReapGrace)
+	defer reapTimer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-reapTimer.C:
+		return ErrManagedProcessReapTimeout
+	}
 }
