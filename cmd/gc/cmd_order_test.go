@@ -2833,9 +2833,9 @@ prefix = "ct"
 		"host=<external.example.internal>",
 		"port=<4406>",
 		"pack_state=<>",
-		"data=<" + externalRoot + ">",
-		"config=<" + filepath.Join(externalRoot, "dolt-config.yaml") + ">",
-		"state=<" + filepath.Join(externalRoot, "dolt-state.json") + ">",
+		"data=<" + canonicalTestPath(externalRoot) + ">",
+		"config=<" + canonicalTestPath(filepath.Join(externalRoot, "dolt-config.yaml")) + ">",
+		"state=<" + canonicalTestPath(filepath.Join(externalRoot, "dolt-state.json")) + ">",
 	}, "\n")
 	if got != want {
 		t.Fatalf("order exec env:\ngot:\n%s\nwant:\n%s", got, want)
@@ -2911,8 +2911,8 @@ prefix = "ct"
 	want := strings.Join([]string{
 		"managed=<1>",
 		"port=<" + port + ">",
-		"data=<" + dataDir + ">",
-		"config=<" + configFile + ">",
+		"data=<" + canonicalTestPath(dataDir) + ">",
+		"config=<" + canonicalTestPath(configFile) + ">",
 	}, "\n")
 	if got != want {
 		t.Fatalf("order exec env:\ngot:\n%s\nwant:\n%s", got, want)

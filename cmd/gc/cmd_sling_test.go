@@ -4865,9 +4865,7 @@ func TestResolveSlingStoreRootUsesCanonicalRigRoot(t *testing.T) {
 
 	got := resolveSlingStoreRoot(cfg, cityPath, "plain text", config.Agent{Dir: "alpha"})
 	want := filepath.Join(cityPath, "rigs", "alpha")
-	if got != want {
-		t.Fatalf("resolveSlingStoreRoot() = %q, want %q", got, want)
-	}
+	assertSameTestPath(t, got, want)
 }
 
 func TestResolveSlingStoreRootPrefersBeadPrefixRig(t *testing.T) {
@@ -4881,9 +4879,7 @@ func TestResolveSlingStoreRootPrefersBeadPrefixRig(t *testing.T) {
 
 	got := resolveSlingStoreRoot(cfg, cityPath, "be-123", config.Agent{Dir: "alpha"})
 	want := filepath.Join(cityPath, "rigs", "beta")
-	if got != want {
-		t.Fatalf("resolveSlingStoreRoot() = %q, want %q", got, want)
-	}
+	assertSameTestPath(t, got, want)
 }
 
 func TestResolveSlingStoreRootUsesPrefixRigForConfiguredAllAlphaBeadID(t *testing.T) {
@@ -4897,9 +4893,7 @@ func TestResolveSlingStoreRootUsesPrefixRigForConfiguredAllAlphaBeadID(t *testin
 
 	got := resolveSlingStoreRoot(cfg, cityPath, "FE-hello", config.Agent{Dir: "orders"})
 	want := filepath.Join(cityPath, "rigs", "frontend")
-	if got != want {
-		t.Fatalf("resolveSlingStoreRoot() = %q, want %q", got, want)
-	}
+	assertSameTestPath(t, got, want)
 }
 
 func TestResolveSlingStoreRootHonorsHyphenatedRigPrefix(t *testing.T) {
@@ -4916,7 +4910,7 @@ func TestResolveSlingStoreRootHonorsHyphenatedRigPrefix(t *testing.T) {
 
 	got := resolveSlingStoreRoot(cfg, cityPath, "agent-diagnostics-hnn", config.Agent{Dir: "agent"})
 	want := filepath.Join(cityPath, "rigs", "agent-diag")
-	if got != want {
+	if canonicalTestPath(got) != canonicalTestPath(want) {
 		t.Fatalf("resolveSlingStoreRoot(agent-diagnostics-hnn) = %q, want %q (longest configured prefix should win)", got, want)
 	}
 
@@ -4924,9 +4918,7 @@ func TestResolveSlingStoreRootHonorsHyphenatedRigPrefix(t *testing.T) {
 	// to that rig.
 	got = resolveSlingStoreRoot(cfg, cityPath, "agent-x1", config.Agent{Dir: "agent-diagnostics"})
 	want = filepath.Join(cityPath, "rigs", "agent")
-	if got != want {
-		t.Fatalf("resolveSlingStoreRoot(agent-x1) = %q, want %q", got, want)
-	}
+	assertSameTestPath(t, got, want)
 }
 
 func TestResolveSlingStoreRootUsesCityRootForHQPrefix(t *testing.T) {
@@ -5072,9 +5064,7 @@ func TestSlingFormulaRepoDirUsesCanonicalRigRoot(t *testing.T) {
 
 	got := sling.SlingFormulaRepoDir("plain text", deps, config.Agent{Dir: "alpha"})
 	want := filepath.Join(cityPath, "rigs", "alpha")
-	if got != want {
-		t.Fatalf("SlingFormulaRepoDir() = %q, want %q", got, want)
-	}
+	assertSameTestPath(t, got, want)
 }
 
 func TestCLIDirectSessionResolverMaterializesNamedSessionAliasShadow(t *testing.T) {
