@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["id", "request", "state"],
+  "properties": {
+    "id": {"type": "string"},
+    "request": {"type": "object"},
+    "state": {"type": "string"},
+    "attempt": {"type": "integer"},
+    "claimed_by": {"type": "string"},
+    "claimed_at": {"type": "string"},
+    "delivered_at": {"type": "string"},
+    "error": {"type": "string"}
+  },
+  "additionalProperties": true
+}

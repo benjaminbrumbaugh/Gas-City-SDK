@@ -1241,6 +1241,10 @@
           "$ref": "#/$defs/ExtMsgConfig",
           "description": "ExtMsg configures the external-messaging fabric (default routes\nfor inbound conversations with no binding)."
         },
+        "human_coordinator": {
+          "$ref": "#/$defs/HumanCoordinatorConfig",
+          "description": "HumanCoordinator configures the provider-neutral external coordinator\naffordance. The selected adapter is supplied by the runtime."
+        },
         "agent_defaults": {
           "$ref": "#/$defs/AgentDefaults",
           "description": "AgentDefaults provides root city defaults for agents that don't override\nthem (canonical TOML key: agent_defaults). Pack-local defaults use the\nsame table shape in pack.toml. The runtime currently applies provider,\ndefault_sling_formula, and append_fragments; the attachment-list fields\nremain tombstones, and the other fields are parsed/composed but not yet\ninherited automatically."
@@ -1772,6 +1776,77 @@
         "name"
       ],
       "description": "GitHubPRMonitorPatch modifies an existing GitHub PR readiness monitor by name."
+    },
+    "HumanCoordinatorCapabilities": {
+      "properties": {
+        "can_create_session": {
+          "type": "boolean"
+        },
+        "can_resume_session": {
+          "type": "boolean"
+        },
+        "can_submit_prompt": {
+          "type": "boolean"
+        },
+        "can_interrupt": {
+          "type": "boolean"
+        },
+        "can_receive_events": {
+          "type": "boolean"
+        },
+        "can_return_results": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "HumanCoordinatorCapabilities describes declared adapter capabilities."
+    },
+    "HumanCoordinatorConfig": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "target": {
+          "type": "string"
+        },
+        "adapter": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "account_id": {
+          "type": "string"
+        },
+        "conversation_id": {
+          "type": "string"
+        },
+        "delivery": {
+          "type": "string"
+        },
+        "interrupt_policy": {
+          "type": "string"
+        },
+        "session_policy": {
+          "type": "string"
+        },
+        "config_revision": {
+          "type": "integer"
+        },
+        "triggers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/HumanCoordinatorCapabilities"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "HumanCoordinatorConfig declares the external coordinator affordance."
     },
     "Import": {
       "properties": {

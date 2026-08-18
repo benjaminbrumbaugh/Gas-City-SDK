@@ -37,29 +37,23 @@ func newColdCacheRigState(t *testing.T) (*fakeState, *coldCacheStore) {
 	return state, cold
 }
 
-// TestStatusWorkCountsSkipsReadyForCacheColdRigs is the regression for the
-// permanently-partial status bug: a suspended rig gets no background cache
-// refresh (rigStoreBackgroundRefresh), so its cache-only Ready read can never
-// succeed. Asking anyway made /status report partial: true forever, which the
-// dashboard renders by grey-dotting every systems tile — dolt store, mail and
-// agents alike — even though all of them are healthy.
-func TestStatusWorkCountsSkipsReadyForCacheColdRigs(t *testing.T) {
+// TestStatusWorkCountsSkipsSuspendedRigs is the regression for the lifecycle
+// boundary: an effectively suspended rig may be under an independent migration
+// or cutover owner, so status must not open or query its store at all.
+func TestStatusWorkCountsSkipsSuspendedRigs(t *testing.T) {
 	state, cold := newColdCacheRigState(t)
 	s := &Server{state: state}
 
 	wc, errs := s.statusWorkCounts(context.Background(), map[string]bool{"myrig": true})
 
 	if len(errs) != 0 {
-		t.Fatalf("partial errors = %v, want none for a cache-cold rig", errs)
+		t.Fatalf("partial errors = %v, want none for a suspended rig", errs)
 	}
 	if got := cold.readyCalls.Load(); got != 0 {
-		t.Errorf("ready reads = %d, want 0 — the read is known to fail, so it must be skipped", got)
+		t.Errorf("ready reads = %d, want 0 — suspended rig must not be queried", got)
 	}
-	if wc.Open != 1 {
-		t.Errorf("Open = %d, want 1 — persisted counts must still be collected", wc.Open)
-	}
-	if wc.Ready != 0 {
-		t.Errorf("Ready = %d, want 0 — a cache-cold rig contributes no ready work", wc.Ready)
+	if wc.Open != 0 || wc.InProgress != 0 || wc.Ready != 0 {
+		t.Errorf("work counts = %+v, want all zero for a suspended rig", wc)
 	}
 }
 

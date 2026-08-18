@@ -344,6 +344,7 @@ func newRootCmdWithOptions(stdout, stderr io.Writer, options rootCommandOptions)
 		newEventCmd(stdout, stderr),
 		newEventsCmd(stdout, stderr),
 		newExtMsgCmd(stdout, stderr),
+		newHCACmd(stdout, stderr),
 		newTraceCmd(stdout, stderr),
 		newOrderCmd(stdout, stderr),
 		newImportCmd(stdout, stderr),

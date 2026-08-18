@@ -217,7 +217,10 @@
               "routing-eligible",
               "routing-ingest",
               "routing-status",
-              "routing-targets"
+              "routing-targets",
+              "hca-list",
+              "hca-request",
+              "hca-show"
             ]
           },
           "event_id": {
