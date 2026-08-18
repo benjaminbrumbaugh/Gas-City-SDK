@@ -386,7 +386,7 @@ func TestResolveWorkDir(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveWorkDir error = %v", err)
 			}
-			if got != tt.want {
+			if canonicalTestPath(got) != canonicalTestPath(tt.want) {
 				t.Errorf("resolveWorkDir = %q, want %q", got, tt.want)
 			}
 		})
@@ -426,7 +426,8 @@ func TestCmdSessionNew_PoolTemplateUsesAliasBackedWorkDirIdentity(t *testing.T) 
 		if !ok {
 			t.Fatalf("unexpected alias %q in bead metadata", alias)
 		}
-		if got := bead.Metadata["work_dir"]; got != want {
+		got := bead.Metadata["work_dir"]
+		if canonicalTestPath(got) != canonicalTestPath(want) {
 			t.Fatalf("work_dir(%q) = %q, want %q", alias, got, want)
 		}
 		if otherAlias, collision := seenWorkDir[bead.Metadata["work_dir"]]; collision {
@@ -545,7 +546,7 @@ func TestCmdSessionNew_PoolTemplateWithoutAliasUsesGeneratedWorkDirIdentity(t *t
 		}
 		seenSessionName[sessionName] = true
 		workDir := bead.Metadata["work_dir"]
-		if filepath.Dir(workDir) != filepath.Join(cityDir, ".gc", "worktrees", "demo", "ants") {
+		if canonicalTestPath(filepath.Dir(workDir)) != canonicalTestPath(filepath.Join(cityDir, ".gc", "worktrees", "demo", "ants")) {
 			t.Fatalf("work_dir(%q) parent = %q, want %q", sessionName, filepath.Dir(workDir), filepath.Join(cityDir, ".gc", "worktrees", "demo", "ants"))
 		}
 		base := filepath.Base(workDir)

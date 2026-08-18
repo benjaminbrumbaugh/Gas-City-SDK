@@ -114,7 +114,11 @@ func registerCityDoltConfig(cityPath string, cfg config.DoltConfig) {
 }
 
 func clearCityDoltConfig(cityPath string) {
-	cityDoltConfigs.Delete(normalizePathForCompare(cityPath))
+	normalized := normalizePathForCompare(cityPath)
+	cityDoltConfigs.Delete(normalized)
+	if cityPath != normalized {
+		cityDoltConfigs.Delete(cityPath)
+	}
 }
 
 // registerCityDoltConfigIfAbsent registers cfg for cityPath only when nothing is
@@ -126,6 +130,26 @@ func clearCityDoltConfig(cityPath string) {
 func registerCityDoltConfigIfAbsent(cityPath string, cfg config.DoltConfig) (added bool) {
 	_, loaded := cityDoltConfigs.LoadOrStore(normalizePathForCompare(cityPath), cfg)
 	return !loaded
+}
+
+// loadCityDoltConfig reads the compatibility registry using the same canonical
+// path identity used by registration. The raw fallback preserves compatibility
+// with older in-process callers that stored an unnormalized path.
+func loadCityDoltConfig(cityPath string) (config.DoltConfig, bool) {
+	normalized := normalizePathForCompare(cityPath)
+	keys := []string{normalized}
+	if cityPath != normalized {
+		keys = append(keys, cityPath)
+	}
+	for _, key := range keys {
+		if loaded, ok := cityDoltConfigs.Load(key); ok {
+			cfg, ok := loaded.(config.DoltConfig)
+			if ok {
+				return cfg, true
+			}
+		}
+	}
+	return config.DoltConfig{}, false
 }
 
 var resolveProviderLifecycleGCBinary = func() string {
@@ -384,10 +408,8 @@ func desiredScopeDoltConfigStateForInit(cityPath, dir, prefix string) (contract.
 		}
 		return rigState, true, nil
 	}
-	if loaded, ok := cityDoltConfigs.Load(cityPath); ok {
-		if cfg, ok := loaded.(config.DoltConfig); ok {
-			cityDolt = cfg
-		}
+	if cfg, ok := loadCityDoltConfig(cityPath); ok {
+		cityDolt = cfg
 	}
 	cityState, _, err := resolveDesiredCityEndpointState(cityPath, cityDolt, prefix)
 	if err != nil {
@@ -1135,10 +1157,8 @@ func forcedScopeDoltConfigStateForInit(cityPath, dir, prefix string) (contract.C
 		}
 		return desiredRigDoltConfigState(cityPath, config.Rig{Name: filepath.Base(dir), Path: dir, Prefix: prefix}, cityState), true, nil
 	}
-	if loaded, ok := cityDoltConfigs.Load(cityPath); ok {
-		if cfg, ok := loaded.(config.DoltConfig); ok {
-			cityDolt = cfg
-		}
+	if cfg, ok := loadCityDoltConfig(cityPath); ok {
+		cityDolt = cfg
 	}
 	cityState := desiredCityDoltConfigState(cityPath, cityDolt, prefix)
 	if samePath(cityPath, dir) {
@@ -1377,6 +1397,7 @@ func configuredCityDoltTarget(cityPath string) (string, string, bool) {
 }
 
 func resolveConfiguredCityDoltTarget(cityPath string) (string, string, bool, bool) {
+	lookupCityPath := cityPath
 	cityPath = normalizePathForCompare(cityPath)
 	resolved, err := contract.ResolveScopeConfigState(fsys.OSFS{}, cityPath, cityPath, "")
 	if err != nil {
@@ -1393,8 +1414,7 @@ func resolveConfiguredCityDoltTarget(cityPath string) (string, string, bool, boo
 		return "", "", false, false
 	}
 	if resolved.Kind == contract.ScopeConfigMissing || resolved.Kind == contract.ScopeConfigLegacyMinimal {
-		if v, ok := cityDoltConfigs.Load(cityPath); ok {
-			dc := v.(config.DoltConfig)
+		if dc, ok := loadCityDoltConfig(lookupCityPath); ok {
 			port := ""
 			if dc.Port != 0 {
 				port = strconv.Itoa(dc.Port)
@@ -2339,8 +2359,7 @@ func providerLifecycleProcessEnvFromBase(cityPath, provider string, env []string
 	}
 	// Propagate archive_level from city config so the managed dolt
 	// server inherits it without shell-script changes.
-	if v, ok := cityDoltConfigs.Load(cityPath); ok {
-		dc, _ := v.(config.DoltConfig)
+	if dc, ok := loadCityDoltConfig(cityPath); ok {
 		if dc.ArchiveLevel != nil {
 			env = append(env, fmt.Sprintf("GC_DOLT_ARCHIVE_LEVEL=%d", *dc.ArchiveLevel))
 		}

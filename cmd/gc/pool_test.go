@@ -1109,7 +1109,7 @@ func TestRunPoolOnBootUsesRigRootForRigScopedPools(t *testing.T) {
 	if len(dirs) != 1 {
 		t.Fatalf("runner calls = %d, want 1", len(dirs))
 	}
-	if dirs[0] != rigRoot {
+	if canonicalTestPath(dirs[0]) != canonicalTestPath(rigRoot) {
 		t.Fatalf("on_boot dir = %q, want %q", dirs[0], rigRoot)
 	}
 }
@@ -1134,7 +1134,7 @@ func TestRunPoolOnBootUsesCanonicalRigEnv(t *testing.T) {
 	var stderr bytes.Buffer
 	runPoolOnBoot(cfg, cityPath, runner, &stderr)
 
-	if gotDir != rigDir {
+	if canonicalTestPath(gotDir) != canonicalTestPath(rigDir) {
 		t.Fatalf("on_boot dir = %q, want %q", gotDir, rigDir)
 	}
 	wantPort := currentManagedDoltPort(cityPath)
@@ -1144,7 +1144,7 @@ func TestRunPoolOnBootUsesCanonicalRigEnv(t *testing.T) {
 	if gotPassword != "city-secret" {
 		t.Fatalf("GC_DOLT_PASSWORD = %q, want %q", gotPassword, "city-secret")
 	}
-	if gotBeadsDir != filepath.Join(rigDir, ".beads") {
+	if canonicalTestPath(gotBeadsDir) != canonicalTestPath(filepath.Join(rigDir, ".beads")) {
 		t.Fatalf("BEADS_DIR = %q, want %q", gotBeadsDir, filepath.Join(rigDir, ".beads"))
 	}
 }
@@ -1235,7 +1235,7 @@ func TestComputePoolDeathHandlersUsesRigRootForRigScopedPools(t *testing.T) {
 		t.Fatalf("len(handlers) = %d, want 2", len(handlers))
 	}
 	for sessionName, info := range handlers {
-		if info.Dir != rigRoot {
+		if canonicalTestPath(info.Dir) != canonicalTestPath(rigRoot) {
 			t.Fatalf("handler[%s].Dir = %q, want %q", sessionName, info.Dir, rigRoot)
 		}
 	}

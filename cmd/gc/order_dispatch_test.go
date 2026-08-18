@@ -3017,7 +3017,7 @@ func TestOrderDispatchExecRigUsesScopedWorkdirAndStoreEnv(t *testing.T) {
 	ad.dispatch(context.Background(), cityDir, time.Now())
 	ad.drain(context.Background())
 
-	if gotDir != rigDir {
+	if canonicalTestPath(gotDir) != canonicalTestPath(rigDir) {
 		t.Fatalf("exec dir = %q, want %q", gotDir, rigDir)
 	}
 	checks := map[string]string{
@@ -9549,7 +9549,7 @@ dolt.auto-start: false
 	}
 	got := listToMap(opts.ConditionEnv)
 
-	if opts.ConditionDir != rigDir {
+	if canonicalTestPath(opts.ConditionDir) != canonicalTestPath(rigDir) {
 		t.Fatalf("ConditionDir = %q, want %q", opts.ConditionDir, rigDir)
 	}
 	assertNoDoltOrderEnv(t, got)
