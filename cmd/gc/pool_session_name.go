@@ -78,13 +78,13 @@ func PoolSessionName(template, beadID string) string {
 // typed session.Info projection (WI-5 W4); the close is a session-class op
 // routed through the session front door. Returns the IDs of session beads
 // that were closed.
-func GCSweepSessionBeads(store beads.Store, rigStores map[string]beads.Store, sessionInfos []session.Info) []string {
+func GCSweepSessionBeads(cityPath string, store beads.Store, rigStores map[string]beads.Store, sessionInfos []session.Info) []string {
 	var closed []string
 	for _, info := range sessionInfos {
 		if info.Closed {
 			continue
 		}
-		if !closeSessionInfoIfUnassigned(store, rigStores, nil, info, "gc_swept", time.Now().UTC(), nil) {
+		if !closeSessionInfoIfUnassigned(cityPath, store, rigStores, nil, info, "gc_swept", time.Now().UTC(), nil) {
 			continue
 		}
 		closed = append(closed, info.ID)
@@ -137,7 +137,7 @@ func releaseOrphanedPoolAssignments(
 		log.Printf("releaseOrphanedPoolAssignments: assigned work/store-ref length mismatch: work=%d storeRefs=%d", len(assignedWorkBeads), len(assignedWorkStoreRefs))
 	}
 
-	openIdentifiers := makeOpenSessionStoreRefIndex(cityPath, cfg, openSessionInfos, storeRefAware)
+	openIdentifiers := makeOpenSessionStoreRefIndex(cityPath, cfg, store, openSessionInfos, storeRefAware)
 	legacyOpenIdentifiers := make(map[string]struct{}, len(openSessionInfos)*5)
 	openSessionBeadIDs := make(map[string]struct{}, len(openSessionInfos))
 	for _, info := range openSessionInfos {
@@ -170,6 +170,10 @@ func releaseOrphanedPoolAssignments(
 			continue
 		}
 		exactOwnerGone := false
+		// Resolved before the liveness gates because the graph-resident-session
+		// probe below reads the same store; the missing-store report stays where
+		// it was, so a bead skipped by a liveness gate never reaches it.
+		ownerStore := assignedWorkOwnerStore(cfg, store, rigStores, assignedWorkStores, i, wb)
 		if assignee == "" {
 			if wb.Status != "in_progress" {
 				continue
@@ -188,20 +192,24 @@ func releaseOrphanedPoolAssignments(
 			if liveOpenSessionAssignmentExists(store, assignee) {
 				continue
 			}
+			// The sessions binding is not the only ledger that can hold a session
+			// bead. Graph-resident run sessions (gcg-session-*) are written into
+			// the same store as the work they drive, so on a city whose graph
+			// binding is separate from the sessions binding the probe above is
+			// structurally blind to every graph-run assignee and releases live
+			// claims. A session bead of that shape lives in the work bead's own
+			// owner store, so probing that one store after the sessions store
+			// misses closes the gap without enumerating every attached store.
+			if ownerStore != nil && liveOpenSessionAssignmentExists(ownerStore, assignee) {
+				continue
+			}
 		}
 
-		var ownerStore beads.Store
-		if storeAware {
-			if i >= len(assignedWorkStores) || assignedWorkStores[i] == nil {
+		if ownerStore == nil {
+			if storeAware {
 				log.Printf("releaseOrphanedPoolAssignments: missing owner store for assigned work %q at index %d", wb.ID, i)
-				continue
 			}
-			ownerStore = assignedWorkStores[i]
-		} else {
-			ownerStore = storeForPoolAssignment(cfg, store, rigStores, wb)
-			if ownerStore == nil {
-				continue
-			}
+			continue
 		}
 		if !liveWorkAssignmentStillReleasable(ownerStore, wb.ID, wb.Status, assignee) {
 			continue
@@ -221,13 +229,7 @@ func releaseOrphanedPoolAssignments(
 	return released
 }
 
-// beadStampedSessionOwner returns the EXACT owning session bead ID a claim
-// stamped on the work bead, or "" when the claim carries no such stamp.
-// hookClaimIdentityPatch writes gc.session_id on every session-run claim of a
-// non-control bead and rewrites it whenever it differs, so on a re-claim the key
-// names the new owner rather than the previous one. The camelCase variant is read
-// too because some bead writers stamp it instead (see
-// beadmeta.SessionIDCamelMetadataKey).
+// beadStampedSessionOwner returns the exact session bead ID stamped on a claim.
 func beadStampedSessionOwner(wb beads.Bead) string {
 	if id := strings.TrimSpace(wb.Metadata[beadmeta.SessionIDMetadataKey]); id != "" {
 		return id
@@ -235,38 +237,7 @@ func beadStampedSessionOwner(wb beads.Bead) string {
 	return strings.TrimSpace(wb.Metadata[beadmeta.SessionIDCamelMetadataKey])
 }
 
-// poolClaimExactOwnerIsGone reports whether wb's claim is orphaned according to
-// the EXACT owner it stamped, in which case the assignee-name liveness checks
-// must not be consulted at all.
-//
-// Those checks resolve liveness from the assignee STRING, which for pool work is
-// the namepool slot name (e.g. "Gas-City-SDK/gastown.nux"). Slot names are
-// RECYCLED across polecat incarnations: when incarnation A claims a bead and dies
-// and incarnation B takes the same slot name, openSessionOwnsWork matches B and
-// skips the release forever, so the bead sits in_progress with no worker while B
-// works something else entirely. gc.session_id names the actual claimer and
-// disagrees with the slot name in exactly that case — it is the discriminator the
-// name-based checks cannot see (gc-b237).
-//
-// Absence is deliberately expensive to prove, because a false positive here
-// releases a LIVE worker's claim and mints a duplicate on the same bead — the
-// failure this whole function exists to prevent, inverted:
-//
-//   - An unstamped claim has no exact owner to check, so it falls back to the
-//     name-based checks unchanged (pre-gc.session_id beads, control beads, and
-//     any claim made without GC_SESSION_ID).
-//   - An empty session snapshot is not evidence of death, only of a missing
-//     snapshot, so it never concludes "gone". The caller already refuses to run
-//     on a partial snapshot (releaseOrphanedPoolAssignmentsWhenSnapshotsComplete);
-//     this is the belt to that suspenders for direct callers.
-//   - A snapshot that merely MISSED the owner is confirmed against the store
-//     before overriding anything, mirroring how liveOpenSessionAssignmentExists
-//     backstops openSessionOwnsWork for the assignee.
-//
-// Only when the stamped owner is absent from both the snapshot and the store is
-// the claim treated as orphaned. The usual downstream gates still apply — the
-// release itself remains guarded by liveWorkAssignmentStillReleasable, the
-// detached probe, and the conditional-release write.
+// poolClaimExactOwnerIsGone avoids slot-name reuse masking a dead claim owner.
 func poolClaimExactOwnerIsGone(store beads.Store, wb beads.Bead, openSessionBeadIDs map[string]struct{}) bool {
 	owner := beadStampedSessionOwner(wb)
 	if owner == "" || len(openSessionBeadIDs) == 0 {
@@ -278,27 +249,11 @@ func poolClaimExactOwnerIsGone(store beads.Store, wb beads.Bead, openSessionBead
 	if liveSessionBeadExistsByIdentity(store, owner) {
 		return false
 	}
-	log.Printf("releaseOrphanedPoolAssignments: %s is orphaned: stamped owner %q is gone while assignee %q resolves to a different session (recycled namepool slot name)", wb.ID, owner, strings.TrimSpace(wb.Assignee))
+	log.Printf("releaseOrphanedPoolAssignments: %s is orphaned: stamped owner %q is gone while assignee %q resolves to a different session", wb.ID, owner, strings.TrimSpace(wb.Assignee))
 	return true
 }
 
-// clearStalePoolClaimOwner drops the dead owner's session back-reference after
-// an exact-owner release, so the release is idempotent rather than the seed of a
-// new loop.
-//
-// The stamp is only rewritten by a claim that runs with GC_SESSION_ID set. `gc
-// hook` blanks that variable outside a session-template context (cmd_hook.go),
-// so a claim from there would leave the dead owner's ID on the bead; the next
-// tick would read the same absent owner and release the fresh claim, over and
-// over. Clearing here returns the bead to the unstamped state, where liveness
-// falls back to the assignee-name checks — exactly the pre-gc.session_id
-// behavior — until a session-run claim stamps a real owner again.
-//
-// Best-effort by the same reasoning as clearReleasedPoolAssignmentMetadata: the
-// release already succeeded, and the keys are a dashboard back-reference
-// (#2843) that a dead owner cannot make true. They are overwritten on the next
-// stamping claim regardless. The bead is open and unassigned in the gap, which
-// no exact-owner check looks at.
+// clearStalePoolClaimOwner makes an exact-owner release idempotent.
 func clearStalePoolClaimOwner(store beads.Store, id string) {
 	if store == nil || strings.TrimSpace(id) == "" {
 		return
@@ -311,6 +266,18 @@ func clearStalePoolClaimOwner(store beads.Store, id string) {
 	}}); err != nil {
 		log.Printf("releaseOrphanedPoolAssignments: clearing stale session owner on %s: %v", id, err)
 	}
+}
+
+// assignedWorkOwnerStore resolves the store that owns the assigned work bead at
+// index i, or the routed fallback when the snapshot is not store-aware.
+func assignedWorkOwnerStore(cfg *config.City, cityStore beads.Store, rigStores map[string]beads.Store, assignedWorkStores []beads.Store, i int, wb beads.Bead) beads.Store {
+	if len(assignedWorkStores) > 0 {
+		if i >= len(assignedWorkStores) {
+			return nil
+		}
+		return assignedWorkStores[i]
+	}
+	return storeForPoolAssignment(cfg, cityStore, rigStores, wb)
 }
 
 func detachedProbeAllowsOrphanRelease(wb beads.Bead) (bool, bool) {
@@ -372,11 +339,13 @@ const unresolvedOpenSessionStoreRef = "\x00unresolved"
 // The \x00 prefix cannot collide with a real rig name.
 const crossStoreOpenSessionStoreRef = "\x00crossstore"
 
-func makeOpenSessionStoreRefIndex(cityPath string, cfg *config.City, openSessionInfos []session.Info, storeRefAware bool) map[string]map[string]struct{} {
+func makeOpenSessionStoreRefIndex(cityPath string, cfg *config.City, leading beads.Store, openSessionInfos []session.Info, storeRefAware bool) map[string]map[string]struct{} {
 	index := make(map[string]map[string]struct{}, len(openSessionInfos)*5)
 	if !storeRefAware {
 		return index
 	}
+	// A property of the CITY, so it is resolved once rather than per session.
+	claimRefs := assignedWorkClaimRefs(cityPath, cfg, leading)
 	for _, info := range openSessionInfos {
 		if info.Closed {
 			continue
@@ -385,9 +354,11 @@ func makeOpenSessionStoreRefIndex(cityPath string, cfg *config.City, openSession
 		// through Info for both the store-ref resolution and the assignee
 		// identities (WI-5 W4 — the boundary projection this loop used to carry
 		// moved to the snapshot's load edge).
-		storeRef := openSessionReachableStoreRefInfo(cityPath, cfg, info)
+		storeRefs := openSessionReachableStoreRefInfo(cityPath, cfg, claimRefs, info)
 		for _, id := range sessionBeadAssigneeIdentitiesInfo(info) {
-			addOpenSessionStoreRef(index, id, storeRef)
+			for _, storeRef := range storeRefs {
+				addOpenSessionStoreRef(index, id, storeRef)
+			}
 		}
 	}
 	return index
@@ -690,48 +661,57 @@ func liveSessionBeadExistsByIdentity(store beads.Store, assignee string) bool {
 	return false
 }
 
+// directSessionBeadIDCandidates returns the bead IDs a work-bead assignee could
+// name, so liveSessionBeadExistsByIdentity can resolve the owning session bead
+// with a direct Get instead of depending on the open-session snapshot or the
+// live gc:session label list.
+//
+// A pool assignee is PoolSessionName(template, beadID) —
+// "<sanitized-template-base>-<beadID>" — and bead IDs contain a "-" themselves
+// ("th-vb20q"), so the ID is not simply the final "-"-delimited segment.
+// Enumerating every suffix that begins just after a "-" covers both the modern
+// form and the legacy "-mc-" form without special-casing either.
+//
+// Extra candidates cannot produce a false "session is live" answer: the caller
+// still requires the resolved bead to be a non-closed session bead whose own
+// assignee identities contain this exact assignee.
 func directSessionBeadIDCandidates(assignee string) []string {
 	assignee = strings.TrimSpace(assignee)
 	if assignee == "" {
 		return nil
 	}
 	candidates := []string{assignee}
-	if idx := strings.LastIndex(assignee, "-mc-"); idx >= 0 {
-		candidates = append(candidates, assignee[idx+1:])
+	for i := 0; i < len(assignee); i++ {
+		if assignee[i] != '-' {
+			continue
+		}
+		// A qualified agent name encodes "/" as "--" (agent.SessionNameFor),
+		// so the byte after a "-" can be another "-". Such a suffix is never a
+		// bead ID, and stores that shell out would read it as a flag.
+		suffix := assignee[i+1:]
+		if suffix == "" || suffix[0] == '-' {
+			continue
+		}
+		candidates = append(candidates, suffix)
 	}
 	return candidates
 }
 
-// liveWorkAssignmentStillReleasable confirms the snapshot is not stale
-// before clearing assignee. The expectedStatus must match the snapshot
-// status the caller observed: if the bead has since transitioned (e.g. a
-// concurrent claim moved open→in_progress, or another release moved
-// in_progress→open) the snapshot's release decision is no longer safe.
-// Open status is required for the issue #2793 path — graph.v2 step
-// beads stuck on a dead session's long-form assignee are status=open,
-// not in_progress.
+// liveWorkAssignmentStillReleasable confirms the snapshot is not stale before
+// clearing assignee, collapsing a read failure to "not releasable" for callers
+// that have no error channel. Open status is required for the issue #2793 path —
+// graph.v2 step beads stuck on a dead session's long-form assignee are
+// status=open, not in_progress.
+//
+// The check itself lives in liveWorkAssignmentAssigneeMatches (work_assignment.go),
+// shared with the work-release and reassign paths.
 func liveWorkAssignmentStillReleasable(store beads.Store, id, expectedStatus, assignee string) bool {
-	id = strings.TrimSpace(id)
-	expectedStatus = strings.TrimSpace(expectedStatus)
-	if store == nil || id == "" || expectedStatus == "" {
-		return false
-	}
-	work, err := store.List(beads.ListQuery{
-		Status:   expectedStatus,
-		Live:     true,
-		TierMode: beads.TierBoth,
-	})
+	matches, err := liveWorkAssignmentAssigneeMatches(store, id, expectedStatus, assignee)
 	if err != nil {
 		log.Printf("releaseOrphanedPoolAssignments: live work validation failed for %q: %v", id, err)
 		return false
 	}
-	for _, wb := range work {
-		if wb.ID != id {
-			continue
-		}
-		return strings.TrimSpace(wb.Assignee) == strings.TrimSpace(assignee)
-	}
-	return false
+	return matches
 }
 
 func assigneePreservesNamedSessionRoute(cfg *config.City, cityPath, template, assignee, workStoreRef string, storeRefAware bool) bool {

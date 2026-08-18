@@ -128,8 +128,10 @@ func TestRoutingCLIReadCommandsRenderSelectionFacts(t *testing.T) {
 			return routingCLIResponse(t, http.StatusOK, routingdecision.LiveStatus{
 				Schema: 1, Status: "ready", Reason: "ready", AuthorityReady: true,
 				RetentionMonths: 6, TerminalStateBasis: "latest_transition_at",
-				Store: routingdecision.StoreStatus{SchemaVersion: 1, StoreRevision: 12,
-					StateCounts: []routingdecision.StateCount{{State: routingdecision.StateApproved, Count: 2}}},
+				Store: routingdecision.StoreStatus{
+					SchemaVersion: 1, StoreRevision: 12,
+					StateCounts: []routingdecision.StateCount{{State: routingdecision.StateApproved, Count: 2}},
+				},
 			}), nil
 		case "/v0/city/acme/routing/targets":
 			return routingCLIResponse(t, http.StatusOK, struct {

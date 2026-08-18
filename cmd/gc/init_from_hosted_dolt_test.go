@@ -71,11 +71,11 @@ func TestInitFromWithoutHostedPreservesTemplate(t *testing.T) {
 
 	src := gastownExamplePath(t)
 	cityPath := filepath.Join(t.TempDir(), "city")
-	t.Cleanup(func() {
-		if err := shutdownBeadsProvider(cityPath); err != nil {
-			t.Logf("shutdownBeadsProvider(%q): %v", cityPath, err)
-		}
-	})
+	// initDirIfReady (via finalizeInit) starts a managed dolt sql-server for the
+	// copied template's local beads backend. noStart skips supervisor handoff
+	// but leaves that server running — tear it down so the package leak guard
+	// does not fail the suite (gastownhall/gascity#5066).
+	cleanupManagedDoltTestCity(t, cityPath)
 
 	var stdout, stderr bytes.Buffer
 	// disabled hosted options => template preserved
