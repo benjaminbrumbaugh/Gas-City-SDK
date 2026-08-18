@@ -2637,7 +2637,7 @@ dir = "workdir"
 		t.Fatalf("cmdHook() = %d, want 0; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	wantBeads := filepath.Join(cityDir, ".beads")
+	wantBeads := filepath.Join(canonicalTestPath(cityDir), ".beads")
 	if !strings.Contains(out, "beads_dir="+wantBeads) {
 		t.Fatalf("stdout = %q, want BEADS_DIR=%s (city store), non-rig agent must not be pointed at <dir>/.beads", out, wantBeads)
 	}
