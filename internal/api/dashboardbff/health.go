@@ -401,7 +401,7 @@ func (p *Plane) probeGCVersion(ctx context.Context) localToolVersion {
 // and a bounded timeout. It returns stdout, the exit code, and a spawn/timeout
 // error (a non-zero exit is reported in code, not as an error).
 func (p *Plane) runProbe(ctx context.Context, cmd string, args ...string) (stdout string, code int, err error) {
-	res, err := p.exec.run(ctx, cmd, args, versionProbeTimeout, maxBytes)
+	res, err := p.exec.run(ctx, cmd, args, versionProbeTimeout)
 	if err != nil {
 		return "", -1, err
 	}

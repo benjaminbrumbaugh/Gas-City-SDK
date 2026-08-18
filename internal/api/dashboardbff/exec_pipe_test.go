@@ -13,7 +13,7 @@ func TestExecRunnerCancellationDoesNotWaitForInheritedOutputPipe(t *testing.T) {
 	done := make(chan struct{})
 	start := time.Now()
 	go func() {
-		_, _ = newExecRunner().run(ctx, "sh", []string{"-c", "sleep 30 & wait"}, time.Minute, maxBytes)
+		_, _ = newExecRunner().run(ctx, "sh", []string{"-c", "sleep 30 & wait"}, time.Minute)
 		close(done)
 	}()
 
