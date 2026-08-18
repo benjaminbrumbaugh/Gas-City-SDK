@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-gc-raw-json": true,
   "type": "array",
   "items": {
     "$ref": "../request/result.schema.json"

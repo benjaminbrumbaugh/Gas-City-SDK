@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-gc-raw-json": true,
   "type": "object",
   "required": ["available", "logical_role", "target", "adapter", "delivery", "interrupt_policy", "session_policy", "capabilities", "instruction"],
   "properties": {
