@@ -449,9 +449,7 @@ func TestFindCity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("findCity(%q) error: %v", dir, err)
 		}
-		if got != dir {
-			t.Errorf("findCity(%q) = %q, want %q", dir, got, dir)
-		}
+		assertSameTestPath(t, got, dir)
 	})
 
 	t.Run("found", func(t *testing.T) {
@@ -464,9 +462,7 @@ func TestFindCity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("findCity(%q) error: %v", dir, err)
 		}
-		if got != dir {
-			t.Errorf("findCity(%q) = %q, want %q", dir, got, dir)
-		}
+		assertSameTestPath(t, got, dir)
 	})
 
 	t.Run("nested", func(t *testing.T) {
@@ -483,9 +479,7 @@ func TestFindCity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("findCity(%q) error: %v", nested, err)
 		}
-		if got != dir {
-			t.Errorf("findCity(%q) = %q, want %q", nested, got, dir)
-		}
+		assertSameTestPath(t, got, dir)
 	})
 
 	t.Run("parent_canonical_outranks_child_legacy", func(t *testing.T) {
@@ -506,9 +500,7 @@ func TestFindCity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("findCity(%q) error: %v", nested, err)
 		}
-		if got != parent {
-			t.Errorf("findCity(%q) = %q, want %q", nested, got, parent)
-		}
+		assertSameTestPath(t, got, parent)
 	})
 
 	t.Run("not_found", func(t *testing.T) {
@@ -545,9 +537,7 @@ func TestFindCity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("findCity(%q) error: %v", dir, err)
 		}
-		if got != homeDir {
-			t.Errorf("findCity(%q) = %q, want %q", dir, got, homeDir)
-		}
+		assertSameTestPath(t, got, homeDir)
 	})
 
 	t.Run("not_found_ignores_supervisor_home_runtime_root", func(t *testing.T) {
@@ -593,9 +583,7 @@ func TestFindCity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("findCity(%q) error: %v", dir, err)
 		}
-		if got != cityDir {
-			t.Errorf("findCity(%q) = %q, want %q", dir, got, cityDir)
-		}
+		assertSameTestPath(t, got, cityDir)
 	})
 
 	t.Run("city_at_home_is_found", func(t *testing.T) {
@@ -616,9 +604,7 @@ func TestFindCity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("findCity(%q) error: %v", homeDir, err)
 		}
-		if got != homeDir {
-			t.Errorf("findCity(%q) = %q, want %q", homeDir, got, homeDir)
-		}
+		assertSameTestPath(t, got, homeDir)
 	})
 
 	t.Run("start_at_home_ceiling_does_not_search_above", func(t *testing.T) {
@@ -660,9 +646,7 @@ func TestFindCity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("findCity(%q) error: %v", ceiling, err)
 		}
-		if got != ceiling {
-			t.Errorf("findCity(%q) = %q, want %q", ceiling, got, ceiling)
-		}
+		assertSameTestPath(t, got, ceiling)
 	})
 
 	t.Run("start_at_explicit_ceiling_dir_does_not_search_above", func(t *testing.T) {
@@ -704,9 +688,7 @@ func TestFindCity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("findCity(%q) error: %v", dir, err)
 		}
-		if got != parent {
-			t.Errorf("findCity(%q) = %q, want %q", dir, got, parent)
-		}
+		assertSameTestPath(t, got, parent)
 	})
 
 	t.Run("does_not_search_above_explicit_ceiling_dir", func(t *testing.T) {
@@ -800,9 +782,7 @@ func TestResolveCityFlag(t *testing.T) {
 		// os.Getwd() resolves symlinks (e.g. /var → /private/var on macOS),
 		// so compare against the resolved path.
 		want, _ := filepath.EvalSymlinks(dir)
-		if got != want {
-			t.Errorf("resolveCity() = %q, want %q", got, want)
-		}
+		assertSameTestPath(t, got, want)
 	})
 
 	t.Run("gc_city_env_prefers_real_city_from_worktree", func(t *testing.T) {
@@ -882,9 +862,7 @@ func TestResolveCityFlag(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveCity() error: %v", err)
 		}
-		if got != cityDir {
-			t.Errorf("resolveCity() = %q, want %q", got, cityDir)
-		}
+		assertSameTestPath(t, got, cityDir)
 	})
 
 	t.Run("gc_city_path_env_fallback", func(t *testing.T) {
@@ -903,9 +881,7 @@ func TestResolveCityFlag(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveCity() error: %v", err)
 		}
-		if got != cityDir {
-			t.Errorf("resolveCity() = %q, want %q", got, cityDir)
-		}
+		assertSameTestPath(t, got, cityDir)
 	})
 
 	t.Run("gc_dir_env_fallback", func(t *testing.T) {
@@ -930,9 +906,7 @@ func TestResolveCityFlag(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveCity() error: %v", err)
 		}
-		if got != cityDir {
-			t.Errorf("resolveCity() = %q, want %q", got, cityDir)
-		}
+		assertSameTestPath(t, got, cityDir)
 	})
 }
 
@@ -7654,15 +7628,17 @@ func TestFindEnclosingRig(t *testing.T) {
 
 	// Exact match.
 	name, rp, found := findEnclosingRig("/projects/alpha", rigs)
-	if !found || name != "alpha" || rp != "/projects/alpha" {
+	if !found || name != "alpha" {
 		t.Errorf("exact match: name=%q path=%q found=%v", name, rp, found)
 	}
+	assertSameTestPath(t, rp, "/projects/alpha")
 
 	// Subdirectory match.
 	name, rp, found = findEnclosingRig("/projects/beta/src/main", rigs)
-	if !found || name != "beta" || rp != "/projects/beta" {
+	if !found || name != "beta" {
 		t.Errorf("subdir match: name=%q path=%q found=%v", name, rp, found)
 	}
+	assertSameTestPath(t, rp, "/projects/beta")
 
 	// No match.
 	_, _, found = findEnclosingRig("/other/project", rigs)
@@ -7703,9 +7679,10 @@ func TestFindEnclosingRigResolvesSymlinkAlias(t *testing.T) {
 	dirViaAlias := filepath.Join(aliasRigPath, "src")
 
 	name, rp, found := findEnclosingRig(dirViaAlias, rigs)
-	if !found || name != "my-project" || rp != rigPath {
+	if !found || name != "my-project" {
 		t.Fatalf("symlink alias match: name=%q path=%q found=%v, want name=%q path=%q found=true", name, rp, found, "my-project", rigPath)
 	}
+	assertSameTestPath(t, rp, rigPath)
 }
 
 func TestFindEnclosingRigPrefersDeepestNormalizedMatch(t *testing.T) {
@@ -7728,9 +7705,10 @@ func TestFindEnclosingRigPrefersDeepestNormalizedMatch(t *testing.T) {
 	dirViaAlias := filepath.Join(aliasRoot, "my-project", "nested", "src")
 
 	name, rp, found := findEnclosingRig(dirViaAlias, rigs)
-	if !found || name != "nested" || rp != nestedRigPath {
+	if !found || name != "nested" {
 		t.Fatalf("deepest normalized match: name=%q path=%q found=%v, want name=%q path=%q found=true", name, rp, found, "nested", nestedRigPath)
 	}
+	assertSameTestPath(t, rp, nestedRigPath)
 }
 
 func TestCurrentRigContextUsesGCDirThroughSymlinkAlias(t *testing.T) {
