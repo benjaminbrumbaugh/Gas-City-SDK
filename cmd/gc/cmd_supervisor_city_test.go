@@ -109,7 +109,7 @@ func TestRegisterCityWithSupervisorDoesNotMislabelLegacyController(t *testing.T)
 	if !strings.Contains(got, "gc stop ") {
 		t.Fatalf("stderr = %q, want an actionable 'gc stop' remedy", got)
 	}
-	if want := supervisorRetryCommand("gc start", cityPath); !strings.Contains(got, want) {
+	if want := supervisorRetryCommand("gc start", canonicalTestPath(cityPath)); !strings.Contains(got, want) {
 		t.Fatalf("stderr = %q, want retry command %q", got, want)
 	}
 }
@@ -808,7 +808,7 @@ func TestRegisterCityWithSupervisorRejectsStandaloneController(t *testing.T) {
 	if !strings.Contains(stderr.String(), "standalone controller already running") {
 		t.Fatalf("stderr = %q, want standalone-controller error", stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "for "+shellQuotePath(cityPath)) {
+	if !strings.Contains(stderr.String(), "for "+shellQuotePath(canonicalTestPath(cityPath))) {
 		t.Fatalf("stderr = %q, want shell-quoted city path", stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "PID 4242") {
@@ -817,7 +817,7 @@ func TestRegisterCityWithSupervisorRejectsStandaloneController(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Authority: standalone controller PID 4242") {
 		t.Fatalf("stderr = %q, want standalone-controller authority", stderr.String())
 	}
-	wantNext := "Next: gc stop " + shellQuotePath(cityPath) + " && gc start " + shellQuotePath(cityPath)
+	wantNext := "Next: gc stop " + shellQuotePath(canonicalTestPath(cityPath)) + " && gc start " + shellQuotePath(canonicalTestPath(cityPath))
 	if !strings.Contains(stderr.String(), wantNext) {
 		t.Fatalf("stderr = %q, want next command %q", stderr.String(), wantNext)
 	}

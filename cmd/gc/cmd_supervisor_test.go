@@ -1154,7 +1154,7 @@ func TestBuildSupervisorServiceDataOmitsXDGRuntimeDirForIsolatedGCHome(t *testin
 	if err != nil {
 		t.Fatalf("buildSupervisorServiceData: %v", err)
 	}
-	if data.GCHome != gcHome {
+	if canonicalTestPath(data.GCHome) != canonicalTestPath(gcHome) {
 		t.Fatalf("buildSupervisorServiceData GCHome = %q, want %q", data.GCHome, gcHome)
 	}
 	if data.XDGRuntimeDir != "" {
@@ -1214,7 +1214,7 @@ func TestRenderSupervisorTemplateUsesCanonicalRelativeGCHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(systemdContent, `Environment=GC_HOME="`+canonicalHome+`"`) {
+	if !strings.Contains(systemdContent, `Environment=GC_HOME="`+canonicalTestPath(canonicalHome)+`"`) {
 		t.Fatalf("systemd template missing canonical GC_HOME %q:\n%s", canonicalHome, systemdContent)
 	}
 
@@ -1222,7 +1222,7 @@ func TestRenderSupervisorTemplateUsesCanonicalRelativeGCHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(launchdContent, "<key>GC_HOME</key>") || !strings.Contains(launchdContent, "<string>"+xmlEscape(canonicalHome)+"</string>") {
+	if !strings.Contains(launchdContent, "<key>GC_HOME</key>") || !strings.Contains(launchdContent, "<string>"+xmlEscape(canonicalTestPath(canonicalHome))+"</string>") {
 		t.Fatalf("launchd template missing canonical GC_HOME %q:\n%s", canonicalHome, launchdContent)
 	}
 }
@@ -4225,9 +4225,9 @@ func TestRunSupervisorSIGTERMPreservesSessionsEndToEnd(t *testing.T) {
 	}
 	got := stdout.String()
 	for _, want := range []string{
-		"Preserving city '" + cityPath + "' sessions for re-adoption...",
+		"Preserving city '" + canonicalTestPath(cityPath) + "' sessions for re-adoption...",
 		"Preserving agent sessions for supervisor re-adoption.",
-		"City '" + cityPath + "' preserved.",
+		"City '" + canonicalTestPath(cityPath) + "' preserved.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("stdout = %q, want %q; stderr=%q", got, want, stderr.String())
