@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -19,6 +20,10 @@ const (
 	gitLogTimeout   = 10 * time.Second
 	bdDoctorTimeout = 15 * time.Second
 	gitLogRecentN   = "200"
+
+	// execWaitDelay bounds os/exec's pipe-draining wait when a descendant
+	// escapes the process group while retaining inherited stdout/stderr.
+	execWaitDelay = 2 * time.Second
 )
 
 // execErrKind classifies why a sandboxed subprocess failed.
@@ -80,6 +85,21 @@ func (r *execRunner) run(ctx context.Context, cmd string, args []string, timeout
 	start := time.Now()
 	c := exec.CommandContext(cctx, cmd, args...)
 	c.Env = cleanEnv()
+	// Keep descendants in a dedicated group so cancellation and output
+	// overflow terminate the whole command tree, not just its leader.
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error {
+		if c.Process == nil {
+			return nil
+		}
+		if err := syscall.Kill(-c.Process.Pid, syscall.SIGKILL); err == nil {
+			return nil
+		}
+		return c.Process.Kill()
+	}
+	// A descendant can still retain a pipe after escaping the group. WaitDelay
+	// makes os/exec close those pipes rather than waiting indefinitely.
+	c.WaitDelay = execWaitDelay
 	stdout := &cappedBuffer{limit: capBytes, onOverflow: cancel}
 	stderr := &cappedBuffer{limit: maxBytes}
 	c.Stdout = stdout
