@@ -93,6 +93,34 @@ func TestCityStatusJSONUsesEmptyCollectionsWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestCityStatusJSONMarksRuntimeProbePartialAsDegraded(t *testing.T) {
+	status := cityStatusJSONFromSnapshot(cityStatusSnapshot{
+		CityName:   "city",
+		Controller: ControllerJSON{Running: true},
+		Partial:    true,
+		PartialErrors: []string{
+			"runtime status probe incomplete; non-running agent rows are unknown",
+		},
+	}, StatusSummaryJSON{TotalAgents: 1, RunningAgents: 0})
+
+	if !status.OK {
+		t.Fatal("OK = false, want command success envelope to remain true")
+	}
+	if !status.Health.Degraded {
+		t.Fatal("Health.Degraded = false, want true for a partial runtime observation")
+	}
+	foundSignal := false
+	for _, signal := range status.Health.Signals {
+		if signal == "runtime_status_partial" {
+			foundSignal = true
+			break
+		}
+	}
+	if !foundSignal {
+		t.Fatalf("Health.Signals = %v, want runtime_status_partial", status.Health.Signals)
+	}
+}
+
 func TestCityStatusObservationTargetUsesConfiguredNamedIdentity(t *testing.T) {
 	snapshot := newSessionBeadSnapshot([]beads.Bead{{
 		ID:     "gc-named",

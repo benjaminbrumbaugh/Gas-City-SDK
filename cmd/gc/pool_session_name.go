@@ -139,9 +139,13 @@ func releaseOrphanedPoolAssignments(
 
 	openIdentifiers := makeOpenSessionStoreRefIndex(cityPath, cfg, openSessionInfos, storeRefAware)
 	legacyOpenIdentifiers := make(map[string]struct{}, len(openSessionInfos)*5)
+	openSessionBeadIDs := make(map[string]struct{}, len(openSessionInfos))
 	for _, info := range openSessionInfos {
 		if info.Closed {
 			continue
+		}
+		if id := strings.TrimSpace(info.ID); id != "" {
+			openSessionBeadIDs[id] = struct{}{}
 		}
 		for _, id := range sessionBeadAssigneeIdentitiesInfo(info) {
 			legacyOpenIdentifiers[id] = struct{}{}
@@ -165,11 +169,12 @@ func releaseOrphanedPoolAssignments(
 		if agentCfg == nil || !agentCfg.SupportsGenericEphemeralSessions() {
 			continue
 		}
+		exactOwnerGone := false
 		if assignee == "" {
 			if wb.Status != "in_progress" {
 				continue
 			}
-		} else {
+		} else if exactOwnerGone = poolClaimExactOwnerIsGone(store, wb, openSessionBeadIDs); !exactOwnerGone {
 			workStoreRef := ""
 			if storeRefAware {
 				workStoreRef = assignedWorkStoreRefs[i]
@@ -208,9 +213,104 @@ func releaseOrphanedPoolAssignments(
 		if !releaseOrphanedPoolAssignment(ownerStore, wb, clearDetached) {
 			continue
 		}
+		if exactOwnerGone {
+			clearStalePoolClaimOwner(ownerStore, wb.ID)
+		}
 		released = append(released, releasedPoolAssignment{ID: wb.ID, Index: i})
 	}
 	return released
+}
+
+// beadStampedSessionOwner returns the EXACT owning session bead ID a claim
+// stamped on the work bead, or "" when the claim carries no such stamp.
+// hookClaimIdentityPatch writes gc.session_id on every session-run claim of a
+// non-control bead and rewrites it whenever it differs, so on a re-claim the key
+// names the new owner rather than the previous one. The camelCase variant is read
+// too because some bead writers stamp it instead (see
+// beadmeta.SessionIDCamelMetadataKey).
+func beadStampedSessionOwner(wb beads.Bead) string {
+	if id := strings.TrimSpace(wb.Metadata[beadmeta.SessionIDMetadataKey]); id != "" {
+		return id
+	}
+	return strings.TrimSpace(wb.Metadata[beadmeta.SessionIDCamelMetadataKey])
+}
+
+// poolClaimExactOwnerIsGone reports whether wb's claim is orphaned according to
+// the EXACT owner it stamped, in which case the assignee-name liveness checks
+// must not be consulted at all.
+//
+// Those checks resolve liveness from the assignee STRING, which for pool work is
+// the namepool slot name (e.g. "Gas-City-SDK/gastown.nux"). Slot names are
+// RECYCLED across polecat incarnations: when incarnation A claims a bead and dies
+// and incarnation B takes the same slot name, openSessionOwnsWork matches B and
+// skips the release forever, so the bead sits in_progress with no worker while B
+// works something else entirely. gc.session_id names the actual claimer and
+// disagrees with the slot name in exactly that case — it is the discriminator the
+// name-based checks cannot see (gc-b237).
+//
+// Absence is deliberately expensive to prove, because a false positive here
+// releases a LIVE worker's claim and mints a duplicate on the same bead — the
+// failure this whole function exists to prevent, inverted:
+//
+//   - An unstamped claim has no exact owner to check, so it falls back to the
+//     name-based checks unchanged (pre-gc.session_id beads, control beads, and
+//     any claim made without GC_SESSION_ID).
+//   - An empty session snapshot is not evidence of death, only of a missing
+//     snapshot, so it never concludes "gone". The caller already refuses to run
+//     on a partial snapshot (releaseOrphanedPoolAssignmentsWhenSnapshotsComplete);
+//     this is the belt to that suspenders for direct callers.
+//   - A snapshot that merely MISSED the owner is confirmed against the store
+//     before overriding anything, mirroring how liveOpenSessionAssignmentExists
+//     backstops openSessionOwnsWork for the assignee.
+//
+// Only when the stamped owner is absent from both the snapshot and the store is
+// the claim treated as orphaned. The usual downstream gates still apply — the
+// release itself remains guarded by liveWorkAssignmentStillReleasable, the
+// detached probe, and the conditional-release write.
+func poolClaimExactOwnerIsGone(store beads.Store, wb beads.Bead, openSessionBeadIDs map[string]struct{}) bool {
+	owner := beadStampedSessionOwner(wb)
+	if owner == "" || len(openSessionBeadIDs) == 0 {
+		return false
+	}
+	if _, live := openSessionBeadIDs[owner]; live {
+		return false
+	}
+	if liveSessionBeadExistsByIdentity(store, owner) {
+		return false
+	}
+	log.Printf("releaseOrphanedPoolAssignments: %s is orphaned: stamped owner %q is gone while assignee %q resolves to a different session (recycled namepool slot name)", wb.ID, owner, strings.TrimSpace(wb.Assignee))
+	return true
+}
+
+// clearStalePoolClaimOwner drops the dead owner's session back-reference after
+// an exact-owner release, so the release is idempotent rather than the seed of a
+// new loop.
+//
+// The stamp is only rewritten by a claim that runs with GC_SESSION_ID set. `gc
+// hook` blanks that variable outside a session-template context (cmd_hook.go),
+// so a claim from there would leave the dead owner's ID on the bead; the next
+// tick would read the same absent owner and release the fresh claim, over and
+// over. Clearing here returns the bead to the unstamped state, where liveness
+// falls back to the assignee-name checks — exactly the pre-gc.session_id
+// behavior — until a session-run claim stamps a real owner again.
+//
+// Best-effort by the same reasoning as clearReleasedPoolAssignmentMetadata: the
+// release already succeeded, and the keys are a dashboard back-reference
+// (#2843) that a dead owner cannot make true. They are overwritten on the next
+// stamping claim regardless. The bead is open and unassigned in the gap, which
+// no exact-owner check looks at.
+func clearStalePoolClaimOwner(store beads.Store, id string) {
+	if store == nil || strings.TrimSpace(id) == "" {
+		return
+	}
+	if err := store.Update(id, beads.UpdateOpts{Metadata: map[string]string{
+		beadmeta.SessionIDMetadataKey:        "",
+		beadmeta.SessionIDCamelMetadataKey:   "",
+		beadmeta.SessionNameMetadataKey:      "",
+		beadmeta.SessionNameCamelMetadataKey: "",
+	}}); err != nil {
+		log.Printf("releaseOrphanedPoolAssignments: clearing stale session owner on %s: %v", id, err)
+	}
 }
 
 func detachedProbeAllowsOrphanRelease(wb beads.Bead) (bool, bool) {
