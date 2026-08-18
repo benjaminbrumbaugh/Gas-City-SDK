@@ -127,11 +127,11 @@ func TestResolveTemplateUsesTrustedRuntimeRootForControlTraceDefault(t *testing.
 		t.Fatalf("resolveTemplate: %v", err)
 	}
 
-	if got := tp.Env["GC_CITY_RUNTIME_DIR"]; got != customRuntimeDir {
+	if got := tp.Env["GC_CITY_RUNTIME_DIR"]; canonicalTestPath(got) != canonicalTestPath(customRuntimeDir) {
 		t.Fatalf("GC_CITY_RUNTIME_DIR = %q, want %q", got, customRuntimeDir)
 	}
 	wantTraceDefault := filepath.Join(customRuntimeDir, "control-dispatcher-trace.log")
-	if got := tp.Env["GC_CONTROL_DISPATCHER_TRACE_DEFAULT"]; got != wantTraceDefault {
+	if got := tp.Env["GC_CONTROL_DISPATCHER_TRACE_DEFAULT"]; canonicalTestPath(got) != canonicalTestPath(wantTraceDefault) {
 		t.Fatalf("GC_CONTROL_DISPATCHER_TRACE_DEFAULT = %q, want %q", got, wantTraceDefault)
 	}
 }
@@ -162,11 +162,11 @@ func TestResolveTemplateUsesTrustedRuntimeRootForControlDispatcherTraceDefault(t
 		t.Fatalf("resolveTemplate: %v", err)
 	}
 
-	if got := tp.Env["GC_CITY_RUNTIME_DIR"]; got != customRuntimeDir {
+	if got := tp.Env["GC_CITY_RUNTIME_DIR"]; canonicalTestPath(got) != canonicalTestPath(customRuntimeDir) {
 		t.Fatalf("GC_CITY_RUNTIME_DIR = %q, want %q", got, customRuntimeDir)
 	}
 	wantTraceDefault := filepath.Join(customRuntimeDir, "app--control-dispatcher-trace.log")
-	if got := tp.Env["GC_CONTROL_DISPATCHER_TRACE_DEFAULT"]; got != wantTraceDefault {
+	if got := tp.Env["GC_CONTROL_DISPATCHER_TRACE_DEFAULT"]; canonicalTestPath(got) != canonicalTestPath(wantTraceDefault) {
 		t.Fatalf("GC_CONTROL_DISPATCHER_TRACE_DEFAULT = %q, want %q", got, wantTraceDefault)
 	}
 }
@@ -233,7 +233,7 @@ func TestResolveTemplateInjectsPerDispatcherTraceDefault(t *testing.T) {
 			}
 
 			wantPath := filepath.Join(cityPath, ".gc", "runtime", tc.wantFilename)
-			if got := tp.Env["GC_CONTROL_DISPATCHER_TRACE_DEFAULT"]; got != wantPath {
+			if got := tp.Env["GC_CONTROL_DISPATCHER_TRACE_DEFAULT"]; canonicalTestPath(got) != canonicalTestPath(wantPath) {
 				t.Fatalf("GC_CONTROL_DISPATCHER_TRACE_DEFAULT = %q, want %q", got, wantPath)
 			}
 		})

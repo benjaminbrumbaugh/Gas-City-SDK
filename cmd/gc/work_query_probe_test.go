@@ -66,7 +66,7 @@ func TestControllerQueryRuntimeEnvInheritedRigUsesCityStorePassword(t *testing.T
 	if got := env["BEADS_DOLT_PASSWORD"]; got != "city-secret" {
 		t.Fatalf("BEADS_DOLT_PASSWORD = %q, want %q", got, "city-secret")
 	}
-	if got := env["BEADS_DIR"]; got != filepath.Join(rigDir, ".beads") {
+	if got := env["BEADS_DIR"]; canonicalTestPath(got) != canonicalTestPath(filepath.Join(rigDir, ".beads")) {
 		t.Fatalf("BEADS_DIR = %q, want rig beads dir", got)
 	}
 }
@@ -156,7 +156,7 @@ func TestControllerQueryRuntimeEnvSupportsExecGcBeadsBd(t *testing.T) {
 	if got := env["GC_DOLT_PASSWORD"]; got != "rig-secret" {
 		t.Fatalf("GC_DOLT_PASSWORD = %q, want %q", got, "rig-secret")
 	}
-	if got := env["BEADS_DIR"]; got != filepath.Join(rigDir, ".beads") {
+	if got := env["BEADS_DIR"]; canonicalTestPath(got) != canonicalTestPath(filepath.Join(rigDir, ".beads")) {
 		t.Fatalf("BEADS_DIR = %q, want rig beads dir", got)
 	}
 }
