@@ -475,7 +475,7 @@ func TestRegisterCityWithSupervisorWaitsForConfiguredStartupTimeout(t *testing.T
 	// Registry.Register stores the same canonical comparison form used by
 	// runtime path comparisons.
 	resolvedCityPath := canonicalTestPath(cityPath)
-	if len(entries) != 1 || entries[0].Path != resolvedCityPath {
+	if len(entries) != 1 || canonicalTestPath(entries[0].Path) != canonicalTestPath(resolvedCityPath) {
 		t.Fatalf("expected retained registry entry for %s, got %v", resolvedCityPath, entries)
 	}
 }
@@ -1114,7 +1114,7 @@ func TestUnregisterCityFromSupervisorRestoresRegistrationOnReloadFailure(t *test
 	// Registry.Register stores the same canonical comparison form used by
 	// runtime path comparisons.
 	resolvedCityPath := canonicalTestPath(cityPath)
-	if len(entries) != 1 || entries[0].Path != resolvedCityPath {
+	if len(entries) != 1 || canonicalTestPath(entries[0].Path) != canonicalTestPath(resolvedCityPath) {
 		t.Fatalf("expected restored registry entry for %s, got %v", resolvedCityPath, entries)
 	}
 }
@@ -1710,7 +1710,7 @@ func TestUnregisterCityFromSupervisorRestoresRegistrationWhenControllerStopWaitF
 		t.Fatal(err)
 	}
 	resolvedCityPath := canonicalTestPath(cityPath)
-	if len(entries) != 1 || entries[0].Path != resolvedCityPath {
+	if len(entries) != 1 || canonicalTestPath(entries[0].Path) != canonicalTestPath(resolvedCityPath) {
 		t.Fatalf("expected restored registry entry for %s, got %v", resolvedCityPath, entries)
 	}
 }

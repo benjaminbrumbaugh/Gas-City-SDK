@@ -193,7 +193,7 @@ func TestWaitListJSON(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
 	}
-	if payload.SchemaVersion != "1" || payload.CityPath != cityDir || len(payload.Waits) != 1 {
+	if payload.SchemaVersion != "1" || canonicalTestPath(payload.CityPath) != canonicalTestPath(cityDir) || len(payload.Waits) != 1 {
 		t.Fatalf("payload = %+v", payload)
 	}
 	if got := payload.Waits[0]; got.ID != wait.ID || got.SessionID != "session-1" || got.State != waitStatePending || len(got.DepIDs) != 2 {
@@ -2050,7 +2050,7 @@ func TestDispatchReadyWaitNudges_StartsCodexPoller(t *testing.T) {
 	prev := startNudgePoller
 	startNudgePoller = func(cityPath, agentName, sessionName string) error {
 		called = true
-		if cityPath != dir || agentName != sessionBead.ID || sessionName != "worker" {
+		if canonicalTestPath(cityPath) != canonicalTestPath(dir) || agentName != sessionBead.ID || sessionName != "worker" {
 			t.Fatalf("unexpected poller args city=%q agent=%q session=%q", cityPath, agentName, sessionName)
 		}
 		return nil
@@ -2106,7 +2106,7 @@ func TestDispatchReadyWaitNudges_StartsPiPoller(t *testing.T) {
 	prev := startNudgePoller
 	startNudgePoller = func(cityPath, agentName, sessionName string) error {
 		called = true
-		if cityPath != dir || agentName != sessionBead.ID || sessionName != "worker" {
+		if canonicalTestPath(cityPath) != canonicalTestPath(dir) || agentName != sessionBead.ID || sessionName != "worker" {
 			t.Fatalf("unexpected poller args city=%q agent=%q session=%q", cityPath, agentName, sessionName)
 		}
 		return nil

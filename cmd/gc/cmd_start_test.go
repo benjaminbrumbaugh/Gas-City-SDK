@@ -2131,7 +2131,7 @@ func TestStartStandaloneBuildsSessionProviderFromResolvedCityConfig(t *testing.T
 	if gotCityName != cityName {
 		t.Errorf("city name = %q, want %q", gotCityName, cityName)
 	}
-	if gotCityPath != cityPath {
+	if canonicalTestPath(gotCityPath) != canonicalTestPath(cityPath) {
 		t.Errorf("city path = %q, want %q", gotCityPath, cityPath)
 	}
 }

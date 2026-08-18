@@ -1240,7 +1240,7 @@ func TestSupervisorLaunchdPlistPathUsesIsolatedLabelForIsolatedGCHome(t *testing
 		t.Fatalf("supervisorLaunchdLabel() = %q, want isolated-home-prefixed label", label)
 	}
 	wantPath := filepath.Join(homeDir, "Library", "LaunchAgents", label+".plist")
-	if got := supervisorLaunchdPlistPath(); got != wantPath {
+	if got := supervisorLaunchdPlistPath(); canonicalTestPath(got) != canonicalTestPath(wantPath) {
 		t.Fatalf("supervisorLaunchdPlistPath() = %q, want %q", got, wantPath)
 	}
 }
@@ -3717,7 +3717,7 @@ func TestUninstallSupervisorLaunchdRemovesMatchingLegacyDefaultPlistForIsolatedG
 			t.Fatal(err)
 		}
 		label := supervisorLaunchdLabel()
-		if path == legacyPath {
+		if canonicalTestPath(path) == canonicalTestPath(legacyPath) {
 			label = defaultSupervisorLaunchdLabel
 		}
 		content, err := renderSupervisorTemplate(supervisorLaunchdTemplate, &supervisorServiceData{
@@ -3913,7 +3913,7 @@ func TestUninstallSupervisorLaunchdIgnoresLegacyUnloadFailures(t *testing.T) {
 			t.Fatal(err)
 		}
 		label := supervisorLaunchdLabel()
-		if path == legacyPath {
+		if canonicalTestPath(path) == canonicalTestPath(legacyPath) {
 			label = defaultSupervisorLaunchdLabel
 		}
 		content, err := renderSupervisorTemplate(supervisorLaunchdTemplate, &supervisorServiceData{
