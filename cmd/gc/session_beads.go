@@ -1503,7 +1503,34 @@ func cancelStateAssignedToRetiredSessionBead(store beads.Store, sessionID string
 // Returns a map of session_name → bead_id for all open session beads after
 // sync. Callers that don't need the index can ignore the return value.
 //
+// aliasUnavailableMustBlock reports whether an unavailable managed alias must
+// ABORT session creation rather than fall through and create the bead without
+// its alias.
+//
+// Falling through produces a "substitute target": a session named s-<beadID>
+// that can never hold the alias it was spawned to satisfy. For a pool member
+// that is fine — pool members are addressed by pool, not by name — but for a
+// named session it turns a stuck demand signal into an unbounded session leak.
+// Named demand is keyed on the alias, so no substitute can ever retire it: the
+// reconciler re-derives the same demand every ~60s window and spawns another
+// full provider session, without bound. Eight live s-gc-wisp-* mayor sessions
+// accumulated over ~3h that way, each running a fresh investigation before
+// going idle, while the only signal was alias-conflict lines that read as
+// ordinary contention noise (gc-mtb).
+//
+// isConfiguredNamed alone is not enough. It is derived from
+// tp.ConfiguredNamedIdentity, which the named-session path stamps; when the
+// same identity is materialized from POOL demand that field is empty, the guard
+// misses, and a substitute is created for what is really a named session. So
+// the alias itself is also checked against the configured named sessions —
+// being a named identity is a property of the alias, not of the route that
+// happened to ask for it.
+//
 //nolint:unparam // cityPath and skipClose are passed through to syncSessionBeadsWithSnapshot
+func aliasUnavailableMustBlock(cfg *config.City, isConfiguredNamed bool, managedAlias string) bool {
+	return isConfiguredNamed || isConfiguredNamedSessionIdentity(cfg, managedAlias)
+}
+
 func syncSessionBeads(
 	cityPath string,
 	store beads.Store,
@@ -1924,7 +1951,7 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 				lockFn := func() error {
 					if err := session.EnsureAliasAvailableWithConfigForOwner(store, cfg, managedAlias, "", managedAlias); err != nil {
 						fmt.Fprintf(stderr, "session beads: alias %q for %s unavailable: %v\n", managedAlias, agentName, err) //nolint:errcheck
-						if isConfiguredNamed {
+						if aliasUnavailableMustBlock(cfg, isConfiguredNamed, managedAlias) {
 							createErr = err
 							blocked = true
 							return nil
