@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2879,8 +2880,12 @@ func TestTryDeliverQueuedNudgesByPollerDeliversDespiteStaleFenceBeadMarkFailure(
 	idleSince := time.Now().Add(-10 * time.Second)
 	fake.Activity = map[string]time.Time{info.SessionName: idleSince}
 
+	// Fenced by continuation epoch alone, with no session ID: the epoch names no
+	// session, so the skew cannot be read as a generation rotation of this
+	// target and the item stays fence-rejected. (A same-session epoch skew is
+	// delivered instead — see the gc-4el tests around
+	// queuedNudgeMatchesTargetFence.)
 	stale := newQueuedNudgeWithOptions("worker", "stale fenced reminder", "session", now, queuedNudgeOptions{
-		SessionID:         info.ID,
 		ContinuationEpoch: "1",
 	})
 	if err := enqueueQueuedNudgeWithStore(dir, beads.NudgesStore{Store: store}, stale); err != nil {
@@ -2953,6 +2958,79 @@ func TestTryDeliverQueuedNudgesByPollerDeliversDespiteStaleFenceBeadMarkFailure(
 	}
 	if !strings.Contains(warnings.String(), stale.ID) {
 		t.Fatalf("warnings = %q, want bead-mark failure surfaced for %s", warnings.String(), stale.ID)
+	}
+}
+
+// TestTryDeliverQueuedNudgesByPollerDeliversAcrossGenerationRotation walks the
+// gc-4el incident end to end through the delivery path: a source=mail nudge was
+// enqueued against gastown.mayor while it sat at continuation epoch 15, the wake
+// it triggered rotated the session to epoch 18, and the fence then dead-lettered
+// the nudge on attempt 1 — leaving the session running, holding unread mail, and
+// never told why. The rotated nudge must be delivered and nothing dead-lettered.
+func TestTryDeliverQueuedNudgesByPollerDeliversAcrossGenerationRotation(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	now := time.Now().Add(-1 * time.Minute)
+
+	store := beads.NewMemStore()
+	fake := runtime.NewFake()
+	mgr := newSessionManagerWithConfig(dir, store, fake, nil)
+	info, err := mgr.CreateSession(context.Background(), session.CreateOptions{Template: "worker", Title: "Worker", Command: "codex", WorkDir: dir, Provider: "codex", Env: nil, Resume: session.ProviderResume{}, Hints: runtime.Config{WorkDir: dir}, ExtraMeta: map[string]string{"session_origin": "manual"}})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := mgr.Start(context.Background(), info.ID, "", runtime.Config{WorkDir: dir}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	idleSince := time.Now().Add(-10 * time.Second)
+	fake.Activity = map[string]time.Time{info.SessionName: idleSince}
+
+	queued := newQueuedNudgeWithOptions("worker", "You have mail from factory-monitor", "mail", now, queuedNudgeOptions{
+		SessionID:         info.ID,
+		ContinuationEpoch: "15",
+	})
+	if err := enqueueQueuedNudgeWithStore(dir, beads.NudgesStore{Store: store}, queued); err != nil {
+		t.Fatalf("enqueueQueuedNudgeWithStore: %v", err)
+	}
+
+	// The wake rotated the session's generation between enqueue and delivery.
+	target := nudgeTarget{
+		cityPath:          dir,
+		agent:             config.Agent{Name: "worker"},
+		sessionID:         info.ID,
+		continuationEpoch: "18",
+		resolved:          &config.ResolvedProvider{Name: "codex"},
+		sessionName:       info.SessionName,
+	}
+	obs := worker.LiveObservation{Running: true, LastActivity: &idleSince}
+
+	delivered, err := tryDeliverQueuedNudgesByPoller(target, store, store, fake, 3*time.Second, obs)
+	if err != nil {
+		t.Fatalf("tryDeliverQueuedNudgesByPoller: %v", err)
+	}
+	if !delivered {
+		t.Fatal("delivered = false, want the rotated-generation nudge delivered")
+	}
+
+	var nudgeCalls []runtime.Call
+	for _, call := range fake.Calls {
+		if call.Method == "Nudge" {
+			nudgeCalls = append(nudgeCalls, call)
+		}
+	}
+	if len(nudgeCalls) != 1 {
+		t.Fatalf("nudge calls = %d, want 1", len(nudgeCalls))
+	}
+	if !strings.Contains(nudgeCalls[0].Message, "You have mail from factory-monitor") {
+		t.Fatalf("nudge message = %q, want the rotated-generation reminder", nudgeCalls[0].Message)
+	}
+
+	pending, inFlight, dead, err := listQueuedNudges(dir, "worker", time.Now())
+	if err != nil {
+		t.Fatalf("listQueuedNudges: %v", err)
+	}
+	if len(pending) != 0 || len(inFlight) != 0 || len(dead) != 0 {
+		t.Fatalf("pending/inFlight/dead = %d/%d/%d, want 0/0/0", len(pending), len(inFlight), len(dead))
 	}
 }
 
@@ -3418,12 +3496,16 @@ func TestClaimDueQueuedNudgesForTargetClaimsSameSessionStaleEpoch(t *testing.T) 
 		t.Fatalf("claimed = %#v, want stale same-session nudge", claimed)
 	}
 
+	// The claim and the fence must agree: an epoch skew within one session is a
+	// generation rotation, so the claimed item goes on to be delivered rather
+	// than dead-lettered (gc-4el). Claiming an item only to kill it on the first
+	// delivery attempt is what consumed the wake trigger.
 	deliverable, rejected := splitQueuedNudgesForTarget(target, claimed)
-	if len(deliverable) != 0 {
-		t.Fatalf("deliverable = %#v, want none", deliverable)
+	if len(deliverable) != 1 || deliverable[0].ID != item.ID {
+		t.Fatalf("deliverable = %#v, want the stale same-session nudge", deliverable)
 	}
-	if len(rejected) != 1 || rejected[0].ID != item.ID {
-		t.Fatalf("rejected = %#v, want stale same-session nudge rejected", rejected)
+	if len(rejected) != 0 {
+		t.Fatalf("rejected = %#v, want none", rejected)
 	}
 }
 
@@ -3858,6 +3940,68 @@ func TestSplitQueuedNudgesForTarget_RejectsFencedNudgesWithoutResolvedSession(t 
 	}
 	if len(rejected) != 1 || rejected[0].ID != "n1" {
 		t.Fatalf("rejected = %#v, want fenced n1 rejected", rejected)
+	}
+}
+
+// TestSplitQueuedNudgesForTarget_DeliversAcrossSameSessionGenerationRotation is
+// the gc-4el regression: a queued nudge records the target's continuation epoch
+// at ENQUEUE time, but waking a wake_mode=fresh named session rotates that epoch
+// before the nudge is delivered. The fence must guard against delivering to a
+// DIFFERENT session, not to a NEW GENERATION of the same one — otherwise the
+// wake path eats its own trigger and the session comes up never told why.
+//
+// Field values mirror the live incident: three source=mail nudges bound to
+// session gc-wisp-5i07y at continuation_epoch 15 dead-lettered on attempt 1
+// against the same session sitting at continuation_epoch 18.
+func TestSplitQueuedNudgesForTarget_DeliversAcrossSameSessionGenerationRotation(t *testing.T) {
+	items := []queuedNudge{
+		{ID: "n-rotated", SessionID: "gc-wisp-5i07y", ContinuationEpoch: "15"},
+		{ID: "n-current", SessionID: "gc-wisp-5i07y", ContinuationEpoch: "18"},
+		{ID: "n-sibling", SessionID: "gc-other", ContinuationEpoch: "18"},
+		{ID: "n-unfenced"},
+	}
+	target := nudgeTarget{
+		alias:             "gastown.mayor",
+		sessionID:         "gc-wisp-5i07y",
+		sessionName:       "gastown__mayor",
+		continuationEpoch: "18",
+	}
+
+	deliverable, rejected := splitQueuedNudgesForTarget(target, items)
+
+	wantDeliverable := []string{"n-rotated", "n-current", "n-unfenced"}
+	if got := queuedNudgeIDs(deliverable); !slices.Equal(got, wantDeliverable) {
+		t.Fatalf("deliverable = %#v, want %#v", got, wantDeliverable)
+	}
+	if got := queuedNudgeIDs(rejected); !slices.Equal(got, []string{"n-sibling"}) {
+		t.Fatalf("rejected = %#v, want only the different-session n-sibling", got)
+	}
+}
+
+func TestQueuedNudgeMatchesTargetFence(t *testing.T) {
+	target := nudgeTarget{sessionID: "gc-1", sessionName: "sess-worker", continuationEpoch: "3"}
+	tests := []struct {
+		name string
+		item queuedNudge
+		want bool
+	}{
+		{name: "unfenced", item: queuedNudge{}, want: true},
+		{name: "same session same epoch", item: queuedNudge{SessionID: "gc-1", ContinuationEpoch: "3"}, want: true},
+		{name: "same session rotated epoch", item: queuedNudge{SessionID: "gc-1", ContinuationEpoch: "2"}, want: true},
+		{name: "same session no epoch", item: queuedNudge{SessionID: "gc-1"}, want: true},
+		{name: "different session", item: queuedNudge{SessionID: "gc-2", ContinuationEpoch: "3"}, want: false},
+		{name: "different session rotated epoch", item: queuedNudge{SessionID: "gc-2", ContinuationEpoch: "2"}, want: false},
+		// An epoch with no session ID names no session, so a mismatch cannot be
+		// attributed to a generation rotation of this target. Stay strict.
+		{name: "unbound epoch mismatch", item: queuedNudge{ContinuationEpoch: "2"}, want: false},
+		{name: "unbound epoch match", item: queuedNudge{ContinuationEpoch: "3"}, want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := queuedNudgeMatchesTargetFence(target, tc.item); got != tc.want {
+				t.Fatalf("queuedNudgeMatchesTargetFence(%#v) = %v, want %v", tc.item, got, tc.want)
+			}
+		})
 	}
 }
 

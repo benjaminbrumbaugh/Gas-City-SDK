@@ -307,6 +307,7 @@ type Client struct {
 	// request, never captured. nil means no grant is attached (a city that
 	// authenticates on X-GC-Request alone, or one fronted by a bearer edge).
 	grantSource GrantSource
+	grantMu     sync.RWMutex
 }
 
 // IsRemote reports whether this client targets a remote city over the control
@@ -624,6 +625,7 @@ func NewCityScopedClient(baseURL, cityName string) *Client {
 
 func newClient(baseURL, cityName string) *Client {
 	httpClient := &http.Client{Timeout: defaultClientTimeout}
+	c := &Client{baseURL: baseURL, cityName: cityName}
 	cw, err := genclient.NewClientWithResponses(
 		baseURL,
 		genclient.WithHTTPClient(httpClient),
@@ -631,6 +633,7 @@ func newClient(baseURL, cityName string) *Client {
 			req.Header.Set("X-GC-Request", "true")
 			return nil
 		}),
+		genclient.WithRequestEditorFn(remoteGrantEditor(c)),
 	)
 	if err != nil {
 		// genclient.NewClient only returns errors for malformed URLs;
@@ -638,7 +641,21 @@ func newClient(baseURL, cityName string) *Client {
 		// every method rather than panicking.
 		return &Client{initErr: &clientInitError{err: err}}
 	}
-	return &Client{cw: cw, baseURL: baseURL, cityName: cityName}
+	c.cw = cw
+	return c
+}
+
+// SetGrantSource configures the binding-aware source for subsequent city
+// mutations. Callers must configure it before issuing requests; the source is
+// read under a mutex so one configured client remains safe for concurrent use.
+func (c *Client) SetGrantSource(source GrantSource) error {
+	if err := c.requireCityScope(); err != nil {
+		return err
+	}
+	c.grantMu.Lock()
+	c.grantSource = source
+	c.grantMu.Unlock()
+	return nil
 }
 
 // requireCityScope reports an error if the client was constructed as a

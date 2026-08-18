@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"io"
 	"net/http"
+
+	"github.com/gastownhall/gascity/internal/api/apierr"
 )
 
 // LoopbackTransport returns an http.RoundTripper that serves a request against
@@ -24,8 +26,16 @@ import (
 // same typed handlers without the edge middleware (auth, host allow-listing,
 // CORS) that only applies to external callers.
 func (sm *SupervisorMux) LoopbackTransport() http.RoundTripper {
-	return loopbackTransport{h: http.HandlerFunc(sm.ServeHTTP)}
+	return loopbackTransport{h: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isSafeReadMethod(r.Method) {
+			problemLoopbackTransportMutation.writeTo(w)
+			return
+		}
+		sm.ServeHTTP(w, r)
+	})}
 }
+
+var problemLoopbackTransportMutation = registeredProblemBody(apierr.Forbidden, "in-process self-read transport refuses mutations")
 
 // loopbackTransport dispatches a request against an in-process handler instead
 // of dialing the network. It is the mechanism behind SupervisorMux.LoopbackTransport.

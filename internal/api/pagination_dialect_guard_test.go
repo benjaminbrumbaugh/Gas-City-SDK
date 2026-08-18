@@ -95,6 +95,14 @@ var boundedLimitOnlyFeeds = map[string]bool{
 	"GET /v0/events":                               true,
 }
 
+// boundedKeysetLimits records the security-bounded keyset exceptions approved
+// with the durable routing-decision contract. Routing decisions deliberately
+// cap both returned and scanned durable rows at 256 per transaction; widening
+// to the general 1000-row API contract would violate that bounded-work rule.
+var boundedKeysetLimits = map[string]float64{
+	"GET /v0/city/{cityName}/routing/decisions": 256,
+}
+
 type specParam struct {
 	Name   string          `json:"name"`
 	In     string          `json:"in"`
@@ -206,9 +214,13 @@ func checkPaginationDialects(paths map[string]map[string]specOperation) []string
 			} else {
 				var ls limitSchema
 				_ = json.Unmarshal(limit.Schema, &ls)
-				if ls.Default == nil || *ls.Default != 100 || ls.Maximum == nil || *ls.Maximum != 1000 {
+				expectedMaximum := float64(1000)
+				if bounded, ok := boundedKeysetLimits[opKey]; ok {
+					expectedMaximum = bounded
+				}
+				if ls.Default == nil || *ls.Default != 100 || ls.Maximum == nil || *ls.Maximum != expectedMaximum {
 					violations = append(violations, fmt.Sprintf(
-						"%s limit schema must pin the unified page contract (default 100, maximum 1000): embed PaginationParam rather than declaring limit ad hoc", opKey))
+						"%s limit schema must pin its approved page contract (default 100, maximum %g)", opKey, expectedMaximum))
 				}
 			}
 		}
@@ -320,7 +332,7 @@ func TestPaginationDialectCheckerCatchesViolations(t *testing.T) {
 					{Name: "cursor", In: "query"}, {Name: "limit", In: "query", Schema: limitBad},
 				}, Responses: resp400}},
 			},
-			want: "unified page contract",
+			want: "approved page contract",
 		},
 		{
 			name: "stale grandfather entry rejected",

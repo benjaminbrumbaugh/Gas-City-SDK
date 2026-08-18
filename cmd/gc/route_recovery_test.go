@@ -10,6 +10,14 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
+type unsupportedLegacyRecoveryStore struct{ *beads.MemStore }
+
+type noConditionalLegacyRecoveryStore struct{ beads.Store }
+
+func (s unsupportedLegacyRecoveryStore) UpdateIfMatch(string, int64, beads.UpdateOpts) error {
+	return beads.ErrConditionalWriteUnsupported
+}
+
 // TestRouteRecoveryBackstopLegRestoresCarriedWorkRoutes covers ga-n2d.4: after a controller restart,
 // open+unassigned work that carries a gc.run_target pool route but no
 // gc.routed_to is invisible to the pool autoscaler (which keys on gc.routed_to)
@@ -102,6 +110,47 @@ func TestRouteRecoveryBackstopLegRestoresCarriedWorkRoutes(t *testing.T) {
 	}
 	if restored2 != 0 {
 		t.Errorf("second pass restored = %d, want 0 (idempotent)", restored2)
+	}
+}
+
+func TestRestoreCarriedWorkRoutesLegacyFallsBackFromUnsupportedCAS(t *testing.T) {
+	const (
+		beadID = "GC-LEGACY-FALLBACK"
+		route  = "gascity/gastown.polecat"
+	)
+	base := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID: beadID, Status: "open", Metadata: map[string]string{"gc.run_target": route},
+	}}, nil)
+	store := unsupportedLegacyRecoveryStore{MemStore: base}
+	restored, err := scanOneRouteRecoveryLeg(store)
+	if err != nil {
+		t.Fatalf("restore legacy route: %v", err)
+	}
+	if restored != 1 {
+		t.Fatalf("restored = %d, want 1", restored)
+	}
+	if got := mustRoutedTo(t, base, beadID); got != route {
+		t.Fatalf("gc.routed_to = %q, want %q", got, route)
+	}
+}
+
+func TestRestoreCarriedWorkRoutesPreservesLegacyRouteWithoutConditionalWriter(t *testing.T) {
+	const (
+		beadID = "GC-LEGACY-NO-CAS"
+		route  = "gascity/gastown.polecat"
+	)
+	base := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID: beadID, Status: "open", Metadata: map[string]string{"gc.run_target": route},
+	}}, nil)
+	restored, err := scanOneRouteRecoveryLeg(noConditionalLegacyRecoveryStore{Store: base})
+	if err != nil {
+		t.Fatalf("restore without conditional writer: %v", err)
+	}
+	if restored != 1 {
+		t.Fatalf("restored = %d, want 1 for established unmarked compatibility", restored)
+	}
+	if got := mustRoutedTo(t, base, beadID); got != route {
+		t.Fatalf("gc.routed_to = %q, want %q", got, route)
 	}
 }
 
@@ -447,5 +496,62 @@ func TestBackstopCountsRoutedWorkTheRuntimePlaneCannotSee(t *testing.T) {
 				t.Fatalf("off_plane_routed = %d, want %d: %s", report.offPlaneRouted, tc.want, tc.because)
 			}
 		})
+	}
+}
+
+func TestRouteRecoveryMarkedRouteRequiresDecisionAuthorization(t *testing.T) {
+	const pool = "gascity/gastown.polecat"
+	store := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID: "marked-denied", Title: "work", Type: "task", Status: "open", ClaimFence: 7,
+		Metadata: map[string]string{
+			beadmeta.RunTargetMetadataKey:                 pool,
+			beadmeta.RoutingDecisionIDMetadataKey:         "decision-denied",
+			beadmeta.RoutingDecisionClaimFenceMetadataKey: "7",
+		},
+	}}, nil)
+	lane := newRouteRecoveryLane()
+	report := lane.backstopLegWithAuthorization(planeLeg{label: "rig gascity", store: store}, func(rig string, bead beads.Bead) bool {
+		return false
+	})
+	if report.restored != 0 {
+		t.Fatalf("restored = %d, want 0 for refused marked route", report.restored)
+	}
+	got, err := store.Get("marked-denied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Metadata[beadmeta.RoutedToMetadataKey] != "" {
+		t.Fatalf("refused marked route was written: %q", got.Metadata[beadmeta.RoutedToMetadataKey])
+	}
+}
+
+func TestRouteRecoveryMarkedRouteDoesNotFallBackWithoutConditionalCapability(t *testing.T) {
+	const pool = "gascity/gastown.polecat"
+	store := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID: "marked-allowed", Title: "work", Type: "task", Status: "open", ClaimFence: 7,
+		Metadata: map[string]string{
+			beadmeta.RunTargetMetadataKey:                 pool,
+			beadmeta.RoutingDecisionIDMetadataKey:         "decision-allowed",
+			beadmeta.RoutingDecisionClaimFenceMetadataKey: "7",
+		},
+	}}, nil)
+	lane := newRouteRecoveryLane()
+	seenRig := ""
+	report := lane.backstopLegWithAuthorization(planeLeg{label: "rig gascity", store: store}, func(rig string, bead beads.Bead) bool {
+		seenRig = rig
+		return bead.ID == "marked-allowed"
+	})
+	if report.restored != 0 {
+		t.Fatalf("restored = %d, want 0 when conditional capability is unavailable", report.restored)
+	}
+	if seenRig != "gascity" {
+		t.Fatalf("authorization rig = %q, want gascity", seenRig)
+	}
+	got, err := store.Get("marked-allowed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Metadata[beadmeta.RoutedToMetadataKey] != "" {
+		t.Fatalf("marked route fell back to an unconditional write: %q", got.Metadata[beadmeta.RoutedToMetadataKey])
 	}
 }

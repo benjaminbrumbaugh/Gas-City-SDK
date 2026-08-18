@@ -1,0 +1,45 @@
+From 67f41ae7c48ee510a9877646919f6680e27dd322 Mon Sep 17 00:00:00 2001
+From: Benjamin Brumbaugh <benbrumbaugh@gmail.com>
+Date: Thu, 13 Aug 2026 22:35:02 -0700
+Subject: [PATCH] fix: allow projected comments and gate checks
+
+---
+ cmd/bd/projected_client_guard.go      | 2 ++
+ cmd/bd/projected_client_guard_test.go | 2 ++
+ 2 files changed, 4 insertions(+)
+
+diff --git a/cmd/bd/projected_client_guard.go b/cmd/bd/projected_client_guard.go
+index 56f09bd7..464cd005 100644
+--- a/cmd/bd/projected_client_guard.go
++++ b/cmd/bd/projected_client_guard.go
+@@ -23,12 +23,14 @@ var projectedClientAllowedTopLevel = map[string]struct{}{
+ 	"blocked":          {},
+ 	"claim":            {},
+ 	"close":            {},
++	"comment":          {},
+ 	"comments":         {},
+ 	"completion":       {},
+ 	"count":            {},
+ 	"create":           {},
+ 	"dep":              {},
+ 	"duplicates":       {},
++	"gate":             {},
+ 	"graph":            {},
+ 	"heartbeat":        {},
+ 	"help":             {},
+diff --git a/cmd/bd/projected_client_guard_test.go b/cmd/bd/projected_client_guard_test.go
+index 6cfd540f..11538d93 100644
+--- a/cmd/bd/projected_client_guard_test.go
++++ b/cmd/bd/projected_client_guard_test.go
+@@ -24,7 +24,9 @@ func TestProjectedClientGuardAllowsIssueCommands(t *testing.T) {
+ 	t.Setenv(projectedClientGuardEnv, "1")
+ 	for _, path := range [][]string{
+ 		{"show"},
++		{"comment"},
+ 		{"comments", "add"},
++		{"gate", "check"},
+ 		{"update"},
+ 		{"close"},
+ 		{"dep", "add"},
+-- 
+2.39.5 (Apple Git-154)

@@ -1,0 +1,47 @@
+From eced418a559a0829ee4818cc78d69fd4837409ca Mon Sep 17 00:00:00 2001
+From: Benjamin Brumbaugh <benbrumbaugh@gmail.com>
+Date: Fri, 14 Aug 2026 05:07:13 -0700
+Subject: [PATCH] fix: guard database proxy child
+
+---
+ cmd/bd/db_proxy_child.go              |  2 +-
+ cmd/bd/projected_client_guard_test.go | 10 ++++++++++
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/cmd/bd/db_proxy_child.go b/cmd/bd/db_proxy_child.go
+index 47498197..da9081c6 100644
+--- a/cmd/bd/db_proxy_child.go
++++ b/cmd/bd/db_proxy_child.go
+@@ -38,7 +38,7 @@ var dbProxyChildCmd = &cobra.Command{
+ DatabaseServer. It is spawned by the parent bd process via fork+exec and is
+ not intended to be invoked directly by users.`,
+ 
+-	PersistentPreRun:  func(cmd *cobra.Command, args []string) {},
++	PersistentPreRunE: func(cmd *cobra.Command, args []string) error { return enforceProjectedClientCommand(cmd) },
+ 	PersistentPostRun: func(cmd *cobra.Command, args []string) {},
+ 
+ 	RunE: func(cmd *cobra.Command, _ []string) error {
+diff --git a/cmd/bd/projected_client_guard_test.go b/cmd/bd/projected_client_guard_test.go
+index 73361d99..93adfaee 100644
+--- a/cmd/bd/projected_client_guard_test.go
++++ b/cmd/bd/projected_client_guard_test.go
+@@ -84,6 +84,16 @@ func TestProjectedClientGuardRefusesUnboundedOrOversizedQueries(t *testing.T) {
+ 	}
+ }
+ 
++func TestProjectedClientGuardAppliesToDBProxyChild(t *testing.T) {
++	t.Setenv(projectedClientGuardEnv, "1")
++	if dbProxyChildCmd.PersistentPreRunE == nil {
++		t.Fatal("db-proxy-child does not install projected-client enforcement")
++	}
++	if err := dbProxyChildCmd.PersistentPreRunE(dbProxyChildCmd, nil); err == nil || !strings.Contains(err.Error(), "projected client policy refuses") {
++		t.Fatalf("db-proxy-child projected guard error = %v, want policy refusal", err)
++	}
++}
++
+ func TestProjectedClientGuardActivatesFromMarker(t *testing.T) {
+ 	t.Setenv(projectedClientGuardEnv, "")
+ 	beadsDir := t.TempDir()
+-- 
+2.39.5 (Apple Git-154)
+

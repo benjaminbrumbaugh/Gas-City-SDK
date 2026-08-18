@@ -17,11 +17,23 @@ import (
 	"github.com/gastownhall/gascity/internal/orderdispatch"
 	"github.com/gastownhall/gascity/internal/orders"
 	"github.com/gastownhall/gascity/internal/rollout"
+	"github.com/gastownhall/gascity/internal/routingdecision"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/supervisor"
 	"github.com/gastownhall/gascity/internal/usage"
 	"github.com/gastownhall/gascity/internal/workspacesvc"
 )
+
+// RoutingDecisionProvider is the optional live routing-decision capability
+// exposed by a controller-owned city runtime. Keeping it separate from State
+// avoids forcing routing storage ownership into unrelated API fakes and hosts.
+type RoutingDecisionProvider interface {
+	RoutingDecisionStatus() routingdecision.LiveStatus
+	RoutingDecisionTargets(context.Context) ([]routingdecision.TargetSnapshot, error)
+	RoutingDecisionEligible(context.Context) (routingdecision.SelectionSnapshot, error)
+	RoutingDecisionList(context.Context, routingdecision.ListOptions) (routingdecision.DecisionPage, error)
+	RoutingDecisionIngest(context.Context, routingdecision.IngestApprovedRequest) (routingdecision.IngestApprovedResult, error)
+}
 
 // MaintenanceProvider is the subset of supervisor.StoreMaintenanceLoop that
 // the API layer consumes. Defining it here keeps handlers from importing

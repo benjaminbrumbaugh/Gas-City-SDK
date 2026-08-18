@@ -2044,6 +2044,7 @@ type nativeDoltTransactionTestStorage interface {
 	AddDependency(context.Context, *beadslib.Dependency, string) error
 	RemoveDependency(context.Context, string, string, string) error
 	GetDependencyRecords(context.Context, string) ([]*beadslib.Dependency, error)
+	IsBlocked(context.Context, string) (bool, []string, error)
 }
 
 type nativeDoltTransactionForTest struct {
@@ -2091,6 +2092,10 @@ func (tx nativeDoltTransactionForTest) GetDependencyRecords(ctx context.Context,
 	return tx.storage.GetDependencyRecords(ctx, issueID)
 }
 
+func (tx nativeDoltTransactionForTest) IsBlocked(ctx context.Context, issueID string) (bool, []string, error) {
+	return tx.storage.IsBlocked(ctx, issueID)
+}
+
 type nativeDoltStorageSpy struct {
 	beadslib.Storage
 	createIssue                 func(context.Context, *beadslib.Issue, string) error
@@ -2109,6 +2114,7 @@ type nativeDoltStorageSpy struct {
 	addDependency               func(context.Context, *beadslib.Dependency, string) error
 	removeDependency            func(context.Context, string, string, string) error
 	getDependencyRecords        func(context.Context, string) ([]*beadslib.Dependency, error)
+	isBlocked                   func(context.Context, string) (bool, []string, error)
 	getDependenciesWithMetadata func(context.Context, string) ([]*beadslib.IssueWithDependencyMetadata, error)
 	getDependentsWithMetadata   func(context.Context, string) ([]*beadslib.IssueWithDependencyMetadata, error)
 	getConfig                   func(context.Context, string) (string, error)
@@ -2230,6 +2236,13 @@ func (s *nativeDoltStorageSpy) GetDependencyRecords(ctx context.Context, issueID
 		return nil, nil
 	}
 	return s.getDependencyRecords(ctx, issueID)
+}
+
+func (s *nativeDoltStorageSpy) IsBlocked(ctx context.Context, issueID string) (bool, []string, error) {
+	if s.isBlocked == nil {
+		return false, nil, nil
+	}
+	return s.isBlocked(ctx, issueID)
 }
 
 func (s *nativeDoltStorageSpy) GetDependenciesWithMetadata(ctx context.Context, issueID string) ([]*beadslib.IssueWithDependencyMetadata, error) {
@@ -2450,6 +2463,36 @@ func (s *nativeDoltMemStorage) GetDependencyRecords(_ context.Context, issueID s
 		})
 	}
 	return records, nil
+}
+
+func (s *nativeDoltMemStorage) IsBlocked(ctx context.Context, issueID string) (bool, []string, error) {
+	if err := ctx.Err(); err != nil {
+		return false, nil, err
+	}
+	if _, err := s.store.Get(issueID); err != nil {
+		return false, nil, err
+	}
+	deps, err := s.store.DepList(issueID, "down")
+	if err != nil {
+		return false, nil, err
+	}
+	var blockers []string
+	for _, dep := range deps {
+		if !IsReadyBlockingDependencyType(dep.Type) {
+			continue
+		}
+		blocker, err := s.store.Get(dep.DependsOnID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			return false, nil, err
+		}
+		if blocker.Status != "closed" {
+			blockers = append(blockers, dep.DependsOnID)
+		}
+	}
+	return len(blockers) > 0, blockers, nil
 }
 
 func (s *nativeDoltMemStorage) GetDependenciesWithMetadata(_ context.Context, issueID string) ([]*beadslib.IssueWithDependencyMetadata, error) {

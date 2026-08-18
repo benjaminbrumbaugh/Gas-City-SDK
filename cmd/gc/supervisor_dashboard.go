@@ -123,21 +123,29 @@ func writeSupervisorDashboardStartup(stdout io.Writer, mounted, readOnly bool, b
 // transport so those trusted self-reads bypass the read-auth gate.
 func dashboardDeps(resolver api.CityResolver, readOnly bool, bind string, port int, selfRead http.RoundTripper) dashboardbff.Deps {
 	return dashboardbff.Deps{
-		Resolver:           dashboardCityResolver{resolver},
-		ReadOnly:           readOnly,
-		SupervisorBaseURL:  dashboardLoopbackBaseURL(bind, port),
-		SelfReadTransport:  selfRead,
-		RunCwdAllowedRoots: runCwdAllowedRootsFromEnv(),
-		OperatorAlias:      os.Getenv("DASHBOARD_OPERATOR_ALIAS"),
-		OperatorWireAlias:  os.Getenv("DASHBOARD_OPERATOR_WIRE_ALIAS"),
-		DecisionLabel:      os.Getenv("DASHBOARD_DECISION_LABEL"),
-		DefaultView:        os.Getenv("DEFAULT_VIEW"),
+		Resolver:             dashboardCityResolver{resolver},
+		ReadOnly:             readOnly,
+		SupervisorBaseURL:    dashboardLoopbackBaseURL(bind, port),
+		SelfReadTransport:    selfRead,
+		RoutingDaemonBaseURL: routingDaemonBaseURL(),
+		RunCwdAllowedRoots:   runCwdAllowedRootsFromEnv(),
+		OperatorAlias:        os.Getenv("DASHBOARD_OPERATOR_ALIAS"),
+		OperatorWireAlias:    os.Getenv("DASHBOARD_OPERATOR_WIRE_ALIAS"),
+		DecisionLabel:        os.Getenv("DASHBOARD_DECISION_LABEL"),
+		DefaultView:          os.Getenv("DEFAULT_VIEW"),
 		// EnabledModules is intentionally left unset: every shipped dashboard view
 		// module is core (always on), and no first-party (gated) module exists yet,
 		// so the config projection emits an empty enabledModules list by design.
 		// When the first gated module lands, wire its enable source here (mirroring
 		// runCwdAllowedRootsFromEnv) and update TestDashboardDepsModulesCoreOnly.
 	}
+}
+
+func routingDaemonBaseURL() string {
+	if value := strings.TrimSpace(os.Getenv("GC_ROUTING_DAEMON_URL")); value != "" {
+		return value
+	}
+	return "http://127.0.0.1:8383"
 }
 
 // wildcardBind reports whether bind is a wildcard listener address (every

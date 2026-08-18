@@ -24,6 +24,7 @@ import (
 // doltlite_read_store.go.
 var (
 	_ ConditionalWriter                = (*BdStore)(nil)
+	_ ReadyConditionalWriter           = (*BdStore)(nil)
 	_ conditionalWritesModeCarrier     = (*BdStore)(nil)
 	_ conditionalWriteCapabilityProber = (*BdStore)(nil)
 )
@@ -66,7 +67,10 @@ func (s *BdStore) probeConditionalWriteCapability() (bool, string) {
 // refusals with the probe still showing clean.
 var conditionalWriteProbeVerbs = []string{"update", "close", "assign", "delete"}
 
-const conditionalWriteFlag = "--if-revision"
+const (
+	conditionalWriteFlag = "--if-revision"
+	conditionalReadyFlag = "--if-ready"
+)
 
 // conditionalWritesCapable reports whether the bd behind this store parses
 // --if-revision on every conditional-write verb. The verdict is memoized per
@@ -124,6 +128,7 @@ func (s *BdStore) markConditionalWritesUnsupported() {
 const (
 	bdConditionalCodePreconditionFailed = "precondition-failed"
 	bdConditionalCodeUnsupported        = "conditional-write-unsupported"
+	bdConditionalCodeNotReady           = "not_ready"
 )
 
 // bdConditionalErrorBody is the machine JSON bd attaches to a failed conditional
@@ -261,6 +266,8 @@ func classifyConditionalWriteResult(out []byte, err error) error {
 			return newPreconditionFailed(body, out, err)
 		case bdConditionalCodeUnsupported:
 			return ErrConditionalWriteUnsupported
+		case bdConditionalCodeNotReady:
+			return ErrNotReadyForConditionalUpdate
 		}
 	}
 
@@ -400,6 +407,31 @@ func (s *BdStore) UpdateIfMatch(id string, expectedRevision int64, opts UpdateOp
 		return nil
 	}
 	args = append(args, conditionalWriteFlag, strconv.FormatInt(expectedRevision, 10))
+	return s.runConditionalWrite(id, expectedRevision, args...)
+}
+
+// UpdateIfReadyAndMatch applies opts only when the issue is still ready and its
+// own row revision still matches. Both predicates are evaluated by the patched
+// bd backend in the same transaction; there is no read-then-write fallback.
+func (s *BdStore) UpdateIfReadyAndMatch(id string, expectedRevision int64, opts UpdateOpts) error {
+	if isEmptyUpdateOpts(opts) {
+		return fmt.Errorf("conditional ready update %s: %w", id, ErrEmptyConditionalUpdate)
+	}
+	if capable, _ := s.conditionalWritesCapable(); !capable {
+		return ErrConditionalWriteUnsupported
+	}
+	help, helpErr := s.runner(s.dir, "bd", "update", "--help")
+	if helpErr != nil || !bytes.Contains(help, []byte(conditionalReadyFlag)) {
+		return ErrConditionalWriteUnsupported
+	}
+	args := bdUpdateArgs(id, opts)
+	if len(args) == 3 {
+		return nil
+	}
+	args = append(args,
+		conditionalWriteFlag, strconv.FormatInt(expectedRevision, 10),
+		conditionalReadyFlag,
+	)
 	return s.runConditionalWrite(id, expectedRevision, args...)
 }
 

@@ -69,7 +69,7 @@ func runEventsReemitExecution(cmd *cobra.Command, runID string, apply bool, stdo
 	if err != nil {
 		return fmt.Errorf("resolving --city: %w", err)
 	}
-	controllerLock, err := requireStoppedExecutionReemitCity(cityPath)
+	controllerLock, err := requireStoppedLocalCity(cityPath)
 	if err != nil {
 		return err
 	}
@@ -164,7 +164,7 @@ func requireExistingExecutionReemitBdStore(scopeRoot string) error {
 	return nil
 }
 
-func requireStoppedExecutionReemitCity(cityPath string) (*os.File, error) {
+func requireStoppedLocalCity(cityPath string) (*os.File, error) {
 	if _, err := os.Stat(filepath.Join(cityPath, "city.toml")); err != nil {
 		return nil, fmt.Errorf("validating city config: %w", err)
 	}

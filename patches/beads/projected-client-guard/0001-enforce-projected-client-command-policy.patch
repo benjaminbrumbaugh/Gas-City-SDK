@@ -1,0 +1,227 @@
+From 0d4bfe34566649ca3074e924b9df4fa8b7c7143d Mon Sep 17 00:00:00 2001
+From: Benjamin Brumbaugh <benbrumbaugh@gmail.com>
+Date: Thu, 13 Aug 2026 21:32:12 -0700
+Subject: [PATCH] fix: enforce projected client command policy
+
+---
+ cmd/bd/main.go                        |   3 +
+ cmd/bd/projected_client_guard.go      | 101 ++++++++++++++++++++++++++
+ cmd/bd/projected_client_guard_test.go |  85 ++++++++++++++++++++++
+ 3 files changed, 189 insertions(+)
+ create mode 100644 cmd/bd/projected_client_guard.go
+ create mode 100644 cmd/bd/projected_client_guard_test.go
+
+diff --git a/cmd/bd/main.go b/cmd/bd/main.go
+index 7d440aa7..f956a6b8 100644
+--- a/cmd/bd/main.go
++++ b/cmd/bd/main.go
+@@ -880,6 +880,9 @@ var rootCmd = &cobra.Command{
+ 		_ = cmd.Help() // Help() always returns nil for cobra commands
+ 	},
+ 	PersistentPreRunE: func(cmd *cobra.Command, args []string) (retErr error) {
++		if err := enforceProjectedClientCommand(cmd); err != nil {
++			return err
++		}
+ 		applyNoColorFlag()
+ 
+ 		// Initialize CommandContext to hold runtime state (replaces scattered globals)
+diff --git a/cmd/bd/projected_client_guard.go b/cmd/bd/projected_client_guard.go
+new file mode 100644
+index 00000000..56f09bd7
+--- /dev/null
++++ b/cmd/bd/projected_client_guard.go
+@@ -0,0 +1,101 @@
++package main
++
++import (
++	"fmt"
++	"os"
++	"path/filepath"
++	"strings"
++
++	"github.com/spf13/cobra"
++)
++
++const (
++	projectedClientGuardEnv   = "GC_BD_CLIENT_GUARD"
++	projectedClientMarkerName = ".gc-projected-client-policy"
++	projectedClientMarkerV1   = "v1\n"
++)
++
++var projectedClientAllowedTopLevel = map[string]struct{}{
++	"__complete":       {},
++	"__completeNoDesc": {},
++	"activity":         {},
++	"assign":           {},
++	"blocked":          {},
++	"claim":            {},
++	"close":            {},
++	"comments":         {},
++	"completion":       {},
++	"count":            {},
++	"create":           {},
++	"dep":              {},
++	"duplicates":       {},
++	"graph":            {},
++	"heartbeat":        {},
++	"help":             {},
++	"history":          {},
++	"info":             {},
++	"label":            {},
++	"list":             {},
++	"ready":            {},
++	"release":          {},
++	"reopen":           {},
++	"search":           {},
++	"show":             {},
++	"stale":            {},
++	"stats":            {},
++	"status":           {},
++	"update":           {},
++	"version":          {},
++	"where":            {},
++}
++
++func enforceProjectedClientCommand(cmd *cobra.Command) error {
++	active, err := projectedClientPolicyActive()
++	if err != nil {
++		return err
++	}
++	if !active {
++		return nil
++	}
++	top := projectedClientTopLevel(cmd)
++	if top == "" {
++		return nil
++	}
++	if _, ok := projectedClientAllowedTopLevel[top]; ok {
++		return nil
++	}
++	return fmt.Errorf("projected client policy refuses bd %s; use an approved canonical maintenance path", cmd.CommandPath())
++}
++
++func projectedClientPolicyActive() (bool, error) {
++	if strings.TrimSpace(os.Getenv(projectedClientGuardEnv)) == "1" {
++		return true, nil
++	}
++	beadsDir := strings.TrimSpace(os.Getenv("BEADS_DIR"))
++	if beadsDir == "" {
++		return false, nil
++	}
++	markerPath := filepath.Join(beadsDir, projectedClientMarkerName)
++	data, err := os.ReadFile(markerPath)
++	if os.IsNotExist(err) {
++		return false, nil
++	}
++	if err != nil {
++		return false, fmt.Errorf("reading projected client policy marker %s: %w", markerPath, err)
++	}
++	if string(data) != projectedClientMarkerV1 {
++		return false, fmt.Errorf("invalid projected client policy marker %s", markerPath)
++	}
++	return true, nil
++}
++
++func projectedClientTopLevel(cmd *cobra.Command) string {
++	if cmd == nil || cmd.Parent() == nil {
++		return ""
++	}
++	current := cmd
++	for current.Parent() != nil && current.Parent().Parent() != nil {
++		current = current.Parent()
++	}
++	return current.Name()
++}
+diff --git a/cmd/bd/projected_client_guard_test.go b/cmd/bd/projected_client_guard_test.go
+new file mode 100644
+index 00000000..6cfd540f
+--- /dev/null
++++ b/cmd/bd/projected_client_guard_test.go
+@@ -0,0 +1,85 @@
++package main
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"github.com/spf13/cobra"
++)
++
++func projectedGuardCommand(path ...string) *cobra.Command {
++	root := &cobra.Command{Use: "bd"}
++	parent := root
++	for _, name := range path {
++		child := &cobra.Command{Use: name}
++		parent.AddCommand(child)
++		parent = child
++	}
++	return parent
++}
++
++func TestProjectedClientGuardAllowsIssueCommands(t *testing.T) {
++	t.Setenv(projectedClientGuardEnv, "1")
++	for _, path := range [][]string{
++		{"show"},
++		{"comments", "add"},
++		{"update"},
++		{"close"},
++		{"dep", "add"},
++		{"list"},
++	} {
++		if err := enforceProjectedClientCommand(projectedGuardCommand(path...)); err != nil {
++			t.Errorf("%s: unexpected error: %v", strings.Join(path, " "), err)
++		}
++	}
++}
++
++func TestProjectedClientGuardRefusesAdminAndUnknownCommands(t *testing.T) {
++	t.Setenv(projectedClientGuardEnv, "1")
++	for _, path := range [][]string{
++		{"backup", "sync"},
++		{"config", "set-many"},
++		{"doctor"},
++		{"init"},
++		{"future-admin-command"},
++	} {
++		err := enforceProjectedClientCommand(projectedGuardCommand(path...))
++		if err == nil {
++			t.Errorf("%s: expected refusal", strings.Join(path, " "))
++		}
++	}
++}
++
++func TestProjectedClientGuardActivatesFromMarker(t *testing.T) {
++	t.Setenv(projectedClientGuardEnv, "")
++	beadsDir := t.TempDir()
++	t.Setenv("BEADS_DIR", beadsDir)
++	if err := os.WriteFile(filepath.Join(beadsDir, projectedClientMarkerName), []byte(projectedClientMarkerV1), 0o400); err != nil {
++		t.Fatal(err)
++	}
++	if err := enforceProjectedClientCommand(projectedGuardCommand("backup", "sync")); err == nil {
++		t.Fatal("expected marker-activated refusal")
++	}
++}
++
++func TestProjectedClientGuardRejectsInvalidMarker(t *testing.T) {
++	t.Setenv(projectedClientGuardEnv, "")
++	beadsDir := t.TempDir()
++	t.Setenv("BEADS_DIR", beadsDir)
++	if err := os.WriteFile(filepath.Join(beadsDir, projectedClientMarkerName), []byte("unexpected\n"), 0o400); err != nil {
++		t.Fatal(err)
++	}
++	if err := enforceProjectedClientCommand(projectedGuardCommand("show")); err == nil {
++		t.Fatal("expected invalid marker to fail closed")
++	}
++}
++
++func TestProjectedClientGuardInactiveOutsideProjection(t *testing.T) {
++	t.Setenv(projectedClientGuardEnv, "")
++	t.Setenv("BEADS_DIR", t.TempDir())
++	if err := enforceProjectedClientCommand(projectedGuardCommand("backup", "sync")); err != nil {
++		t.Fatalf("unexpected refusal outside projection: %v", err)
++	}
++}
+-- 
+2.39.5 (Apple Git-154)

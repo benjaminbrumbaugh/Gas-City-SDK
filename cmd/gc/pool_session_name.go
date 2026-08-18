@@ -139,9 +139,13 @@ func releaseOrphanedPoolAssignments(
 
 	openIdentifiers := makeOpenSessionStoreRefIndex(cityPath, cfg, store, openSessionInfos, storeRefAware)
 	legacyOpenIdentifiers := make(map[string]struct{}, len(openSessionInfos)*5)
+	openSessionBeadIDs := make(map[string]struct{}, len(openSessionInfos))
 	for _, info := range openSessionInfos {
 		if info.Closed {
 			continue
+		}
+		if id := strings.TrimSpace(info.ID); id != "" {
+			openSessionBeadIDs[id] = struct{}{}
 		}
 		for _, id := range sessionBeadAssigneeIdentitiesInfo(info) {
 			legacyOpenIdentifiers[id] = struct{}{}
@@ -165,6 +169,7 @@ func releaseOrphanedPoolAssignments(
 		if agentCfg == nil || !agentCfg.SupportsGenericEphemeralSessions() {
 			continue
 		}
+		exactOwnerGone := false
 		// Resolved before the liveness gates because the graph-resident-session
 		// probe below reads the same store; the missing-store report stays where
 		// it was, so a bead skipped by a liveness gate never reaches it.
@@ -173,7 +178,7 @@ func releaseOrphanedPoolAssignments(
 			if wb.Status != "in_progress" {
 				continue
 			}
-		} else {
+		} else if exactOwnerGone = poolClaimExactOwnerIsGone(store, wb, openSessionBeadIDs); !exactOwnerGone {
 			workStoreRef := ""
 			if storeRefAware {
 				workStoreRef = assignedWorkStoreRefs[i]
@@ -216,16 +221,55 @@ func releaseOrphanedPoolAssignments(
 		if !releaseOrphanedPoolAssignment(ownerStore, wb, clearDetached) {
 			continue
 		}
+		if exactOwnerGone {
+			clearStalePoolClaimOwner(ownerStore, wb.ID)
+		}
 		released = append(released, releasedPoolAssignment{ID: wb.ID, Index: i})
 	}
 	return released
 }
 
+// beadStampedSessionOwner returns the exact session bead ID stamped on a claim.
+func beadStampedSessionOwner(wb beads.Bead) string {
+	if id := strings.TrimSpace(wb.Metadata[beadmeta.SessionIDMetadataKey]); id != "" {
+		return id
+	}
+	return strings.TrimSpace(wb.Metadata[beadmeta.SessionIDCamelMetadataKey])
+}
+
+// poolClaimExactOwnerIsGone avoids slot-name reuse masking a dead claim owner.
+func poolClaimExactOwnerIsGone(store beads.Store, wb beads.Bead, openSessionBeadIDs map[string]struct{}) bool {
+	owner := beadStampedSessionOwner(wb)
+	if owner == "" || len(openSessionBeadIDs) == 0 {
+		return false
+	}
+	if _, live := openSessionBeadIDs[owner]; live {
+		return false
+	}
+	if liveSessionBeadExistsByIdentity(store, owner) {
+		return false
+	}
+	log.Printf("releaseOrphanedPoolAssignments: %s is orphaned: stamped owner %q is gone while assignee %q resolves to a different session", wb.ID, owner, strings.TrimSpace(wb.Assignee))
+	return true
+}
+
+// clearStalePoolClaimOwner makes an exact-owner release idempotent.
+func clearStalePoolClaimOwner(store beads.Store, id string) {
+	if store == nil || strings.TrimSpace(id) == "" {
+		return
+	}
+	if err := store.Update(id, beads.UpdateOpts{Metadata: map[string]string{
+		beadmeta.SessionIDMetadataKey:        "",
+		beadmeta.SessionIDCamelMetadataKey:   "",
+		beadmeta.SessionNameMetadataKey:      "",
+		beadmeta.SessionNameCamelMetadataKey: "",
+	}}); err != nil {
+		log.Printf("releaseOrphanedPoolAssignments: clearing stale session owner on %s: %v", id, err)
+	}
+}
+
 // assignedWorkOwnerStore resolves the store that owns the assigned work bead at
-// index i: the index-aligned snapshot store when the caller supplied one (the
-// store-aware form), otherwise the routed/prefix fallback. A nil result means
-// the snapshot is misaligned or no store resolves, and the caller must skip the
-// bead rather than guess at a store.
+// index i, or the routed fallback when the snapshot is not store-aware.
 func assignedWorkOwnerStore(cfg *config.City, cityStore beads.Store, rigStores map[string]beads.Store, assignedWorkStores []beads.Store, i int, wb beads.Bead) beads.Store {
 	if len(assignedWorkStores) > 0 {
 		if i >= len(assignedWorkStores) {

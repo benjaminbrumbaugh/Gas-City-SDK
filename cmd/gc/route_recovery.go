@@ -149,7 +149,9 @@ func (cr *CityRuntime) runRouteRecoveryBackstop(reason string) routeRecoveryRepo
 		return routeRecoveryReport{lane: "backstop", reason: reason, err: err}
 	}
 	started := time.Now()
-	report := lane.backstopPass(plan, reason)
+	authorization := cr.newRoutingDecisionRecoveryAuthorizer(cr.routingDecisionNow())
+	defer authorization.Close()
+	report := lane.backstopPassWithAuthorization(plan, reason, authorization.Allows)
 	report.duration = time.Since(started)
 	lane.noteBackstopRan(time.Now(), reason, report.partial || report.err != nil)
 	cr.logRouteRecovery(report)
@@ -182,7 +184,9 @@ func (cr *CityRuntime) recoverUnroutedWorkRoutesDelta() routeRecoveryReport {
 		lane.force(backstopReasonCursorGap)
 		return routeRecoveryReport{lane: "delta", candidates: len(candidates), err: err}
 	}
-	report := lane.deltaPass(plan, candidates)
+	authorization := cr.newRoutingDecisionRecoveryAuthorizer(cr.routingDecisionNow())
+	defer authorization.Close()
+	report := lane.deltaPassWithAuthorization(plan, candidates, authorization.Allows)
 	if report.partial || report.err != nil {
 		// A leg the delta pass could not read is a leg whose convergence is now
 		// owed to the scan.

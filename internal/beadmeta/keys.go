@@ -167,6 +167,8 @@ const (
 	RootStoreRefMetadataKey              = "gc.root_store_ref"
 	RouteQuarantineMetadataKey           = "gc.route_recovery_quarantined"
 	RouteQuarantineReasonMetadataKey     = "gc.route_recovery_quarantine_reason"
+	RoutingDecisionClaimFenceMetadataKey = "gc.routing_decision_claim_fence"
+	RoutingDecisionIDMetadataKey         = "gc.routing_decision_id"
 	RoutedToMetadataKey                  = "gc.routed_to"
 	RunTargetMetadataKey                 = "gc.run_target"
 	RuntimeVarsMetadataKey               = "gc.graphv2_vars.v1"
@@ -419,6 +421,8 @@ var KnownMetadataKeys = []string{
 	RootStoreRefMetadataKey,
 	RouteQuarantineMetadataKey,
 	RouteQuarantineReasonMetadataKey,
+	RoutingDecisionClaimFenceMetadataKey,
+	RoutingDecisionIDMetadataKey,
 	RoutedToMetadataKey,
 	RunTargetMetadataKey,
 	RuntimeVarsMetadataKey,

@@ -460,6 +460,9 @@ func cityStatusJSONFromSnapshot(snapshot cityStatusSnapshot, summary StatusSumma
 	if !snapshot.Controller.Running {
 		signals = append(signals, "controller_not_running")
 	}
+	if snapshot.Partial {
+		signals = append(signals, "runtime_status_partial")
+	}
 	if snapshot.Summary.TotalAgents > 0 && snapshot.Summary.RunningAgents == 0 {
 		signals = append(signals, "no_agents_running")
 	}

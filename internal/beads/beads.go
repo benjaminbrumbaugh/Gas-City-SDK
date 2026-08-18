@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/rollout/gate"
 )
 
 // ErrNotFound is returned when a bead ID does not exist in the store.
@@ -203,6 +205,59 @@ type ConditionalWriter interface {
 	// (false, nil) on a genuine value mismatch (the caller lost), and (false,
 	// err) for everything else.
 	CompareAndSetMetadataKey(id, key, expected, next string) (bool, error)
+}
+
+// ReadyConditionalWriter atomically evaluates controller readiness and applies
+// opts only when the bead is still ready and at expectedRevision. Unlike
+// ConditionalWriter, it covers dependency/defer/block projections that may
+// change without the bead's own revision changing.
+type ReadyConditionalWriter interface {
+	UpdateIfReadyAndMatch(id string, expectedRevision int64, opts UpdateOpts) error
+}
+
+// ReadyConditionalWriterHandleProvider exposes an atomic readiness-write handle
+// for wrappers whose capability lives on a backing store.
+type ReadyConditionalWriterHandleProvider interface {
+	ReadyConditionalWriterHandle() (ReadyConditionalWriter, bool)
+}
+
+// ErrNotReadyForConditionalUpdate reports that the store observed the bead but
+// refused the fenced write because it was not ready at mutation time.
+var ErrNotReadyForConditionalUpdate = errors.New("conditional ready update: bead is not ready")
+
+// ReadyConditionalWriterFor returns the atomic ready-write capability when a
+// store can prove readiness and revision in one backend operation. Factory-
+// stamped stores additionally honor their conditional-write policy.
+func ReadyConditionalWriterFor(store Store) (ReadyConditionalWriter, bool) {
+	if store == nil {
+		return nil, false
+	}
+	resolved := followConditionalWritesResolveTarget(store)
+	carrier, ok := resolved.(conditionalWritesModeCarrier)
+	if !ok {
+		return nil, false
+	}
+	mode, _ := carrier.conditionalWritesMode()
+	switch mode {
+	case gate.Require, gate.Auto:
+		// A ready-admission fence is deliberately narrower than the full
+		// ConditionalWriter trio. Resolve it directly so a backend can expose
+		// safe routing admission without claiming it can fence every update,
+		// close, and delete operation.
+		return readyConditionalWriterFrom(resolved)
+	default: // unset/off are not authorization for a controller mutation.
+		return nil, false
+	}
+}
+
+func readyConditionalWriterFrom(value any) (ReadyConditionalWriter, bool) {
+	if writer, ok := value.(ReadyConditionalWriter); ok {
+		return writer, true
+	}
+	if provider, ok := value.(ReadyConditionalWriterHandleProvider); ok {
+		return provider.ReadyConditionalWriterHandle()
+	}
+	return nil, false
 }
 
 // ErrEmptyConditionalUpdate reports an UpdateIfMatch with no fields to apply.

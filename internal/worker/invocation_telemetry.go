@@ -227,7 +227,7 @@ func modelUsageFact(u sessionlog.TailUsage, meta map[string]string, beadID, sess
 	// from the raw bead. At the sole production call site they are equal (the
 	// handle's currentSessionID == the session bead id); the params stay distinct
 	// so the run-chain precedence contract is preserved verbatim.
-	runID := beadmeta.ResolveRunID(meta, beadID, sessionID)
+	runIdentity := beadmeta.ResolveRunIdentity(meta, beadID, sessionID)
 	// Model usage is attributed at run level: StepID stays unset. Per-step
 	// attribution was retired along with the gc.active_work_bead session pointer —
 	// the claim hook no longer stamps it (that was an unsafe fuzzy session-bead
@@ -238,10 +238,13 @@ func modelUsageFact(u sessionlog.TailUsage, meta map[string]string, beadID, sess
 		cost = 0
 	}
 	return usage.Fact{
-		RunID:     runID,
+		RunID:     runIdentity.ID,
+		RunSource: string(runIdentity.Source),
 		SessionID: strings.TrimSpace(sessionID),
 		// StepID intentionally unset — run-level attribution (see body note).
 		Worker:              strings.TrimSpace(worker),
+		AgentName:           strings.TrimSpace(meta["agent_name"]),
+		Template:            strings.TrimSpace(meta["template"]),
 		Kind:                usage.KindModel,
 		Model:               strings.TrimSpace(u.Model),
 		Provider:            strings.TrimSpace(providerFamily),
@@ -252,8 +255,9 @@ func modelUsageFact(u sessionlog.TailUsage, meta map[string]string, beadID, sess
 		CostUSDEstimate:     cost,
 		Unpriced:            !priced,
 		UpstreamReqID:       reqID,
+		AwakeEpoch:          strings.TrimSpace(meta["awake_started_at"]),
 		At:                  now.UnixMilli(),
-		IdempotencyKey:      usage.ModelIdempotencyKey(runID, reqID),
+		IdempotencyKey:      usage.ModelIdempotencyKey(runIdentity.ID, reqID),
 	}
 }
 

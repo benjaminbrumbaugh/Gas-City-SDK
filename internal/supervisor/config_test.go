@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/pathutil"
 )
 
 func TestLoadConfigMissing(t *testing.T) {
@@ -235,8 +237,9 @@ func TestDefaultHomeCanonicalizesSymlinkOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("GC_HOME", symlinkHome)
-	if got := DefaultHome(); got != canonicalHome {
-		t.Fatalf("DefaultHome() = %q, want canonical %q", got, canonicalHome)
+	want := pathutil.NormalizePathForCompare(canonicalHome)
+	if got := DefaultHome(); got != want {
+		t.Fatalf("DefaultHome() = %q, want canonical %q", got, want)
 	}
 }
 
@@ -259,8 +262,9 @@ func TestDefaultHomeCanonicalizesRelativeOverride(t *testing.T) {
 		}
 	})
 	t.Setenv("GC_HOME", "relative-gc")
-	if got := DefaultHome(); got != canonicalHome {
-		t.Fatalf("DefaultHome() = %q, want canonical %q", got, canonicalHome)
+	want := pathutil.NormalizePathForCompare(canonicalHome)
+	if got := DefaultHome(); got != want {
+		t.Fatalf("DefaultHome() = %q, want canonical %q", got, want)
 	}
 }
 
@@ -277,8 +281,9 @@ func TestRuntimeDirUsesIsolatedGCHomeWhenOverrideDiffersFromDefault(t *testing.T
 	t.Setenv("HOME", homeDir)
 	t.Setenv("GC_HOME", gcHome)
 	t.Setenv("XDG_RUNTIME_DIR", "/run/user/1000")
-	if got := RuntimeDir(); got != gcHome {
-		t.Fatalf("RuntimeDir() = %q, want isolated GC_HOME %q", got, gcHome)
+	want := pathutil.NormalizePathForCompare(gcHome)
+	if got := RuntimeDir(); got != want {
+		t.Fatalf("RuntimeDir() = %q, want isolated GC_HOME %q", got, want)
 	}
 }
 

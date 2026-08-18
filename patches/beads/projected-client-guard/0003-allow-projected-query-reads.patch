@@ -1,0 +1,37 @@
+From b79df684c908002b5c51fa26746b730319986c46 Mon Sep 17 00:00:00 2001
+From: Benjamin Brumbaugh <benbrumbaugh@gmail.com>
+Date: Fri, 14 Aug 2026 03:14:16 -0700
+Subject: [PATCH] fix: allow projected query reads
+
+---
+ cmd/bd/projected_client_guard.go      | 1 +
+ cmd/bd/projected_client_guard_test.go | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/cmd/bd/projected_client_guard.go b/cmd/bd/projected_client_guard.go
+index 464cd005..4b327b6f 100644
+--- a/cmd/bd/projected_client_guard.go
++++ b/cmd/bd/projected_client_guard.go
+@@ -38,6 +38,7 @@ var projectedClientAllowedTopLevel = map[string]struct{}{
+ 	"info":             {},
+ 	"label":            {},
+ 	"list":             {},
++	"query":            {},
+ 	"ready":            {},
+ 	"release":          {},
+ 	"reopen":           {},
+diff --git a/cmd/bd/projected_client_guard_test.go b/cmd/bd/projected_client_guard_test.go
+index 11538d93..261edce8 100644
+--- a/cmd/bd/projected_client_guard_test.go
++++ b/cmd/bd/projected_client_guard_test.go
+@@ -31,6 +31,7 @@ func TestProjectedClientGuardAllowsIssueCommands(t *testing.T) {
+ 		{"close"},
+ 		{"dep", "add"},
+ 		{"list"},
++		{"query"},
+ 	} {
+ 		if err := enforceProjectedClientCommand(projectedGuardCommand(path...)); err != nil {
+ 			t.Errorf("%s: unexpected error: %v", strings.Join(path, " "), err)
+-- 
+2.39.5 (Apple Git-154)
+

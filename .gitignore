@@ -9,6 +9,10 @@ cmd/gc/.runtime/
 /dist/
 /gc
 
+# Local agent execution artifacts
+/agent-execution.log
+/engdocs/plans/durable-routing-decisions-implementation.md
+
 # Dashboard e2e (Layer B) build + run artifacts. The fakesupervisor is a
 # compiled -tags integration binary; Playwright emits reports/results/browsers.
 # The bare /fakesupervisor guard catches `go build ./test/.../fakesupervisor/`
@@ -76,3 +80,7 @@ __pycache__/
 # Beads / Dolt files (added by bd init)
 .beads/proxieddb/
 .beads.backup-*
+
+# Gas City
+.beads/*
+!.beads/identity.toml

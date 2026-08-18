@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["available", "logical_role", "target", "adapter", "delivery", "interrupt_policy", "session_policy", "capabilities", "instruction"],
+  "properties": {
+    "available": {"type": "boolean"},
+    "logical_role": {"type": "string"},
+    "target": {"type": "string"},
+    "adapter": {"type": "string"},
+    "config_revision": {"type": "integer"},
+    "delivery": {"type": "string"},
+    "interrupt_policy": {"type": "string"},
+    "session_policy": {"type": "string"},
+    "capabilities": {"type": "object"},
+    "triggers": {"type": "array", "items": {"type": "string"}},
+    "instruction": {"type": "string"}
+  },
+  "additionalProperties": true
+}

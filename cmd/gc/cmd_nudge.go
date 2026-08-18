@@ -1827,9 +1827,27 @@ func queuedNudgeIDs(items []queuedNudge) []string {
 	return ids
 }
 
+// queuedNudgeMatchesTargetFence reports whether a claimed nudge may be
+// delivered to target. The fence exists to stop a nudge queued for one session
+// from being handed to a DIFFERENT session; it is not a staleness check.
+//
+// The continuation epoch is a per-session generation counter, and waking a
+// wake_mode=fresh named session rotates it. A nudge records the epoch at
+// ENQUEUE time, so for the managed wake path (enqueue -> wake -> deliver) an
+// epoch skew is the EXPECTED case rather than an edge case. Treating it as a
+// mismatch made the wake path eat its own trigger: the nudge caused the wake,
+// the wake rotated the epoch, and the fence dead-lettered the nudge on its
+// first attempt — the session came up running but never told why, and a
+// source=mail demand signal was silently consumed (gc-4el).
+//
+// So an epoch skew is tolerated when the item names the same session the target
+// resolved to: that is a new generation of one session, and re-binding to the
+// live generation is correct. An epoch carried WITHOUT a session ID names no
+// session, so a skew there cannot be attributed to a rotation of this target
+// and stays fenced.
 func queuedNudgeMatchesTargetFence(target nudgeTarget, item queuedNudge) bool {
-	if item.SessionID != "" && item.SessionID != target.sessionID {
-		return false
+	if item.SessionID != "" {
+		return item.SessionID == target.sessionID
 	}
 	if item.ContinuationEpoch != "" && item.ContinuationEpoch != target.continuationEpoch {
 		return false

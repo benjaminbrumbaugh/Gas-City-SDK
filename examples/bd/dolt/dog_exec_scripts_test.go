@@ -4529,6 +4529,38 @@ exit 0
 	return logPath
 }
 
+func writeBackupAlertFakeDolt(t *testing.T, binDir string) string {
+	t.Helper()
+	logPath := filepath.Join(binDir, "dolt-alert.log")
+	writeExecutable(t, filepath.Join(binDir, "dolt"), fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+printf 'dolt %%s\n' "$*" >> %s
+if [ "${1:-}" = "version" ]; then
+  printf 'dolt version 2.1.0\n'
+  exit 0
+fi
+if [ "${1:-}" = "backup" ] && [ "$#" -eq 1 ]; then
+  db="$(basename "$PWD")"
+  printf '%%s-backup file:///backups/%%s\n' "$db" "$db"
+  exit 0
+fi
+if [ "${1:-} ${2:-}" = "backup add" ]; then
+  exit 0
+fi
+if [ "${1:-} ${2:-}" = "backup sync" ]; then
+  db="$(basename "$PWD")"
+  for failed in ${GC_TEST_BACKUP_FAIL_DBS:-}; do
+    if [ "$db" = "$failed" ]; then
+      exit 1
+    fi
+  done
+  exit 0
+fi
+exit 0
+`, shellQuote(logPath)))
+	return logPath
+}
+
 func writeBackupFakeRsync(t *testing.T, binDir string) string {
 	t.Helper()
 	logPath := filepath.Join(binDir, "rsync.log")
@@ -4590,6 +4622,59 @@ func TestBackupScriptSkipsOldDoltBeforeSync(t *testing.T) {
 	}
 	if !strings.Contains(string(gcLog), "mail send human -s Dolt backup: dolt-too-old for backup sync [HIGH]") {
 		t.Fatalf("old-Dolt backup escalation must use the generic default recipient:\n%s", gcLog)
+	}
+}
+
+func TestBackupScriptAlertStateEdges(t *testing.T) {
+	cityPath := t.TempDir()
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	for _, db := range []string{"prod", "stage"} {
+		if err := os.MkdirAll(filepath.Join(dataDir, db, ".dolt"), 0o755); err != nil {
+			t.Fatalf("mkdir %s db: %v", db, err)
+		}
+	}
+	binDir := t.TempDir()
+	gcLogPath := writeDogFakeGC(t, binDir)
+	writeBackupAlertFakeDolt(t, binDir)
+
+	run := func(failed string) {
+		t.Helper()
+		_, err := runDogScriptCommand(t, "mol-dog-backup.sh", binDir, cityPath, dataDir,
+			"GC_BACKUP_DATABASES=prod,stage",
+			"GC_TEST_BACKUP_FAIL_DBS="+failed,
+		)
+		if err != nil {
+			t.Fatalf("backup run failed (%q): %v", failed, err)
+		}
+	}
+	readLog := func() string {
+		t.Helper()
+		data, err := os.ReadFile(gcLogPath)
+		if err != nil {
+			t.Fatalf("read gc log: %v", err)
+		}
+		return string(data)
+	}
+
+	run("prod")
+	if got := strings.Count(readLog(), "Dolt backup: 1/2 databases failed to sync"); got != 1 {
+		t.Fatalf("first failed backup alerts = %d, want 1", got)
+	}
+	run("prod")
+	if got := strings.Count(readLog(), "Dolt backup: 1/2 databases failed to sync"); got != 1 {
+		t.Fatalf("repeated failed backup alerts = %d, want 1", got)
+	}
+	run("prod stage")
+	if got := strings.Count(readLog(), "Dolt backup: 2/2 databases failed to sync"); got != 1 {
+		t.Fatalf("changed failed-db fingerprint alerts = %d, want 1", got)
+	}
+	run("")
+	if got := strings.Count(readLog(), "RECOVERY: Dolt backup sync recovered"); got != 1 {
+		t.Fatalf("backup recovery alerts = %d, want 1", got)
+	}
+	stateFile := filepath.Join(cityPath, ".gc", "runtime", "packs", "dolt", "backup-alert-state.json")
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Fatalf("backup alert state should reset after recovery; stat err=%v", err)
 	}
 }
 

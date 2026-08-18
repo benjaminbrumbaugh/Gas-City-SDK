@@ -31,6 +31,7 @@ import (
 // succeeds, feeds the change notification verbatim and nothing else.
 var (
 	_ ConditionalWriter                = (*CachingStore)(nil)
+	_ ReadyConditionalWriter           = (*CachingStore)(nil)
 	_ conditionalWritesModeCarrier     = (*CachingStore)(nil)
 	_ conditionalWriteCapabilityProber = (*CachingStore)(nil)
 )
@@ -130,6 +131,25 @@ func (c *CachingStore) UpdateIfMatch(id string, expectedRevision int64, opts Upd
 	// next read consults the backing. The refresh, when it succeeds, feeds
 	// the change notification only — verbatim, never overlaid.
 	fresh, refreshed := c.refreshBeadAfterWrite(id, "refresh bead after conditional update")
+	c.evictForConditionalWrite(id)
+	if refreshed {
+		c.notifyChange("bead.updated", fresh)
+	}
+	return nil
+}
+
+// UpdateIfReadyAndMatch forwards an atomic ready-and-revision fence to the
+// backing store, then uses the same cache eviction discipline as UpdateIfMatch.
+func (c *CachingStore) UpdateIfReadyAndMatch(id string, expectedRevision int64, opts UpdateOpts) error {
+	writer, ok := ReadyConditionalWriterFor(c.conditionalBacking())
+	if !ok {
+		return ErrConditionalWriteUnsupported
+	}
+	if err := writer.UpdateIfReadyAndMatch(id, expectedRevision, opts); err != nil {
+		c.applyConditionalWriteFailure(id, err)
+		return err
+	}
+	fresh, refreshed := c.refreshBeadAfterWrite(id, "refresh bead after conditional ready update")
 	c.evictForConditionalWrite(id)
 	if refreshed {
 		c.notifyChange("bead.updated", fresh)

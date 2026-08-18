@@ -42,9 +42,12 @@ const (
 // zero — consumers must treat that as "not measured", not "free".
 type Fact struct {
 	RunID     string `json:"run_id,omitempty"`     // groups facts of one execution
+	RunSource string `json:"run_source,omitempty"` // metadata source that resolved RunID
 	SessionID string `json:"session_id,omitempty"` // the session bead id: join key to manifold spend (EIA session_id) and recall transcripts
 	StepID    string `json:"step_id,omitempty"`    // the acting work bead id, if any
 	Worker    string `json:"worker,omitempty"`     // session name
+	AgentName string `json:"agent_name,omitempty"` // configured agent identity, when known
+	Template  string `json:"template,omitempty"`   // agent/session template, when known
 	City      string `json:"city,omitempty"`
 
 	Kind Kind `json:"kind"`
@@ -69,6 +72,7 @@ type Fact struct {
 	// UpstreamReqID is the provider response id (Anthropic message.id / OpenAI
 	// response.id) for model facts, or sessionID+awakeEpoch for compute facts.
 	UpstreamReqID  string `json:"upstream_req_id,omitempty"`
+	AwakeEpoch     string `json:"awake_epoch,omitempty"`     // provider-process/awake interval, when known
 	At             int64  `json:"at,omitempty"`              // unix millis, stamped by the emitter
 	IdempotencyKey string `json:"idempotency_key,omitempty"` // see ModelIdempotencyKey / ComputeIdempotencyKey
 }

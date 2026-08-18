@@ -844,6 +844,7 @@ func eventNameForTest(event string) string {
 type prStaticScopeFixture struct {
 	repoRoot           string
 	productionMakefile string
+	staticSelector     string
 	fakeLint           string
 	fakeGo             string
 	lintLog            string
@@ -863,6 +864,15 @@ func newPRStaticScopeFixture(t *testing.T, files map[string]string) prStaticScop
 	for name, content := range files {
 		writeTestFile(t, filepath.Join(repo, name), content)
 	}
+	selectorPath := filepath.Join(repoRoot(t), "scripts", "ci-static-select")
+	selector, err := os.ReadFile(selectorPath)
+	if err != nil {
+		t.Fatalf("read production static selector: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "scripts"), 0o755); err != nil {
+		t.Fatalf("create fixture scripts directory: %v", err)
+	}
+	writeExecutable(t, filepath.Join(repo, "scripts", "ci-static-select"), string(selector))
 
 	toolDir := t.TempDir()
 	lintLog := filepath.Join(toolDir, "golangci.calls")
@@ -897,6 +907,7 @@ exec "$STATIC_SCOPE_REAL_GO" "$@"
 	fixture := prStaticScopeFixture{
 		repoRoot:           repo,
 		productionMakefile: filepath.Join(repoRoot(t), "Makefile"),
+		staticSelector:     filepath.Join(repo, "scripts", "ci-static-select"),
 		fakeLint:           fakeLint,
 		fakeGo:             fakeGo,
 		lintLog:            lintLog,
@@ -937,6 +948,7 @@ func (f prStaticScopeFixture) runMakeTargetWithOptions(target, ref, goTool strin
 	cmd := makeCommand(
 		"--no-print-directory",
 		"-f", f.productionMakefile,
+		"CI_STATIC_SELECT="+f.staticSelector,
 		"GOLANGCI_LINT="+f.fakeLint,
 		"CI_STATIC_GO="+goTool,
 		"LINT_CHANGED_SCOPE=tracked",

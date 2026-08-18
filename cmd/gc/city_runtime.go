@@ -27,6 +27,7 @@ import (
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/nudgequeue"
 	"github.com/gastownhall/gascity/internal/orders"
+	"github.com/gastownhall/gascity/internal/routingdecision"
 	"github.com/gastownhall/gascity/internal/runtime"
 	sessionauto "github.com/gastownhall/gascity/internal/runtime/auto"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
@@ -131,6 +132,10 @@ type CityRuntime struct {
 	orderRescanEnabled      bool
 	orderRescanLast         time.Time
 	trace                   *sessionReconcilerTraceManager
+	routingDecisionStore    *routingdecision.Store
+	routingDecisionVerifier *routingdecision.Verifier // nil is intentional default-deny
+	routingDecisionNowFn    func() time.Time
+	routingDecisionService  *cityRoutingDecisionService
 
 	// routeRecovery is the route-repair lane: an event-fed delta pass in the
 	// tick and a cadenced authoritative scan behind it. Created on first use so
@@ -473,6 +478,7 @@ func newCityRuntime(p CityRuntimeParams) (*CityRuntime, error) {
 		stdout:            p.Stdout,
 		stderr:            p.Stderr,
 	}
+	initializeRoutingDecisionService(cr)
 	cr.svc = workspacesvc.NewManager(&serviceRuntime{cr: cr})
 	if err := cr.svc.Reload(); err != nil {
 		fmt.Fprintf(cr.stderr, "%s: service init: %v\n", cr.logPrefix, err) //nolint:errcheck // best-effort stderr
@@ -491,6 +497,12 @@ func newCityRuntime(p CityRuntimeParams) (*CityRuntime, error) {
 // accessors read it under RLock.
 func (cr *CityRuntime) setControllerState(cs *controllerState) {
 	cr.cs = cs
+	if cs == nil {
+		return
+	}
+	cs.mu.Lock()
+	cs.routingDecisionService = cr.routingDecisionService
+	cs.mu.Unlock()
 }
 
 // crashTracker returns the crash tracker for API server wiring.
@@ -664,6 +676,18 @@ func (cr *CityRuntime) run(ctx context.Context) {
 		cr.dispatchOrders(ctx, cityRoot)
 	}, "startup-orders")
 	logPhaseElapsed("startup-orders", startupOrdersStart)
+	if ctx.Err() != nil {
+		return
+	}
+
+	// Admit explicitly approved routing decisions before carried-route recovery and
+	// session reconciliation. This is metadata admission only: demand/reconciler
+	// code remains the sole path that can create or start a worker session.
+	startupRoutingDecisionStart := time.Now()
+	cr.safeTick(func() {
+		cr.reconcileRoutingDecisionsAndLog()
+	}, "startup-routing-decision-admission")
+	logPhaseElapsed("startup-routing-decision-admission", startupRoutingDecisionStart)
 	if ctx.Err() != nil {
 		return
 	}
@@ -1233,6 +1257,16 @@ func (cr *CityRuntime) tick(
 	phaseStart = time.Now()
 	cr.dispatchOrders(ctx, cityRoot)
 	recordPhase(TraceSiteOrderDispatch, "dispatch_orders", phaseStart, nil)
+	if ctx.Err() != nil {
+		return
+	}
+
+	// Controller-owned admission turns an approved, validated decision into the
+	// normal gc.routed_to demand signal. It cannot start, stop, or migrate a
+	// session; the existing reconciliation path remains lifecycle authority.
+	phaseStart = time.Now()
+	cr.reconcileRoutingDecisionsAndLog()
+	recordPhase(TraceSiteControllerTickPhase, "apply_approved_routing_decisions", phaseStart, nil)
 	if ctx.Err() != nil {
 		return
 	}
@@ -3969,6 +4003,11 @@ func (cr *CityRuntime) shutdown() {
 		}()
 		asyncStartsDrained := cr.waitForAsyncStarts()
 		cr.waitForAsyncStops()
+		if cr.routingDecisionService != nil {
+			cr.routingDecisionService.Close()
+			cr.routingDecisionStore = nil
+			cr.routingDecisionVerifier = nil
+		}
 		preserveSessions := cr.preserveSessionsShutdown.Load()
 		if preserveSessions {
 			cr.recordPreservedShutdownTrace()

@@ -625,13 +625,10 @@ type statusWorkResult struct {
 // by design (see cacheColdRigs below), which is the opposite of the graph leg's
 // fail-loud contract, so wiring one in is its own slice, not a rider.
 //
-// Rigs in cacheColdRigs are asked for persisted counts but not for ready work.
-// Their store runs no background cache refresh, so the cache-only Ready
-// projection is guaranteed to decline with ErrCacheUnavailable — reporting that
-// as a partial error made every city with a suspended rig permanently partial,
-// which greys out unrelated status tiles in the dashboard. Skipping the read
-// changes no count: the failing read already contributed zero ready work.
-func (s *Server) statusWorkCounts(ctx context.Context, cacheColdRigs map[string]bool) (workCounts, []string) {
+// Rigs in suspendedRigStores are omitted entirely. A suspended rig may be under
+// an independent migration or cutover owner, so status must not open or query
+// that store while the city continues to report its own active scopes.
+func (s *Server) statusWorkCounts(ctx context.Context, suspendedRigStores map[string]bool) (workCounts, []string) {
 	stores := s.state.BeadStores()
 	// sortedRigNames deduplicates rigs sharing one store instance, so each
 	// store's persisted statuses are counted exactly once.
@@ -652,11 +649,14 @@ func (s *Server) statusWorkCounts(ctx context.Context, cacheColdRigs map[string]
 	}
 	cityName := s.state.CityName()
 	for _, rigName := range rigNames {
+		if suspendedRigStores[rigName] {
+			continue
+		}
 		queries = append(queries, workQuery{
 			label:         "rig " + rigName,
 			store:         stores[rigName],
 			includeStored: true,
-			includeReady:  rigName != cityName && !cacheColdRigs[rigName],
+			includeReady:  rigName != cityName,
 		})
 	}
 

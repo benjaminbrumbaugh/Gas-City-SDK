@@ -364,6 +364,13 @@ func validateImportRootPath(path string) (string, error) {
 	return "", fmt.Errorf("not a city or pack directory: %s (no city.toml, .gc/, or pack.toml found)", abs)
 }
 
+func canonicalImportRoot(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
+}
+
 func findPackRoot(dir string) (string, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -371,7 +378,7 @@ func findPackRoot(dir string) (string, error) {
 	}
 	for {
 		if packExists(abs) {
-			return abs, nil
+			return canonicalImportRoot(abs), nil
 		}
 		parent := filepath.Dir(abs)
 		if parent == abs {
@@ -395,7 +402,10 @@ func findNearestImportRoot(dir string) (string, bool, error) {
 	}
 	ceilings := implicitCityDiscoveryCeilings()
 	for {
-		if packExists(abs) || citylayout.HasCityConfig(abs) {
+		if packExists(abs) {
+			return canonicalImportRoot(abs), true, nil
+		}
+		if citylayout.HasCityConfig(abs) {
 			return abs, true, nil
 		}
 		if isCityDiscoveryCeiling(abs, ceilings) {

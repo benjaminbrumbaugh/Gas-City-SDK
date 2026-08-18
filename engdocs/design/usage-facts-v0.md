@@ -15,11 +15,14 @@ The data model and seams below were stress-tested against the real tree; the
 A new package `internal/usage` exposing a usage fact and a narrow write-only sink:
 
 ```go
-type UsageFact struct {
-	RunID     string // groups facts of one execution (see Run identity). A bead id, never frozen on the session.
-	SessionID string // the session bead id. Join key to manifold spend (EIA session_id) + recall transcripts. omitempty.
-	StepID    string // reserved for per-step attribution; unset in v0 — model/compute facts are run-level. omitempty.
-	Worker    string // session name
+	type UsageFact struct {
+		RunID     string // groups facts of one execution (see Run identity). A bead id, never frozen on the session.
+		RunSource string // workflow_id|molecule_id|root_bead_id|self_bead_id|session_fallback
+		SessionID string // the session bead id. Join key to manifold spend (EIA session_id) + recall transcripts. omitempty.
+		StepID    string // reserved for per-step attribution; unset in v0 — model/compute facts are run-level. omitempty.
+		Worker    string // session name
+		AgentName string // configured agent identity, when known
+		Template  string // agent/session template, when known
 	City      string
 
 	Kind string // "model" | "compute"
@@ -38,7 +41,8 @@ type UsageFact struct {
 	Provider       string // "anthropic"|"codex"|… (extractor shape differs per family)
 	UpstreamReqID  string // provider response id: Anthropic message.id / OpenAI response.id (model);
 	                       // sessionID+awakeEpoch (compute); CONTENT-HASH for codex (NOT positional codex-event-<idx>).
-	At             int64  // unix millis, stamped by emitter
+		AwakeEpoch     string // immutable provider-process/awake interval, when known
+		At             int64  // unix millis, stamped by emitter
 	IdempotencyKey string // natural key per kind (below) — gives the sink real dedup
 }
 
@@ -150,6 +154,32 @@ dropped by request, and `gc costs` shows nothing local. Aggregating
 of the configured sink) remains a future option; it depends only on the
 `WorkerOperation` payload's `CostUSDEstimate` landing (today "always absent"),
 **not** on the OTel instruments.
+
+The command's grouping key is still `run_id`, but its projection is explicit
+about what that key means. `identity_source` identifies the winning resolver
+metadata (`workflow_id`, `molecule_id`, `gc.root_bead_id`, the acting bead, or
+the session fallback). Workflow/molecule/root sources are `execution_run`;
+self-bead facts whose `RunID` equals their `SessionID` and carry a worker name
+are conservatively labeled `logical_session`; a session fallback is also a
+`logical_session` and may span many provider-process generations. Legacy facts without `RunSource` are labeled
+`legacy_fact` and receive only the conservative session inference supported by
+their existing `RunID`, `SessionID`, and `Worker` fields; they are never called a
+current run by implication. `agent_name` and `template` identify the configured
+agent/template when the emitter knew them. `awake_intervals_observed` exposes
+distinct provider-process/awake epochs; older compute facts recover the epoch
+from their existing `SessionID:awake_started_at` request identity, while missing
+model provenance remains unknown.
+
+Each row and the report include `first_observed_at`, `last_observed_at`, and
+`observed_facts`. Human output names the cache-read column
+`CACHE_HITS_TOKENS`; it is token volume, not a hit-event count. `gc costs --json`
+returns schema `1` with `window_kind: all_recorded_history`, `rows`, and a
+separate `total` object. This is the authoritative boundedness statement for
+the command: the current default reads all durable history and does not reset,
+delete, or rotate `.gc/usage.jsonl`. There is no automatic usage retention
+setting. A future bounded display window or archival/rotation policy must be a
+separate explicit design that preserves historical accounting and labels any
+partial result; no such policy is silently implied here.
 
 ## Honest limits
 

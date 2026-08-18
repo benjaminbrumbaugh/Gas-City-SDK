@@ -15,6 +15,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/coordclass"
 	"github.com/gastownhall/gascity/internal/events"
+	"github.com/gastownhall/gascity/internal/rollout/gate"
 	"github.com/gastownhall/gascity/internal/storeref"
 )
 
@@ -897,5 +898,71 @@ func TestRouteRecoveryDeltaCountsCandidatesItCouldNotResolve(t *testing.T) {
 	}
 	if _, present := clean.fields()["dropped"]; present {
 		t.Fatalf("clean delta trace fields = %v, want no dropped key", clean.fields())
+	}
+}
+
+func TestRouteRecoveryBackstopPassForwardsDecisionAuthorization(t *testing.T) {
+	const (
+		beadID = "marked-backstop"
+		pool   = "gascity/gastown.polecat"
+	)
+	raw := beads.NewMemStoreFrom(0, []beads.Bead{{
+		ID: beadID, Title: "work", Type: "task", Status: "open", ClaimFence: 7,
+		Metadata: map[string]string{
+			beadmeta.RunTargetMetadataKey:                 pool,
+			beadmeta.RoutingDecisionIDMetadataKey:         "decision-backstop",
+			beadmeta.RoutingDecisionClaimFenceMetadataKey: "7",
+		},
+	}}, nil)
+	opened, err := beads.OpenStoreAtForCity(context.Background(), beads.StoreOpenOptions{
+		ScopeRoot:         "/route-recovery-auth-test",
+		Provider:          "file",
+		ConditionalWrites: gate.Require,
+		OpenFileStore:     func() (beads.Store, error) { return raw, nil },
+	})
+	if err != nil {
+		t.Fatalf("OpenStoreAtForCity: %v", err)
+	}
+	topo := assembleResidencyTopology(
+		&config.City{Rigs: []config.Rig{{Name: "gascity", Path: "rigs/gascity"}}},
+		nil,
+		map[string]beads.Store{"gascity": opened.Store},
+		nil,
+		nil,
+	)
+	plan, err := storeref.Plan(storeref.RoutedWork{}, topo)
+	if err != nil {
+		t.Fatalf("Plan(RoutedWork): %v", err)
+	}
+
+	seenRig := ""
+	denied := newRouteRecoveryLane().backstopPassWithAuthorization(plan, backstopReasonCadence, func(rig string, bead beads.Bead) bool {
+		seenRig = rig
+		return false
+	})
+	if denied.restored != 0 {
+		t.Fatalf("denied backstop restored=%d, want 0", denied.restored)
+	}
+	if seenRig != "gascity" {
+		t.Fatalf("denied authorization rig=%q, want gascity", seenRig)
+	}
+
+	seenRig = ""
+	allowed := newRouteRecoveryLane().backstopPassWithAuthorization(plan, backstopReasonCadence, func(rig string, bead beads.Bead) bool {
+		seenRig = rig
+		return bead.ID == beadID
+	})
+	if allowed.restored != 1 {
+		t.Fatalf("allowed backstop restored=%d, want 1", allowed.restored)
+	}
+	if seenRig != "gascity" {
+		t.Fatalf("allowed authorization rig=%q, want gascity", seenRig)
+	}
+	got, err := opened.Store.Get(beadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Metadata[beadmeta.RoutedToMetadataKey] != pool {
+		t.Fatalf("gc.routed_to=%q, want %q", got.Metadata[beadmeta.RoutedToMetadataKey], pool)
 	}
 }

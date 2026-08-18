@@ -212,7 +212,15 @@
               "storage-status",
               "ready",
               "storage-recover-stranded",
-              "beads-metadata-cas"
+              "beads-metadata-cas",
+              "routing-decisions",
+              "routing-eligible",
+              "routing-ingest",
+              "routing-status",
+              "routing-targets",
+              "hca-list",
+              "hca-request",
+              "hca-show"
             ]
           },
           "event_id": {

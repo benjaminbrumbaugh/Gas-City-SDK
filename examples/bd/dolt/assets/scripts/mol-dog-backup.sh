@@ -11,6 +11,35 @@ PACK_DIR="${GC_PACK_DIR:-$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")/../.." 
 . "$PACK_DIR/assets/scripts/runtime.sh"
 . "$PACK_DIR/assets/scripts/_notify.sh"
 
+resolve_alert_state_script() {
+    local candidate
+    local system_packs="${GC_SYSTEM_PACKS_DIR:-$GC_CITY_PATH/.gc/system/packs}"
+
+    if [ -n "${GC_ALERT_STATE_SCRIPT:-}" ] && [ -f "$GC_ALERT_STATE_SCRIPT" ]; then
+        printf '%s\n' "$GC_ALERT_STATE_SCRIPT"
+        return 0
+    fi
+    for candidate in \
+        "$system_packs/core/assets/scripts/alert-state.sh" \
+        "$PACK_DIR/../core/assets/scripts/alert-state.sh" \
+        "$PACK_DIR/../../../internal/bootstrap/packs/core/assets/scripts/alert-state.sh"; do
+        if [ -f "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+BACKUP_ALERT_STATE_SCRIPT="$(resolve_alert_state_script || true)"
+if [ -n "$BACKUP_ALERT_STATE_SCRIPT" ]; then
+    # shellcheck disable=SC1090
+    . "$BACKUP_ALERT_STATE_SCRIPT"
+else
+    echo "backup: alert-state helper unavailable; refusing unbounded alert delivery" >&2
+    exit 1
+fi
+
 PORT="$GC_DOLT_PORT"
 HOST="${GC_DOLT_HOST:-127.0.0.1}"
 USER="${GC_DOLT_USER:-root}"
@@ -20,6 +49,8 @@ SYSTEM_DBS="^(information_schema|mysql|dolt_cluster|__gc_probe|performance_schem
 MIN_DOLT_BACKUP_VERSION="2.1.0"
 BACKUP_LOCK_FILE="${GC_DOLT_BACKUP_LOCK_FILE:-$GC_CITY_PATH/.gc/runtime/packs/dolt/backup-sync.lock}"
 BACKUP_LOCK_WAIT_SECONDS="${GC_DOLT_BACKUP_LOCK_WAIT_SECONDS:-5}"
+BACKUP_ALERT_STATE_FILE="${GC_BACKUP_ALERT_STATE_FILE:-$PACK_STATE_DIR/backup-alert-state.json}"
+BACKUP_ALERT_TIMEOUT_SECONDS="${GC_BACKUP_ALERT_TIMEOUT_SECONDS:-5}"
 
 dolt_sql() {
     DOLT_CLI_PASSWORD="${GC_DOLT_PASSWORD:-}" \
@@ -73,16 +104,81 @@ append_failed_db() {
     fi
 }
 
+backup_failure_fingerprint() {
+    local normalized_dbs
+    local normalized
+
+    normalized_dbs=$(printf '%s\n' "$FAILED_DBS" \
+        | tr ',' '\n' \
+        | sed 's/^ //' \
+        | LC_ALL=C sort \
+        | awk 'BEGIN { sep = "" } { printf "%s%s", sep, $0; sep = ", " } END { print "" }')
+    normalized=$(printf 'failed-count=%s;failed-dbs=%s' "$FAILED_COUNT" "$normalized_dbs" \
+        | sed -E 's/[[:space:]]+/ /g')
+    alert_state_fingerprint "backup-failure|$normalized"
+}
+
+backup_alert_send() {
+    local subject=""
+    local message=""
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --subject)
+                subject="$2"
+                shift 2
+                ;;
+            --message)
+                message="$2"
+                shift 2
+                ;;
+            *)
+                return 2
+                ;;
+        esac
+    done
+    dolt_escalate "$subject" "$message"
+}
+
+backup_alert_failure() {
+    local fingerprint="$1"
+    local subject="$2"
+    local message="$3"
+
+    alert_state_failure \
+        "$BACKUP_ALERT_STATE_FILE" \
+        "$fingerprint" \
+        "$BACKUP_ALERT_TIMEOUT_SECONDS" \
+        "$subject" \
+        "$message" \
+        "backup_alert_send"
+    if [ "$ALERT_STATE_DELIVERY" != "delivered" ] && [ "$ALERT_STATE_RESULT" != "suppressed" ]; then
+        echo "backup: alert delivery failed or timed out" >&2
+    fi
+}
+
+backup_alert_recovery() {
+    alert_state_recovery \
+        "$BACKUP_ALERT_STATE_FILE" \
+        "$BACKUP_ALERT_TIMEOUT_SECONDS" \
+        "RECOVERY: Dolt backup sync recovered [MEDIUM]" \
+        "Dolt backup sync completed without failed databases." \
+        "backup_alert_send"
+    if [ "$ALERT_STATE_DELIVERY" != "delivered" ] && [ "$ALERT_STATE_RESULT" != "none" ]; then
+        echo "backup: recovery alert delivery failed or timed out" >&2
+    fi
+}
+
 acquire_backup_lock() {
     case "$BACKUP_LOCK_WAIT_SECONDS" in
         ''|*[!0-9]*) BACKUP_LOCK_WAIT_SECONDS=5 ;;
     esac
     if ! command -v flock >/dev/null 2>&1; then
         SUMMARY="backup — flock-missing"
-        dolt_escalate \
+        backup_alert_failure \
+            "backup-flock-missing" \
             "Dolt backup: flock missing for backup sync [HIGH]" \
-            "Skipping backup sync because flock is unavailable; concurrent dolt backup sync can overload the shared sql-server." \
-            2>/dev/null || true
+            "Skipping backup sync because flock is unavailable; concurrent dolt backup sync can overload the shared sql-server."
         dolt_notify_done "$SUMMARY"
         echo "backup: $SUMMARY"
         exit 1
@@ -102,10 +198,10 @@ acquire_backup_lock() {
 
 DOLT_VERSION="$(dolt version 2>/dev/null | awk 'NR == 1 {print $NF}' || true)"
 if ! dolt_version_at_least "$DOLT_VERSION" "$MIN_DOLT_BACKUP_VERSION"; then
-    dolt_escalate \
+    backup_alert_failure \
+        "backup-dolt-too-old|version=${DOLT_VERSION:-unknown}|required=$MIN_DOLT_BACKUP_VERSION" \
         "Dolt backup: dolt-too-old for backup sync [HIGH]" \
-        "Skipping backup sync: dolt version ${DOLT_VERSION:-unknown} is below required ${MIN_DOLT_BACKUP_VERSION}. Gas City requires this managed Dolt floor before backup sync." \
-        2>/dev/null || true
+        "Skipping backup sync: dolt version ${DOLT_VERSION:-unknown} is below required ${MIN_DOLT_BACKUP_VERSION}. Gas City requires this managed Dolt floor before backup sync."
     SUMMARY="backup — dolt-too-old: ${DOLT_VERSION:-unknown}, required: $MIN_DOLT_BACKUP_VERSION"
     dolt_notify_done "$SUMMARY"
     echo "backup: $SUMMARY"
@@ -137,6 +233,7 @@ else
 fi
 
 if [ -z "$DATABASES" ]; then
+    backup_alert_recovery
     echo "backup: no databases found, skipping"
     exit 0
 fi
@@ -203,10 +300,12 @@ fi
 # --- Step 4: Report ---
 
 if [ "$FAILED_COUNT" -gt 0 ]; then
-    dolt_escalate \
+    backup_alert_failure \
+        "$(backup_failure_fingerprint)" \
         "Dolt backup: $FAILED_COUNT/$TOTAL databases failed to sync [MEDIUM]" \
-        "Failed databases:$FAILED_DBS" \
-        2>/dev/null || true
+        "Failed databases:$FAILED_DBS"
+else
+    backup_alert_recovery
 fi
 
 SUMMARY="backup — synced: $SYNCED/$TOTAL, offsite: $OFFSITE_STATUS"
