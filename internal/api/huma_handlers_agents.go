@@ -49,6 +49,12 @@ func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput)
 		}
 	}
 
+	// One in_progress snapshot per store, taken before the loop and shared by
+	// every row. Resolving each row's identities with their own store reads
+	// made this handler cost O(agents x identities x stores) reads — see
+	// activeBeadIndex for why the read-model cache does not absorb that.
+	activeBeads := s.newActiveBeadIndex("", false)
+
 	var agents []agentResponse
 	for _, a := range cfg.Agents {
 		// Provenance is a property of the declared agent, shared by every
@@ -122,7 +128,7 @@ func (s *Server) humaHandleAgentList(ctx context.Context, input *AgentListInput)
 				}
 			}
 
-			resp.ActiveBead = s.findActiveBeadForAssignees(ea.rig, sessionID, sessionName, ea.qualifiedName)
+			resp.ActiveBead = activeBeads.lookup(ea.rig, sessionID, sessionName, ea.qualifiedName)
 			quarantined := s.state.IsQuarantined(sessionName)
 			resp.State = computeAgentState(suspended, quarantined, running, resp.ActiveBead, lastActivity)
 
