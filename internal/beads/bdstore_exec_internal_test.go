@@ -97,6 +97,36 @@ func TestExecCommandRunnerWithEnvContextTimeoutReportsCallerDeadline(t *testing.
 	}
 }
 
+func TestExecCommandRunnerWithEnvContextBoundsConcurrentBDChildren(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "started")
+	fakeBD := filepath.Join(t.TempDir(), "bd")
+	if err := os.WriteFile(fakeBD, []byte("#!/bin/sh\nprintf started > \"$BD_TEST_MARKER\"\nsleep 30\n"), 0o755); err != nil {
+		t.Fatalf("write fake bd: %v", err)
+	}
+
+	oldSlots := bdExecSlots
+	bdExecSlots = make(chan struct{}, 1)
+	bdExecSlots <- struct{}{}
+	t.Cleanup(func() { bdExecSlots = oldSlots })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := ExecCommandRunnerWithEnvContext(ctx, map[string]string{
+		"BD_BIN":         fakeBD,
+		"BD_TEST_MARKER": marker,
+	})(t.TempDir(), "bd", "list")
+	if err == nil {
+		t.Fatal("runner unexpectedly succeeded while the command slot was saturated")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("runner waited %s for a saturated command slot; want caller deadline", elapsed)
+	}
+	if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("fake bd launched despite saturated slot; stat error = %v", statErr)
+	}
+}
+
 func TestBDCommandTimeoutForReadCommands(t *testing.T) {
 	if got := bdCommandTimeoutFor("bd", []string{"list", "--json"}); got != bdReadCommandTimeout {
 		t.Fatalf("bd list timeout = %s, want %s", got, bdReadCommandTimeout)
