@@ -62,7 +62,7 @@ Fork-specific changes stay on the fork's history. Upstream changes are fetched a
 | `Gas-City-Dashboard/` | Separate Python operational dashboard and lifecycle Hub; published front door is `http://localhost:8400/`. |
 | `~/.local/bin/gc` | Preferred installed runtime binary on this machine. |
 | `/opt/homebrew/bin/gc` | Optional Homebrew-packaged alternative; not a second supervisor and not additive to the custom binary. |
-| `~/go/bin/gc` | Another build output. It must not be selected accidentally for production or long-lived workers. |
+| `~/go/bin/gc` | Compatibility path; keep it as a symlink to `~/.local/bin/gc`, not as an independent runtime build. |
 | `Gas-City-SDK/gc` | A checkout-local build artifact, not the canonical installed runtime. |
 
 A city is managed by a `gc` binary; it is not a binary built inside the city repository. Do not launch a supervisor from every checkout that happens to contain a `gc` artifact.
@@ -108,6 +108,23 @@ brew install icu4c
 
 Do not use a bare ad-hoc `go build` as the production provenance step when `make build` is available. The Makefile owns version metadata and the self-contained build checks.
 
+### Canonical install path
+
+This fork intentionally defaults `make install` to `~/.local/bin`, the stable
+runtime path used by the live supervisor. `INSTALL_DIR` can be overridden for a
+separate build artifact, but do not use the default GOPATH install as the
+production path.
+
+Keep the compatibility path aligned after promotion:
+
+```bash
+ln -sfn "$HOME/.local/bin/gc" "$HOME/go/bin/gc"
+test "$(realpath "$HOME/go/bin/gc")" = "$(realpath "$HOME/.local/bin/gc")"
+```
+
+This symlink does not interact with Homebrew: Homebrew owns `/opt/homebrew/bin`
+and its Cellar, while `~/go/bin` belongs to the Go user workspace.
+
 ### Promote the reviewed build
 
 Promotion is an operational action, not a side effect of editing source:
@@ -119,7 +136,7 @@ gc supervisor install
 gc supervisor status --json
 ```
 
-`make install` installs the built executable into the configured Go binary directory and maintains the user's stable `~/.local/bin/gc` path where applicable. `gc supervisor install` writes/loads the macOS launchd service and starts the supervisor from that installed path. Treat it as a controlled supervisor lifecycle operation: verify the current supervisor, active sessions, and rollback binary before using it.
+`make install` now defaults to `~/.local/bin/gc` and does not create a second GOPATH runtime binary. `gc supervisor install` writes/loads the macOS launchd service and starts the supervisor from that installed path. Treat it as a controlled supervisor lifecycle operation: verify the current supervisor, active sessions, and rollback binary before using it.
 
 After promotion, verify the actual running executable, not only the source checkout:
 

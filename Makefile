@@ -10,7 +10,7 @@ GOLANGCI_LINT := $(BIN_DIR)/golangci-lint
 
 BINARY     := gc
 BUILD_DIR  := bin
-INSTALL_DIR := $(BIN_DIR)
+INSTALL_DIR ?= $(HOME)/.local/bin
 
 # Version metadata injected via ldflags. These run git in the build directory,
 # so they resolve a worktree's `.git` gitdir pointer and describe the checkout
@@ -141,7 +141,8 @@ ifneq ($(_NIX_ICU_DEV),)
 		echo "OK: $$bin self-contained (RUNPATH present + clean-env boot passes)"
 endif
 
-## install: build and install gc to GOPATH/bin (same location as go install)
+## install: build and install gc to the canonical user runtime path
+## Override INSTALL_DIR explicitly only when building a separate artifact.
 install: check-self-contained
 	@mkdir -p $(INSTALL_DIR)
 	@set -e; \
