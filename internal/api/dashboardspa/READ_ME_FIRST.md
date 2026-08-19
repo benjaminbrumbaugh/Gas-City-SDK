@@ -16,6 +16,6 @@ Live front door:
 
 Destination:
 
-`/Users/benjaminbrumbaugh/Documents/Gas-City-Dashboard`
+`/Users/benjaminbrumbaugh/Documents/Gas City/Gas-City-Dashboard`
 
 Do not copy features from this embedded SPA into the owned dashboard, and do not use this directory as the cutover source. Upstream may still compile or serve it until the embedded dashboard is disabled with the supported Gas City configuration.
