@@ -24,6 +24,28 @@ func stubDashboardOpen(t *testing.T) *string {
 	return &opened
 }
 
+func TestRunDashboardNoticeSPADisabledDoesNotAdvertiseURL(t *testing.T) {
+	configureIsolatedRuntimeEnv(t)
+	t.Setenv("GC_SUPERVISOR_DASHBOARD", "")
+	t.Setenv("GC_SUPERVISOR_DASHBOARD_SPA", "0")
+	t.Chdir(t.TempDir())
+	opened := stubDashboardOpen(t)
+
+	var stdout bytes.Buffer
+	if err := runDashboardNotice("", false, &stdout, io.Discard); err != nil {
+		t.Fatalf("runDashboardNotice() error: %v", err)
+	}
+	if *opened != "" {
+		t.Fatalf("opened URL = %q, want no browser launch with SPA disabled", *opened)
+	}
+	if strings.Contains(stdout.String(), "http://") || strings.Contains(stdout.String(), "https://") {
+		t.Fatalf("SPA-disabled notice advertised a dead URL: %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "GC_SUPERVISOR_DASHBOARD_SPA=1") {
+		t.Fatalf("SPA-disabled notice = %q, want manual-enable guidance", stdout.String())
+	}
+}
+
 func TestRunDashboardNoticePrintsSupervisorURL(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
 	t.Chdir(t.TempDir())

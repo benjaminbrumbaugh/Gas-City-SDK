@@ -218,6 +218,23 @@ func TestAttachDashboardDisabledLeavesNoDashboardBase(t *testing.T) {
 	if got := mux.DashboardBaseURL(); got != "" {
 		t.Fatalf("DashboardBaseURL = %q, want empty when the dashboard is disabled", got)
 	}
+
+	for _, path := range []string{"/", "/api/health/system"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Host = "127.0.0.1:8372"
+		mux.Handler().ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("GET %s status = %d, want 404 with dashboard plane disabled", path, recorder.Code)
+		}
+	}
+	typedHealth := httptest.NewRecorder()
+	typedRequest := httptest.NewRequest(http.MethodGet, "/health", nil)
+	typedRequest.Host = "127.0.0.1:8372"
+	mux.Handler().ServeHTTP(typedHealth, typedRequest)
+	if typedHealth.Code != http.StatusOK {
+		t.Fatalf("GET /health status = %d, want 200 with dashboard plane disabled", typedHealth.Code)
+	}
 }
 
 func TestAttachDashboardSPADisabledKeepsAPIPlane(t *testing.T) {
@@ -249,6 +266,14 @@ func TestAttachDashboardSPADisabledKeepsAPIPlane(t *testing.T) {
 	mux.Handler().ServeHTTP(apiHealth, apiRequest)
 	if apiHealth.Code == http.StatusNotFound {
 		t.Fatal("SPA-only disable removed /api/health/system")
+	}
+
+	disallowedHost := httptest.NewRecorder()
+	disallowedRequest := httptest.NewRequest(http.MethodGet, "/api/health/system", nil)
+	disallowedRequest.Host = "attacker.example"
+	mux.Handler().ServeHTTP(disallowedHost, disallowedRequest)
+	if disallowedHost.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("disallowed Host status = %d, want 421", disallowedHost.Code)
 	}
 }
 

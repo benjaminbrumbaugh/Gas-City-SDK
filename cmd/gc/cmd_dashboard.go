@@ -88,6 +88,15 @@ func bindDashboardFlags(cmd *cobra.Command, apiURL *string, noOpen *bool) {
 // never errors the command. The not-running path (URL unresolvable) prints the
 // start hint and never opens a (dead) URL.
 func runDashboardNotice(apiURLOverride string, noOpen bool, stdout, stderr io.Writer) error {
+	if !dashboardEnabled() {
+		fmt.Fprintln(stdout, "The supervisor dashboard support plane is disabled. Set GC_SUPERVISOR_DASHBOARD=1 and restart the supervisor before using this command.") //nolint:errcheck // best-effort stdout
+		return nil
+	}
+	if !dashboardSPAEnabled() {
+		fmt.Fprintln(stdout, "The bundled dashboard SPA is disabled. Set GC_SUPERVISOR_DASHBOARD_SPA=1 and restart the supervisor to enable it temporarily.") //nolint:errcheck // best-effort stdout
+		return nil
+	}
+
 	// A city-resolution error (not in a city, or an unreadable city.toml) must
 	// not abort: the supervisor may be running regardless of the current dir.
 	cityPath, cfg, err := resolveDashboardContext(stderr)
