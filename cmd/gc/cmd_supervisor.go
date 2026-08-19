@@ -1392,15 +1392,16 @@ func runSupervisor(stdout, stderr io.Writer) int {
 		warnUnauthenticatedReadPlane(stderr, bind, grantGated, readAuthInstalled)
 	}
 
-	// Host the embedded dashboard SPA + host-side /api plane on the same
-	// listener (same-origin), so the supervisor serves the dashboard for all
-	// registered cities. Disabled with GC_SUPERVISOR_DASHBOARD=0.
+	// Host the dashboard support plane on the supervisor listener. The
+	// host-side /api plane remains available when only the bundled SPA is
+	// disabled with GC_SUPERVISOR_DASHBOARD_SPA=0; the broader
+	// GC_SUPERVISOR_DASHBOARD=0 switch disables both surfaces.
 	dashboardPlane, dashErr := attachDashboard(apiMux, registry, readOnly, bind, port)
 	if dashErr != nil {
 		fmt.Fprintf(stderr, "gc supervisor: dashboard: %v\n", dashErr) //nolint:errcheck
 		return 1
 	}
-	dashboardMounted := dashboardPlane != nil
+	dashboardMounted := dashboardPlane != nil && dashboardSPAEnabled()
 	if dashboardPlane == nil {
 		// The typed run census is available even when the embedded dashboard is
 		// disabled. Keep its incremental plane unmounted in that posture.

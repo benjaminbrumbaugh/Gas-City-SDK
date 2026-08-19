@@ -18,4 +18,4 @@ Destination:
 
 `/Users/benjaminbrumbaugh/Documents/Gas City/Gas-City-Dashboard`
 
-Do not copy features from this embedded SPA into the owned dashboard, and do not use this directory as the cutover source. Upstream may still compile or serve it until the embedded dashboard is disabled with the supported Gas City configuration.
+Do not copy features from this embedded SPA into the owned dashboard, and do not use this directory as the cutover source. Set `GC_SUPERVISOR_DASHBOARD_SPA=0` in the supervisor environment to keep the host-side `/api` support plane without serving this UI. Set it to `1` and restart only when this bundled SPA is needed temporarily. The broader `GC_SUPERVISOR_DASHBOARD=0` switch also removes the `/api` plane and is therefore not appropriate while the owned dashboard consumes that plane.

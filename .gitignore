@@ -27,6 +27,7 @@ internal/api/dashboardspa/web/frontend/.playwright/
 /bd
 /br
 /tmp/
+/temp/
 .runtime/
 *.test
 **/.beads/*

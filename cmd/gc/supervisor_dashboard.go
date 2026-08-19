@@ -51,30 +51,41 @@ func (d dashboardCityResolver) Cities() []dashboardbff.CityRef {
 	return refs
 }
 
-// dashboardEnabled reports whether the supervisor hosts the embedded dashboard.
-// On by default; set GC_SUPERVISOR_DASHBOARD=0 to disable (revert to a
-// typed-API-only supervisor with no static or /api surface).
+// dashboardEnabled reports whether the supervisor hosts the dashboard support
+// plane. On by default; set GC_SUPERVISOR_DASHBOARD=0 to disable both the
+// embedded SPA and the host-side /api surface.
 func dashboardEnabled() bool {
 	return os.Getenv("GC_SUPERVISOR_DASHBOARD") != "0"
 }
 
-// attachDashboard mounts the embedded SPA and the host-side /api plane onto the
-// supervisor mux so the supervisor serves the dashboard same-origin. It returns
-// the plane (whose samplers the caller must Start/Stop) or nil when the
-// dashboard is disabled. bind/port are the supervisor's own listener address;
-// the host-side samplers read the supervisor's /v0 API back over loopback, so
-// the plane must know where to reach it. Operator identity is read from env with
-// neutral defaults applied inside the plane (ZERO hardcoded roles).
+// dashboardSPAEnabled reports whether the supervisor mounts the embedded SPA.
+// On by default; set GC_SUPERVISOR_DASHBOARD_SPA=0 to keep the host-side /api
+// plane available without serving the bundled UI or advertising dashboard links.
+func dashboardSPAEnabled() bool {
+	return os.Getenv("GC_SUPERVISOR_DASHBOARD_SPA") != "0"
+}
+
+// attachDashboard mounts the host-side /api plane and, unless separately
+// disabled, the embedded SPA onto the supervisor mux. It returns the plane
+// (whose samplers the caller must Start/Stop) or nil when the entire dashboard
+// support plane is disabled. bind/port are the supervisor's own listener
+// address; the host-side samplers read the supervisor's /v0 API back over
+// loopback, so the plane must know where to reach it. Operator identity is read
+// from env with neutral defaults applied inside the plane (ZERO hardcoded roles).
 func attachDashboard(mux *api.SupervisorMux, resolver api.CityResolver, readOnly bool, bind string, port int) (*dashboardbff.Plane, error) {
 	if !dashboardEnabled() {
 		return nil, nil
+	}
+	plane := dashboardbff.New(dashboardDeps(resolver, readOnly, bind, port, mux.LoopbackTransport()))
+	mux.WithRunCensusSource(plane).WithAPIPlane(plane.Handler())
+	if !dashboardSPAEnabled() {
+		return plane, nil
 	}
 	spa, err := dashboardspa.NewStaticHandler()
 	if err != nil {
 		return nil, err
 	}
-	plane := dashboardbff.New(dashboardDeps(resolver, readOnly, bind, port, mux.LoopbackTransport()))
-	mux.WithRunCensusSource(plane).WithAPIPlane(plane.Handler()).WithStaticHandler(spa)
+	mux.WithStaticHandler(spa)
 	// Install the listener's link base alongside the SPA so per-city handlers
 	// can mint dashboard deep links (the sling response's dashboard_url).
 	// Standalone controller processes never call attachDashboard, so their
@@ -180,11 +191,11 @@ func dashboardLoopbackBaseURL(bind string, port int) string {
 }
 
 // printDashboardStartHint prints the dashboard URL after a backgrounded
-// "gc supervisor start", when the dashboard is enabled. Best-effort: a
+// "gc supervisor start", when the embedded SPA is enabled. Best-effort: a
 // config-load failure simply skips the hint (the foreground supervisor log and
 // "gc dashboard" still surface the URL), so it never affects start success.
 func printDashboardStartHint(stdout io.Writer) {
-	if !dashboardEnabled() {
+	if !dashboardEnabled() || !dashboardSPAEnabled() {
 		return
 	}
 	cfg, err := supervisorLoadConfig(supervisor.ConfigPath())

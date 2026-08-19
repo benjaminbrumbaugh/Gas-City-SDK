@@ -57,7 +57,16 @@ loopback (`127.0.0.1`). It is intended for local, single-operator use:
   `allow_mutations`, it runs read-only and the dashboard disables its mutating
   controls.
 
-## Turn it off
+## Turn off only the bundled UI
+
+Set `GC_SUPERVISOR_DASHBOARD_SPA=0` before starting the supervisor to omit the
+embedded SPA, dashboard URL hints, and deep links while retaining the host-side
+`/api` plane. This is useful when another local dashboard consumes that support
+plane. Set the variable to `1` and restart the supervisor to serve the bundled
+SPA temporarily.
+
+## Turn off the entire dashboard support plane
 
 Set `GC_SUPERVISOR_DASHBOARD=0` before starting the supervisor to run a
-typed-API-only supervisor with no embedded dashboard.
+typed-API-only supervisor with neither the embedded SPA nor the host-side
+`/api` plane. The broader switch takes precedence over the SPA-only switch.

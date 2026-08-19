@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -219,6 +220,38 @@ func TestAttachDashboardDisabledLeavesNoDashboardBase(t *testing.T) {
 	}
 }
 
+func TestAttachDashboardSPADisabledKeepsAPIPlane(t *testing.T) {
+	t.Setenv("GC_SUPERVISOR_DASHBOARD", "")
+	t.Setenv("GC_SUPERVISOR_DASHBOARD_SPA", "0")
+	mux := newTestSupervisorMuxForDashboard()
+	plane, err := attachDashboard(mux, fakeDashResolver{}, false, "127.0.0.1", 8372)
+	if err != nil {
+		t.Fatalf("attachDashboard: %v", err)
+	}
+	if plane == nil {
+		t.Fatal("SPA-only disable removed the host-side dashboard API plane")
+	}
+	if got := mux.DashboardBaseURL(); got != "" {
+		t.Fatalf("DashboardBaseURL = %q, want empty when only the SPA is disabled", got)
+	}
+
+	root := httptest.NewRecorder()
+	rootRequest := httptest.NewRequest(http.MethodGet, "/", nil)
+	rootRequest.Host = "127.0.0.1:8372"
+	mux.Handler().ServeHTTP(root, rootRequest)
+	if root.Code != http.StatusNotFound {
+		t.Fatalf("GET / status = %d, want 404 with SPA disabled", root.Code)
+	}
+
+	apiHealth := httptest.NewRecorder()
+	apiRequest := httptest.NewRequest(http.MethodGet, "/api/health/system", nil)
+	apiRequest.Host = "127.0.0.1:8372"
+	mux.Handler().ServeHTTP(apiHealth, apiRequest)
+	if apiHealth.Code == http.StatusNotFound {
+		t.Fatal("SPA-only disable removed /api/health/system")
+	}
+}
+
 func newTestSupervisorMuxForDashboard() *api.SupervisorMux {
 	return api.NewSupervisorMux(fakeDashResolver{}, nil, false, "vtest", "btest", time.Now())
 }
@@ -231,6 +264,27 @@ func TestDashboardEnabledToggle(t *testing.T) {
 	t.Setenv("GC_SUPERVISOR_DASHBOARD", "")
 	if !dashboardEnabled() {
 		t.Error("unset GC_SUPERVISOR_DASHBOARD should default to enabled")
+	}
+}
+
+func TestDashboardSPAEnabledToggle(t *testing.T) {
+	t.Setenv("GC_SUPERVISOR_DASHBOARD_SPA", "0")
+	if dashboardSPAEnabled() {
+		t.Error("GC_SUPERVISOR_DASHBOARD_SPA=0 should disable the embedded SPA")
+	}
+	t.Setenv("GC_SUPERVISOR_DASHBOARD_SPA", "")
+	if !dashboardSPAEnabled() {
+		t.Error("unset GC_SUPERVISOR_DASHBOARD_SPA should default to enabled")
+	}
+}
+
+func TestPrintDashboardStartHintSPADisabled(t *testing.T) {
+	t.Setenv("GC_SUPERVISOR_DASHBOARD", "")
+	t.Setenv("GC_SUPERVISOR_DASHBOARD_SPA", "0")
+	var out bytes.Buffer
+	printDashboardStartHint(&out)
+	if out.Len() != 0 {
+		t.Fatalf("SPA-disabled dashboard hint = %q, want empty", out.String())
 	}
 }
 
