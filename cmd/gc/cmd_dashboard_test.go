@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +24,48 @@ func stubDashboardOpen(t *testing.T) *string {
 	}
 	t.Cleanup(func() { openDashboardURLHook = old })
 	return &opened
+}
+
+func stubDashboardSPARootAvailable(t *testing.T) {
+	t.Helper()
+	old := dashboardSPARootAvailableHook
+	dashboardSPARootAvailableHook = func(string) bool { return true }
+	t.Cleanup(func() { dashboardSPARootAvailableHook = old })
+}
+
+func TestDashboardSPARootAvailableRequiresDirectHTML(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/html/":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+		case "/json/":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+		case "/redirect/":
+			http.Redirect(w, r, "/html/", http.StatusFound)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	for _, tc := range []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "html", path: "/html", want: true},
+		{name: "json", path: "/json", want: false},
+		{name: "redirect", path: "/redirect", want: false},
+		{name: "missing", path: "/missing", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dashboardSPARootAvailable(server.URL + tc.path); got != tc.want {
+				t.Fatalf("dashboardSPARootAvailable(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestRunDashboardNoticeSPADisabledDoesNotAdvertiseURL(t *testing.T) {
@@ -46,10 +90,36 @@ func TestRunDashboardNoticeSPADisabledDoesNotAdvertiseURL(t *testing.T) {
 	}
 }
 
+func TestRunDashboardNoticeRefusesLiveAPIWithoutSPARoot(t *testing.T) {
+	configureIsolatedRuntimeEnv(t)
+	t.Setenv("GC_SUPERVISOR_DASHBOARD", "")
+	t.Setenv("GC_SUPERVISOR_DASHBOARD_SPA", "")
+	t.Chdir(t.TempDir())
+	opened := stubDashboardOpen(t)
+
+	apiOnly := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(apiOnly.Close)
+
+	var stdout bytes.Buffer
+	if err := runDashboardNotice(apiOnly.URL, false, &stdout, io.Discard); err != nil {
+		t.Fatalf("runDashboardNotice() error: %v", err)
+	}
+	if *opened != "" {
+		t.Fatalf("opened URL = %q, want no browser launch when root is unavailable", *opened)
+	}
+	if strings.Contains(stdout.String(), apiOnly.URL) {
+		t.Fatalf("notice advertised unavailable SPA root: %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "GC_SUPERVISOR_DASHBOARD_SPA=1") {
+		t.Fatalf("notice = %q, want SPA-unavailable guidance", stdout.String())
+	}
+}
+
 func TestRunDashboardNoticePrintsSupervisorURL(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
 	t.Chdir(t.TempDir())
 	stubDashboardOpen(t)
+	stubDashboardSPARootAvailable(t)
 
 	oldAlive := supervisorAliveHook
 	oldCityFlag := cityFlag
@@ -86,6 +156,7 @@ func TestRunDashboardNoticeOpensBrowserWhenServed(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
 	t.Chdir(t.TempDir())
 	opened := stubDashboardOpen(t)
+	stubDashboardSPARootAvailable(t)
 
 	oldAlive := supervisorAliveHook
 	oldCityFlag := cityFlag
@@ -124,6 +195,7 @@ func TestRunDashboardNoticeNoOpenSkipsBrowser(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
 	t.Chdir(t.TempDir())
 	opened := stubDashboardOpen(t)
+	stubDashboardSPARootAvailable(t)
 
 	oldAlive := supervisorAliveHook
 	oldCityFlag := cityFlag
@@ -152,6 +224,7 @@ func TestRunDashboardNoticeNoOpenSkipsBrowser(t *testing.T) {
 func TestRunDashboardNoticeOpenFailureFallsBackToPrint(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
 	t.Chdir(t.TempDir())
+	stubDashboardSPARootAvailable(t)
 
 	old := openDashboardURLHook
 	openDashboardURLHook = func(string) error { return io.ErrClosedPipe }
@@ -187,6 +260,7 @@ func TestRunDashboardNoticeOpenFailureFallsBackToPrint(t *testing.T) {
 func TestRunDashboardNoticeUsesAPIOverride(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
 	t.Chdir(t.TempDir())
+	stubDashboardSPARootAvailable(t)
 
 	oldAlive := supervisorAliveHook
 	oldCityFlag := cityFlag
@@ -249,6 +323,7 @@ func TestRunDashboardNoticeHintsStartWhenUnresolvable(t *testing.T) {
 // with "city.toml: no such file" instead of reporting where the SPA is served.
 func TestRunDashboardNoticeResilientToBadCityConfig(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
+	stubDashboardSPARootAvailable(t)
 
 	badCity := filepath.Join(t.TempDir(), "broken")
 	if err := os.MkdirAll(badCity, 0o755); err != nil {
@@ -288,6 +363,7 @@ func TestRunDashboardNoticeResilientToBadCityConfig(t *testing.T) {
 // machine-wide supervisor is running.
 func TestRunDashboardNoticeUsesStandaloneControllerAPI(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
+	stubDashboardSPARootAvailable(t)
 
 	cityDir := filepath.Join(t.TempDir(), "alpha")
 	if err := os.MkdirAll(cityDir, 0o755); err != nil {

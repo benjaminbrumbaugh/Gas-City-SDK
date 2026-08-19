@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/spf13/cobra"
@@ -14,6 +16,11 @@ import (
 // openDashboardURLHook opens the resolved dashboard URL in the user's browser.
 // It is a package variable so tests can stub the browser launch.
 var openDashboardURLHook = openURL
+
+// dashboardSPARootAvailableHook verifies that the resolved control-plane URL
+// actually serves an HTML dashboard root. A live supervisor API is not proof
+// that the optional SPA is mounted.
+var dashboardSPARootAvailableHook = dashboardSPARootAvailable
 
 // newDashboardCmd creates the "gc dashboard" command group.
 //
@@ -75,6 +82,27 @@ func bindDashboardFlags(cmd *cobra.Command, apiURL *string, noOpen *bool) {
 	cmd.Flags().BoolVar(noOpen, "no-open", false, "print the dashboard URL instead of opening a browser")
 }
 
+func dashboardSPARootAvailable(baseURL string) bool {
+	request, err := http.NewRequest(http.MethodGet, strings.TrimRight(baseURL, "/")+"/", nil)
+	if err != nil {
+		return false
+	}
+	request.Header.Set("Accept", "text/html")
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close() //nolint:errcheck
+	contentType := strings.ToLower(response.Header.Get("Content-Type"))
+	return response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices && strings.HasPrefix(contentType, "text/html")
+}
+
 // runDashboardNotice resolves where the supervisor serves the dashboard SPA,
 // opens it in the user's browser, and prints the URL. It is purely
 // informational and always exits 0: city/config resolution only feeds the
@@ -109,10 +137,14 @@ func runDashboardNotice(apiURLOverride string, noOpen bool, stdout, stderr io.Wr
 		fmt.Fprintf(stdout, "The dashboard is served by the gc supervisor; start it with %q, then open the printed URL.\n", "gc supervisor start") //nolint:errcheck // best-effort stdout
 		return nil
 	}
+	if !dashboardSPARootAvailableHook(apiURL) {
+		fmt.Fprintln(stdout, "The bundled dashboard SPA is not available at the resolved supervisor URL. Set GC_SUPERVISOR_DASHBOARD_SPA=1 and restart the supervisor to enable it temporarily.") //nolint:errcheck // best-effort stdout
+		return nil
+	}
 
-	// The URL is live (supervisor/standalone/override resolved): open it in the
-	// browser unless --no-open was passed, then always print it so it stays
-	// copyable when the browser does not open.
+	// The URL is live and serves the SPA: open it in the browser unless
+	// --no-open was passed, then always print it so it stays copyable when the
+	// browser does not open.
 	if !noOpen {
 		if openErr := openDashboardURLHook(apiURL); openErr != nil {
 			fmt.Fprintf(stdout, "Could not open a browser automatically; open this URL:\n%s\n", apiURL) //nolint:errcheck // best-effort stdout
