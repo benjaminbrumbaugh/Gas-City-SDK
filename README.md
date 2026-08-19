@@ -1,207 +1,249 @@
-<h1 align="center">Gas City</h1>
+# Gas City SDK — Benjamin Brumbaugh's Fork and Build Source
 
-<p align="center">
-  <strong>Composable orchestration infrastructure for multi-agent coding workflows.</strong>
-</p>
+This repository is **not a second Gas City runtime** and it is not the live Gas City factory. It is Benjamin Brumbaugh's maintained source/build fork of the Gas City SDK.
 
-<p align="center">
-  <a href="https://github.com/gastownhall/gascity/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/gastownhall/gascity/ci.yml?branch=main&label=Build&style=for-the-badge" alt="Build status"></a>
-  <a href="https://docs.gascityhall.com"><img src="https://img.shields.io/badge/Docs-latest-c9a84c.svg?style=for-the-badge" alt="Documentation"></a>
-  <a href="https://github.com/gastownhall/gascity/releases"><img src="https://img.shields.io/github/v/release/gastownhall/gascity?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
-  <a href="https://discord.gg/xHpUGUzZp2"><img src="https://img.shields.io/discord/1462817445562814505?label=Discord&logo=discord&logoColor=white&color=5865F2&style=for-the-badge" alt="Discord"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
-</p>
+For the generic upstream project description, concepts, installation guide, and public documentation, read the upstream README first:
 
-Gas City is an orchestration-builder SDK for multi-agent systems. It extracts
-the reusable infrastructure from Gas Town into a configurable toolkit with
-runtime providers, work routing, formulas, orders, health patrol, and a
-declarative city configuration.
+**[Upstream Gas City README](https://github.com/gastownhall/gascity/blob/main/README.md)**
 
-## Sponsors
+Then return here for the fork-specific ownership and deployment rules.
 
-<p align="center">
-  <a href="https://blacksmith.sh/">
-    <img src="docs/images/blacksmith-powered.png" alt="Powered by Blacksmith" height="40">
-  </a>
-</p>
+## What this repository is
 
-## Coming from Gas Town?
+This fork contains the Go source for the `gc` executable and the reusable Gas City orchestration SDK:
 
-Start with [Coming from Gas Town?](docs/getting-started/coming-from-gastown.md).
-It maps Town roles, commands, plugins, convoys, and directory habits onto Gas
-City's primitive-first model so experienced Gas Town users can ramp without
-trying to port the entire Town architecture literally.
+- CLI and supervisor implementation in `cmd/gc/`;
+- runtime/session providers and lifecycle reconciliation;
+- city configuration, packs, formulas, orders, and routing infrastructure;
+- Beads/Dolt provider boundaries;
+- HTTP control-plane APIs;
+- fork-specific integration work and tests.
 
-## What You Get
+The Go module remains:
 
-- Declarative city configuration in `city.toml`
-- Multiple runtime providers: tmux, subprocess, exec, ACP, Kubernetes, and herdr
-- Beads-backed work tracking, formulas, molecules, waits, and mail
-- A controller/supervisor loop that reconciles desired state to running state
-- Packs, overrides, and rig-scoped orchestration for multi-project setups
+```text
+github.com/gastownhall/gascity
+```
 
-## Quickstart
+The fork preserves the upstream architecture: roles and factory behavior are supplied by configuration and packs. This repository is the implementation/build source; it is not itself a city instance.
 
-See the full install guide at [docs/getting-started/installation.md](docs/getting-started/installation.md).
+## Repository and remote topology
 
-### Prerequisites
+```text
+https://github.com/gastownhall/gascity
+        │
+        │ upstream: public Gas City SDK
+        ▼
+https://github.com/benjaminbrumbaugh/Gas-City-SDK
+        │
+        │ origin: Benjamin's private/custom fork
+        ▼
+clean reviewed gc build
+        │
+        ▼
+~/.local/bin/gc
+```
 
-Gas City requires the following tools on your system. `gc init` and
-`gc start` check for these automatically and report any that are missing.
+The intended maintenance model is one fork `main` with two remotes:
 
-| Dependency | Required | Min Version | Install (macOS) | Install (Linux) |
-|------------|----------|-------------|-----------------|-----------------|
-| tmux | Always | — | `brew install tmux` | `apt install tmux` |
-| git | Always | — | `brew install git` | `apt install git` |
-| jq | Always | — | `brew install jq` | `apt install jq` |
-| pgrep | Always | — | (included in macOS) | `apt install procps` |
-| lsof | Always | — | (included in macOS) | `apt install lsof` |
-| dolt | Beads provider `bd` | 2.1.0 or newer | `brew install dolt` | [releases](https://github.com/dolthub/dolt/releases) |
-| bd | Beads provider `bd` | 1.0.0 | [releases](https://github.com/gastownhall/beads/releases) | [releases](https://github.com/gastownhall/beads/releases) |
-| flock | Beads provider `bd` | — | `brew install flock` | `apt install util-linux` |
-| gh | Optional GitHub gates | — | `brew install gh` | [cli.github.com](https://cli.github.com/) |
-| claude / codex / gemini | Per provider | — | See provider docs | See provider docs |
+```text
+origin   = benjaminbrumbaugh/Gas-City-SDK
+upstream = gastownhall/gascity
+```
 
-tmux is the default session backend **and** the fallback, so it stays required
-even if you run agents on another backend. [herdr](https://herdr.dev) is an
-optional alternative backend — see
-[herdr Session Provider](docs/reference/herdr-provider.md) to enable it
-per-agent, per-rig, or city-wide.
+Fork-specific changes stay on the fork's history. Upstream changes are fetched and merged deliberately; they are not silently copied over local work.
 
-The `bd` (beads) provider is the default. To use a file-based store instead
-(no dolt/bd/flock needed), set `GC_BEADS=file` or add `[beads] provider = "file"`
-to your `city.toml`.
+## What this repository is not
 
-Managed Dolt checks require a final Dolt 2.1.0 or newer. Older and
-pre-release builds are below Gas City's managed bd/Dolt compatibility floor;
-releases before 1.86.2 can also miss the upstream GC/writer deadlock fix in
-dolthub/dolt commit `ccf7bde206`, which can hang `dolt_backup sync` under
-heavy write load.
+| Path or artifact | Role |
+|---|---|
+| `Gas-City-SDK/` | This SDK source/build fork |
+| `Gas-City/` | Live factory workspace: city configuration, packs, agents, formulas, Beads, and runtime state. It does not contain the `gc` command source. |
+| `Gas-City-Dashboard/` | Separate Python operational dashboard and lifecycle Hub; published front door is `http://localhost:8400/`. |
+| `~/.local/bin/gc` | Preferred installed runtime binary on this machine. |
+| `/opt/homebrew/bin/gc` | Optional Homebrew-packaged alternative; not a second supervisor and not additive to the custom binary. |
+| `~/go/bin/gc` | Another build output. It must not be selected accidentally for production or long-lived workers. |
+| `Gas-City-SDK/gc` | A checkout-local build artifact, not the canonical installed runtime. |
 
-Install from Homebrew:
+A city is managed by a `gc` binary; it is not a binary built inside the city repository. Do not launch a supervisor from every checkout that happens to contain a `gc` artifact.
+
+## Runtime and deployment boundary
+
+The production relationship is:
+
+```text
+macOS launchd
+  └─ com.gascity.supervisor.plist
+      └─ ~/.local/bin/gc supervisor run
+          ├─ machine-wide supervisor API: 127.0.0.1:8372
+          ├─ registered Gas-City factory
+          └─ city controllers, sessions, and runtime providers
+
+separate lifecycle:
+  Gas-City-Dashboard/assets/gas-town-dashboard
+      └─ dashboard Hub + canonical Python child: http://localhost:8400/
+```
+
+The SDK repository is used to produce the executable. The live `Gas-City` workspace is registered with the machine-wide supervisor. The Python dashboard is a separate product and should not be rebuilt from the SDK's embedded SPA.
+
+### Build a candidate
+
+Use a clean, reviewed SDK checkout. Do not build production from a dirty worktree or from a migration/polecat worktree.
+
+```bash
+# From the SDK fork root
+git status --short --branch
+make build
+
+# The Makefile writes bin/gc and injects version, commit, date, and dirty state.
+./bin/gc version
+go version -m ./bin/gc
+```
+
+On macOS, the Makefile detects Homebrew's keg-only ICU dependency when available. A source build may require:
+
+```bash
+brew install icu4c
+```
+
+Do not use a bare ad-hoc `go build` as the production provenance step when `make build` is available. The Makefile owns version metadata and the self-contained build checks.
+
+### Promote the reviewed build
+
+Promotion is an operational action, not a side effect of editing source:
+
+```bash
+make install
+gc version
+gc supervisor install
+gc supervisor status --json
+```
+
+`make install` installs the built executable into the configured Go binary directory and maintains the user's stable `~/.local/bin/gc` path where applicable. `gc supervisor install` writes/loads the macOS launchd service and starts the supervisor from that installed path. Treat it as a controlled supervisor lifecycle operation: verify the current supervisor, active sessions, and rollback binary before using it.
+
+After promotion, verify the actual running executable, not only the source checkout:
+
+```bash
+ps -p "$(gc supervisor status --json | jq -r .pid)" -o pid=,ppid=,command=
+gc supervisor status --json
+curl --fail --silent http://127.0.0.1:8372/health
+```
+
+A successful build, install, or `gc supervisor status` response alone does not prove that launchd owns the running process. Confirm `launchctl print gui/$(id -u)/com.gascity.supervisor` when automatic login startup matters.
+
+### Start the live city
+
+From the live city workspace, not from this SDK repository:
+
+```bash
+cd "/Users/benjaminbrumbaugh/Documents/Gas City/Gas-City"
+gc start
+```
+
+`gc start` registers/starts the city and triggers reconciliation. It does not compile the SDK and it does not replace the installed `gc` binary.
+
+Inspect the separate layers independently:
+
+```bash
+gc supervisor status --json
+gc cities --json
+gc status --json
+```
+
+A partial runtime probe is degradation evidence, not proof that the supervisor or every worker is stopped.
+
+## Upstream synchronization
+
+Keep the fork's `main` branch easy to compare with both remotes. Use a focused synchronization branch when bringing in upstream work:
+
+```bash
+git fetch origin --prune
+git fetch upstream --prune
+git switch main
+git pull --ff-only origin main
+git switch -c sync/upstream-YYYYMMDD
+git merge --no-ff upstream/main
+
+# Run the prescribed checks before opening a PR.
+make check
+
+git push -u origin HEAD
+gh pr create --base main --head HEAD
+```
+
+Review upstream changes for compatibility with this fork's integration boundaries before merging. Preserve fork-owned behavior deliberately; do not resolve divergence by copying one checkout wholesale or force-pushing `main`.
+
+For fork-specific work:
+
+```bash
+git fetch origin --prune
+git switch main
+git pull --ff-only origin main
+git switch -c feat/<short-description>
+# make the smallest scoped change
+git add <intended-files>
+git commit -m "<type>: <description>"
+git push -u origin HEAD
+gh pr create --base main --head HEAD
+```
+
+The durable delivery boundary is the merged commit on the private fork's `main`, followed by a clean reviewed build and explicit promotion of that artifact.
+
+## Homebrew and alternate binaries
+
+Homebrew provides a packaged Gas City release:
 
 ```bash
 brew install gascity
 gc version
 ```
 
-Or build from source (requires `make`, Go 1.26.4+, and ICU for a transitive Dolt
-CGO dependency — `brew install icu4c` on macOS, `apt install libicu-dev` on
-Linux; on macOS the Makefile auto-detects the keg-only `icu4c` paths):
+That package is an **alternative distribution channel**, not a supplemental supervisor. Do not run a Homebrew supervisor and a custom-fork supervisor together. Choose one binary path, verify its version/provenance, and keep the other installation as an explicit fallback only.
 
-```bash
-make install
+Likewise, `~/go/bin/gc`, `Gas-City-SDK/gc`, and binaries inside migration worktrees are development artifacts unless they have been deliberately promoted. An absolute path in a long-lived worker/session can bypass the shell's PATH ordering and create version skew even when the supervisor uses the preferred binary.
 
-gc init ~/bright-lights
-cd ~/bright-lights
-gc start
+## Dashboards
 
-mkdir hello-world
-cd hello-world
-git init
-gc rig add .
+The SDK contains an embedded upstream dashboard SPA and its support API because that is part of the upstream supervisor product. Benjamin's operational dashboard is separate:
 
-bd create "Create a script that prints hello world"
-gc session attach mayor
+```text
+SDK embedded dashboard: supervisor listener on 8372
+Owned Python dashboard:  http://localhost:8400/
 ```
 
-### Nix/Flox machines (ICU not on the default CGO path)
+The embedded SPA is marked as extraneous for this workspace in `internal/api/dashboardspa/READ_ME_FIRST.md`. Do not copy its UI into the owned Python dashboard and do not treat the SDK repository as the dashboard migration source.
 
-On NixOS / Flox-managed Linux toolchains, system include/lib dirs are not
-searched, so the build fails with `fatal error: unicode/uregex.h: No such file
-or directory`. Point CGO at the Nix-store ICU dev headers + matching runtime
-lib (pick the dev output whose propagated lib matches your `gc`/`dolt` link, to
-avoid ICU version skew), and disable the Makefile's `/usr/lib` fallback so the
-Nix and system toolchains don't get mixed:
+The Python dashboard's source and runtime are documented in:
 
-```bash
-# Re-resolve the dev header path if the store path changes:
-#   find /nix/store -maxdepth 3 -path '*icu4c*-dev/include/unicode/uregex.h'
-# Match the lib to what your installed binary links: ldd $(which gc) | grep icu
-ICU_DEV=/nix/store/dvhx24q4icrig4q1v1lp7kzi3izd5jmb-icu4c-76.1-dev
-ICU_LIB=/nix/store/i4lj3w4yd9x9jbi7a1xhjqsr7bg8jq7p-icu4c-76.1
+- `/Users/benjaminbrumbaugh/Documents/Gas City/Gas-City/assets/gas-town-dashboard/READ_ME_FIRST.md`;
+- `/Users/benjaminbrumbaugh/Documents/Gas City/Gas-City-Dashboard/READ_ME_FIRST.md`;
+- [`Gas-City-Dashboard`](https://github.com/benjaminbrumbaugh/Gas-City-Dashboard).
 
-CGO_ENABLED=1 \
-CGO_CPPFLAGS="-I$ICU_DEV/include" \
-CGO_LDFLAGS="-L$ICU_LIB/lib" \
-SYS_USR_CGO_FALLBACK=0 \
-  make build      # or: go build -o bin/gc ./cmd/gc
-```
+## Verification checklist
 
-CGO-backed tests (e.g. `go test ./internal/beads`) take the same three CGO_*
-vars — no `CGO_ENABLED=0` workaround needed once ICU is pointed at correctly.
+Before treating an SDK build as deployable:
 
-For the longer walkthrough, start with
-[Tutorial 01](docs/tutorials/01-cities-and-rigs.md).
+- exact source commit and tree recorded;
+- worktree clean except explicitly preserved unrelated work;
+- `make build` or the repository-prescribed build passed;
+- `gc version` and `go version -m` identify the intended artifact;
+- focused tests, `make check`, and relevant integration gates classified honestly;
+- installed path and running process command verified;
+- launchd service ownership verified when automatic startup is required;
+- supervisor `/health`, `/v0/cities`, and the registered city are healthy;
+- the separate Python dashboard at `http://localhost:8400/` remains healthy;
+- no provider credentials, tokens, or other secrets entered Git or documentation.
 
-## Documentation
+## Upstream reference and full documentation
 
-📖 **Read the docs online: [docs.gascityhall.com](https://docs.gascityhall.com)**
+This README explains only the fork/runtime boundary. For general Gas City concepts and the full SDK manual, use:
 
-The docs now use a Mintlify structure rooted in [`docs/`](docs/README.md).
-
-- [Docs Home](docs/index.mdx)
-- [Installation](docs/getting-started/installation.md)
-- [Quickstart](docs/getting-started/quickstart.md)
-- [How Gas City Works](docs/getting-started/how-gas-city-works.md)
-- [Contributors](engdocs/contributors/index.md)
-- [Reference](docs/reference/index.md)
-- [Architecture](engdocs/architecture/index.md)
-- [Design Docs](engdocs/design/index.md)
-- [Archive](engdocs/archive/index.md)
-
-Preview the docs locally:
-
-```bash
-make docs-dev
-
-# or directly from the repo root
-./mint.sh dev
-```
-
-## Repository Map
-
-| Path | What it contains |
-|---|---|
-| `cmd/gc/` | CLI entrypoints, controller wiring, runtime assembly, and command handlers |
-| `internal/runtime/` | Runtime provider abstraction plus tmux, subprocess, exec, ACP, K8s, hybrid, and herdr implementations |
-| `internal/config/` | `city.toml` schema, validation, composition, packs, patches, and override resolution |
-| `internal/beads/` | Store abstraction and provider implementations for beads (work, mail, convoys) and waits |
-| `internal/session/` | Session bead metadata, wait lifecycle helpers, and session identity utilities |
-| `internal/orders/` | Order parsing and scanning for periodic dispatch |
-| `internal/convergence/` | Bounded iterative refinement loops and gate handling |
-| `internal/api/` | HTTP API handlers and resource views |
-| `docs/` | Mintlify docs site (tutorials, guides, reference) |
-| `engdocs/` | Contributor-facing architecture, design docs, proposals, and archive |
-| `examples/` | Example cities, packs, formulas, and reference topologies |
-| `contrib/` | Helper scripts, Dockerfiles, and integration support assets |
-| `test/` | Integration and support test packages |
-
-### Where to start
-
-- **CLI behavior** — `cmd/gc/`, then the command-specific helper it calls.
-- **Runtime/provider work** — `internal/runtime/runtime.go` and the provider package you're changing.
-- **Config and pack behavior** — `internal/config/config.go`, `compose.go`, and `pack.go`.
-- **Work dispatch (sling)** — `cmd/gc/cmd_sling.go` and `internal/beads/`.
-- **Supervisor, sessions, wake/sleep** — `cmd/gc/`, `internal/session/`, and `internal/runtime/`.
-
-For the concepts these packages implement, see
-[How Gas City Works](docs/getting-started/how-gas-city-works.md). For a deeper
-package walkthrough, see
-[`engdocs/contributors/codebase-map.md`](engdocs/contributors/codebase-map.md).
-
-## Contributing
-
-Read [CONTRIBUTING.md](CONTRIBUTING.md) and
-[engdocs/contributors/index.md](engdocs/contributors/index.md) before opening a
-PR.
-
-Useful commands:
-
-- `make setup`
-- `make check`
-- `make check-docs`
-- `make test-integration`
+- **[Upstream README](https://github.com/gastownhall/gascity/blob/main/README.md)**;
+- [Local documentation](docs/README.md);
+- [Installation](docs/getting-started/installation.md);
+- [How Gas City works](docs/getting-started/how-gas-city-works.md);
+- [Contributor documentation](engdocs/contributors/index.md);
+- [Contributing](CONTRIBUTING.md).
 
 ## License
 
