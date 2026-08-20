@@ -1451,6 +1451,9 @@ func ContainsProviderRateLimitScreen(content string) bool {
 	if containsClaudeSpendLimitModal(content) {
 		return true
 	}
+	if containsClaudeUsageLimitChoiceModal(content) {
+		return true
+	}
 	return strings.Contains(strings.ToLower(content), "rate limit") &&
 		strings.Contains(content, "Keep trying") &&
 		strings.Contains(content, "Stop")
@@ -1482,6 +1485,51 @@ func containsClaudeSpendLimitModal(content string) bool {
 		"Usage credit balance",
 		"Adjust monthly spend limit",
 		"Wait for limit to reset")
+}
+
+// usageLimitChoiceModalWindowLines bounds how many consecutive lines the
+// usage-limit choice modal's anchors may span. The modal renders its question
+// and both options inside one bordered box on adjacent lines; a small window
+// tolerates a border or blank line between them while still rejecting the same
+// tokens scattered across unrelated scrollback.
+const usageLimitChoiceModalWindowLines = 6
+
+// containsClaudeUsageLimitChoiceModal reports whether pane content shows the
+// account usage-limit modal that asks the operator to choose between waiting
+// for the limit to reset and requesting more usage.
+//
+// This modal is a SILENT WEDGE, which is why it earns its own matcher rather
+// than a looser token in ContainsRateLimitDialog. tmux stays alive and the
+// provider process stays alive while it is up, so every liveness signal the
+// supervisor has reports the session healthy; and it never self-clears, not
+// even after the limit resets, because dismissing it needs a keypress no one is
+// there to send. Six sessions sat wedged for up to four hours behind it —
+// including gastown.deacon and the gastown.boot watchdog whose whole job was to
+// notice that class of stall, so the watchdog and the watched died to the same
+// cause. None of the sibling classifiers saw it: its text shares no token with
+// "Usage limit reached", "You've hit your limit", "/rate-limit-options" or
+// "rate limit", and the spend-limit modal's anchors ("Usage credit balance",
+// "Adjust monthly spend limit") are absent because this is a different modal
+// (gc-gqk).
+//
+// Anchors must co-occur inside one on-screen block. Consumers peek via
+// CapturePane, which reads scrollback, and a whole-buffer match on these
+// strings would classify any pane that merely PRINTED them — an agent reading
+// gc-gqk itself, for instance — as rate-limited. That direction is not the
+// harmless one: the rate-limit quarantine re-detects the same scrollback every
+// reconcile cycle, so a false positive masks a real crash indefinitely with no
+// self-heal, exactly as the spend-limit matcher's comment records.
+//
+// Deliberately NOT wired into ContainsRateLimitDialog, whose consumers send
+// keystrokes to dismiss a dialog. Option 2 here ("Ask your admin for more
+// usage") is a paid-spend action and must never be selected by an agent, so
+// this modal is classified for health purposes only and left for a human to
+// answer.
+func containsClaudeUsageLimitChoiceModal(content string) bool {
+	return linesContainAllWithin(content, usageLimitChoiceModalWindowLines,
+		"What do you want to do?",
+		"Stop and wait for limit to reset",
+		"Ask your admin for more usage")
 }
 
 // ProviderTerminalErrorReason classifies high-confidence provider errors that

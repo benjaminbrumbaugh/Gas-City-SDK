@@ -79,10 +79,11 @@ func (s *Server) humaHandleSessionList(_ context.Context, input *SessionListInpu
 		pageSessions[j] = sessions[i]
 	}
 	keyedTranscriptPaths := session.ResolveKeyedTranscriptPaths(sessionTranscriptLookupCandidates(pageSessions), s.sessionLogPaths(), sessionTranscriptProviderFallback(cfg))
+	activeBeads := s.newActiveBeadIndex("", false)
 	page := make([]sessionResponse, len(pageSessions))
 	for j, sess := range pageSessions {
 		page[j] = sessionResponseWithReason(sess, responseByID[sess.ID], cfg, s.state.SessionProvider(), hasDeferredQueue)
-		s.enrichSessionResponseWithKeyedPaths(&page[j], sess, cfg, s.runtimeSessionResponseHandle(sess), wantPeek, false, false, 0, keyedTranscriptPaths)
+		s.enrichSessionResponseWithKeyedPaths(&page[j], sess, cfg, s.runtimeSessionResponseHandle(sess), wantPeek, false, false, 0, keyedTranscriptPaths, activeBeads)
 	}
 	return &ListOutput[sessionResponse]{
 		Index:     s.latestIndex(),

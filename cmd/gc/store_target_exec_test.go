@@ -179,7 +179,7 @@ func TestGcExecLifecycleInitProcessEnvDoesNotProjectCanonicalFilesOwnedFlagForGc
 	if got := envSliceValue(env, "GC_CANONICAL_FILES_OWNED"); got != "" {
 		t.Fatalf("GC_CANONICAL_FILES_OWNED = %q, want empty", got)
 	}
-	if got := envSliceValue(env, "GC_STORE_ROOT"); got != cityDir {
+	if got := envSliceValue(env, "GC_STORE_ROOT"); canonicalTestPath(got) != canonicalTestPath(cityDir) {
 		t.Fatalf("GC_STORE_ROOT = %q, want %q", got, cityDir)
 	}
 	if got := envSliceValue(env, "GC_STORE_SCOPE"); got != "city" {
@@ -214,7 +214,7 @@ func TestGcExecLifecycleInitProcessEnvDoesNotLeakAmbientBEADS_DIRForGcBeadsK8s(t
 	if got := envSliceValue(env, "BEADS_DIR"); got != "" {
 		t.Fatalf("BEADS_DIR leaked as %q", got)
 	}
-	if got := envSliceValue(env, "GC_STORE_ROOT"); got != rigDir {
+	if got := envSliceValue(env, "GC_STORE_ROOT"); canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("GC_STORE_ROOT = %q, want %q", got, rigDir)
 	}
 	if got := envSliceValue(env, "GC_RIG"); got != "frontend" {
@@ -264,7 +264,7 @@ func TestResolveConfiguredExecStoreTargetCity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveConfiguredExecStoreTarget(city): %v", err)
 	}
-	if target.ScopeRoot != cityDir {
+	if canonicalTestPath(target.ScopeRoot) != canonicalTestPath(cityDir) {
 		t.Fatalf("ScopeRoot = %q, want %q", target.ScopeRoot, cityDir)
 	}
 	if target.ScopeKind != "city" {
@@ -294,7 +294,7 @@ func TestResolveConfiguredExecStoreTargetRig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveConfiguredExecStoreTarget(rig): %v", err)
 	}
-	if target.ScopeRoot != rigDir {
+	if canonicalTestPath(target.ScopeRoot) != canonicalTestPath(rigDir) {
 		t.Fatalf("ScopeRoot = %q, want %q", target.ScopeRoot, rigDir)
 	}
 	if target.ScopeKind != "rig" {
@@ -319,7 +319,7 @@ func TestGcExecStoreEnvProjectsCityAndRigTargets(t *testing.T) {
 	if got := cityEnv["GC_PROVIDER"]; got != "exec:/tmp/spy" {
 		t.Fatalf("GC_PROVIDER = %q, want exec:/tmp/spy", got)
 	}
-	if got := cityEnv["GC_STORE_ROOT"]; got != cityDir {
+	if got := cityEnv["GC_STORE_ROOT"]; canonicalTestPath(got) != canonicalTestPath(cityDir) {
 		t.Fatalf("GC_STORE_ROOT = %q, want %q", got, cityDir)
 	}
 	if got := cityEnv["GC_STORE_SCOPE"]; got != "city" {
@@ -349,7 +349,7 @@ func TestGcExecStoreEnvProjectsCityAndRigTargets(t *testing.T) {
 		RigName:   "rig-a",
 	}
 	rigEnv := gcExecStoreEnv(cityDir, rigTarget, "exec:/tmp/spy")
-	if got := rigEnv["GC_STORE_ROOT"]; got != rigDir {
+	if got := rigEnv["GC_STORE_ROOT"]; canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("GC_STORE_ROOT = %q, want %q", got, rigDir)
 	}
 	if got := rigEnv["GC_STORE_SCOPE"]; got != "rig" {
@@ -361,7 +361,7 @@ func TestGcExecStoreEnvProjectsCityAndRigTargets(t *testing.T) {
 	if got := rigEnv["GC_RIG"]; got != "rig-a" {
 		t.Fatalf("GC_RIG = %q, want rig-a", got)
 	}
-	if got := rigEnv["GC_RIG_ROOT"]; got != rigDir {
+	if got := rigEnv["GC_RIG_ROOT"]; canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("GC_RIG_ROOT = %q, want %q", got, rigDir)
 	}
 	if got := rigEnv["BEADS_DIR"]; got != "" {
@@ -416,7 +416,7 @@ func TestOpenStoreAtForCityExecProjectsConfiguredTargets(t *testing.T) {
 	}
 
 	cityEnv := readExecCaptureEnv(t, filepath.Join(captureDir, "city.env"))
-	if got := cityEnv["GC_STORE_ROOT"]; got != cityDir {
+	if got := cityEnv["GC_STORE_ROOT"]; canonicalTestPath(got) != canonicalTestPath(cityDir) {
 		t.Fatalf("city GC_STORE_ROOT = %q, want %q", got, cityDir)
 	}
 	if got := cityEnv["GC_STORE_SCOPE"]; got != "city" {
@@ -428,7 +428,7 @@ func TestOpenStoreAtForCityExecProjectsConfiguredTargets(t *testing.T) {
 	if got := cityEnv["GC_PROVIDER"]; got != provider {
 		t.Fatalf("city GC_PROVIDER = %q, want %q", got, provider)
 	}
-	if got := cityEnv["GC_CITY_PATH"]; got != cityDir {
+	if got := cityEnv["GC_CITY_PATH"]; canonicalTestPath(got) != canonicalTestPath(cityDir) {
 		t.Fatalf("city GC_CITY_PATH = %q, want %q", got, cityDir)
 	}
 	if got := cityEnv["GC_RIG"]; got != "" {
@@ -445,7 +445,7 @@ func TestOpenStoreAtForCityExecProjectsConfiguredTargets(t *testing.T) {
 	}
 
 	rigEnv := readExecCaptureEnv(t, filepath.Join(captureDir, "frontend.env"))
-	if got := rigEnv["GC_STORE_ROOT"]; got != rigDir {
+	if got := rigEnv["GC_STORE_ROOT"]; canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("rig GC_STORE_ROOT = %q, want %q", got, rigDir)
 	}
 	if got := rigEnv["GC_STORE_SCOPE"]; got != "rig" {
@@ -457,7 +457,7 @@ func TestOpenStoreAtForCityExecProjectsConfiguredTargets(t *testing.T) {
 	if got := rigEnv["GC_RIG"]; got != "frontend" {
 		t.Fatalf("rig GC_RIG = %q, want frontend", got)
 	}
-	if got := rigEnv["GC_RIG_ROOT"]; got != rigDir {
+	if got := rigEnv["GC_RIG_ROOT"]; canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("rig GC_RIG_ROOT = %q, want %q", got, rigDir)
 	}
 	if got := rigEnv["GC_PROVIDER"]; got != provider {
@@ -531,7 +531,7 @@ func TestOpenStoreAtForCityExecBeadsBdProjectsScopedExternalDoltEnv(t *testing.T
 	}
 
 	rigEnv := readExecCaptureEnv(t, filepath.Join(captureDir, "frontend.env"))
-	if got := rigEnv["GC_STORE_ROOT"]; got != rigDir {
+	if got := rigEnv["GC_STORE_ROOT"]; canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("GC_STORE_ROOT = %q, want %q", got, rigDir)
 	}
 	if got := rigEnv["GC_DOLT_HOST"]; got != "db.example.internal" {
@@ -644,7 +644,7 @@ func TestControllerStateOpenRigStoreExecProjectsRigTarget(t *testing.T) {
 	}
 
 	rigEnv := readExecCaptureEnv(t, filepath.Join(captureDir, "frontend.env"))
-	if got := rigEnv["GC_STORE_ROOT"]; got != rigDir {
+	if got := rigEnv["GC_STORE_ROOT"]; canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("GC_STORE_ROOT = %q, want %q", got, rigDir)
 	}
 	if got := rigEnv["GC_STORE_SCOPE"]; got != "rig" {
@@ -656,7 +656,7 @@ func TestControllerStateOpenRigStoreExecProjectsRigTarget(t *testing.T) {
 	if got := rigEnv["GC_RIG"]; got != "frontend" {
 		t.Fatalf("GC_RIG = %q, want frontend", got)
 	}
-	if got := rigEnv["GC_RIG_ROOT"]; got != rigDir {
+	if got := rigEnv["GC_RIG_ROOT"]; canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("GC_RIG_ROOT = %q, want %q", got, rigDir)
 	}
 	if got := rigEnv["GC_PROVIDER"]; got != provider {
@@ -774,7 +774,7 @@ func TestOpenStoreAtForCityExecUsesUniversalStoreTargetEnv(t *testing.T) {
 	}
 
 	rigEnv := readExecCaptureEnv(t, filepath.Join(captureDir, "frontend.env"))
-	if got := rigEnv["GC_STORE_ROOT"]; got != rigDir {
+	if got := rigEnv["GC_STORE_ROOT"]; canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("GC_STORE_ROOT = %q, want %q", got, rigDir)
 	}
 	if got := rigEnv["GC_STORE_SCOPE"]; got != "rig" {

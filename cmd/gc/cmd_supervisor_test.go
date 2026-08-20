@@ -1154,7 +1154,7 @@ func TestBuildSupervisorServiceDataOmitsXDGRuntimeDirForIsolatedGCHome(t *testin
 	if err != nil {
 		t.Fatalf("buildSupervisorServiceData: %v", err)
 	}
-	if data.GCHome != gcHome {
+	if canonicalTestPath(data.GCHome) != canonicalTestPath(gcHome) {
 		t.Fatalf("buildSupervisorServiceData GCHome = %q, want %q", data.GCHome, gcHome)
 	}
 	if data.XDGRuntimeDir != "" {
@@ -1214,7 +1214,7 @@ func TestRenderSupervisorTemplateUsesCanonicalRelativeGCHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(systemdContent, `Environment=GC_HOME="`+canonicalHome+`"`) {
+	if !strings.Contains(systemdContent, `Environment=GC_HOME="`+canonicalTestPath(canonicalHome)+`"`) {
 		t.Fatalf("systemd template missing canonical GC_HOME %q:\n%s", canonicalHome, systemdContent)
 	}
 
@@ -1222,7 +1222,7 @@ func TestRenderSupervisorTemplateUsesCanonicalRelativeGCHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(launchdContent, "<key>GC_HOME</key>") || !strings.Contains(launchdContent, "<string>"+xmlEscape(canonicalHome)+"</string>") {
+	if !strings.Contains(launchdContent, "<key>GC_HOME</key>") || !strings.Contains(launchdContent, "<string>"+xmlEscape(canonicalTestPath(canonicalHome))+"</string>") {
 		t.Fatalf("launchd template missing canonical GC_HOME %q:\n%s", canonicalHome, launchdContent)
 	}
 }
@@ -1240,7 +1240,7 @@ func TestSupervisorLaunchdPlistPathUsesIsolatedLabelForIsolatedGCHome(t *testing
 		t.Fatalf("supervisorLaunchdLabel() = %q, want isolated-home-prefixed label", label)
 	}
 	wantPath := filepath.Join(homeDir, "Library", "LaunchAgents", label+".plist")
-	if got := supervisorLaunchdPlistPath(); got != wantPath {
+	if got := supervisorLaunchdPlistPath(); canonicalTestPath(got) != canonicalTestPath(wantPath) {
 		t.Fatalf("supervisorLaunchdPlistPath() = %q, want %q", got, wantPath)
 	}
 }
@@ -3717,7 +3717,7 @@ func TestUninstallSupervisorLaunchdRemovesMatchingLegacyDefaultPlistForIsolatedG
 			t.Fatal(err)
 		}
 		label := supervisorLaunchdLabel()
-		if path == legacyPath {
+		if canonicalTestPath(path) == canonicalTestPath(legacyPath) {
 			label = defaultSupervisorLaunchdLabel
 		}
 		content, err := renderSupervisorTemplate(supervisorLaunchdTemplate, &supervisorServiceData{
@@ -3913,7 +3913,7 @@ func TestUninstallSupervisorLaunchdIgnoresLegacyUnloadFailures(t *testing.T) {
 			t.Fatal(err)
 		}
 		label := supervisorLaunchdLabel()
-		if path == legacyPath {
+		if canonicalTestPath(path) == canonicalTestPath(legacyPath) {
 			label = defaultSupervisorLaunchdLabel
 		}
 		content, err := renderSupervisorTemplate(supervisorLaunchdTemplate, &supervisorServiceData{
@@ -4225,9 +4225,9 @@ func TestRunSupervisorSIGTERMPreservesSessionsEndToEnd(t *testing.T) {
 	}
 	got := stdout.String()
 	for _, want := range []string{
-		"Preserving city '" + cityPath + "' sessions for re-adoption...",
+		"Preserving city '" + canonicalTestPath(cityPath) + "' sessions for re-adoption...",
 		"Preserving agent sessions for supervisor re-adoption.",
-		"City '" + cityPath + "' preserved.",
+		"City '" + canonicalTestPath(cityPath) + "' preserved.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("stdout = %q, want %q; stderr=%q", got, want, stderr.String())

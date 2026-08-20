@@ -61,6 +61,15 @@ func readOpLog(t *testing.T, logFile string) []string {
 	return strings.Split(raw, "\n")
 }
 
+func canonicalLifecycleOp(op string) string {
+	parts := strings.SplitN(op, " ", 3)
+	if len(parts) < 2 || parts[0] != "init" {
+		return op
+	}
+	parts[1] = canonicalTestPath(parts[1])
+	return strings.Join(parts, " ")
+}
+
 // assertOpSubsequence verifies that ops contains entries with the given
 // prefixes in order. The lifecycle tests care about sequencing of the
 // current operation, not unrelated trailing health checks from background
@@ -75,7 +84,7 @@ func assertOpSubsequence(t *testing.T, ops []string, want ...string) {
 	}
 	index := 0
 	for _, op := range ops {
-		if strings.HasPrefix(op, want[index]) {
+		if strings.HasPrefix(canonicalLifecycleOp(op), canonicalLifecycleOp(want[index])) {
 			index++
 			if index == len(want) {
 				return
@@ -161,7 +170,7 @@ func TestLifecycleCoordination_InitRigAddStart(t *testing.T) {
 	}
 
 	ops := readOpLog(t, logFile)
-	assertOpSubsequence(t, ops, "probe", "start", "init "+cityPath)
+	assertOpSubsequence(t, ops, "probe", "start", "init "+canonicalTestPath(cityPath))
 	cityInitOps := len(ops)
 	assertHooksAbsent(t, cityPath, "after city init")
 
@@ -179,7 +188,7 @@ func TestLifecycleCoordination_InitRigAddStart(t *testing.T) {
 	if len(ops) <= cityInitOps {
 		t.Fatalf("expected rig add to append ops beyond %d entries, got %d: %v", cityInitOps, len(ops), ops)
 	}
-	assertOpSubsequence(t, ops[cityInitOps:], "probe", "start", "init "+rigPath)
+	assertOpSubsequence(t, ops[cityInitOps:], "probe", "start", "init "+canonicalTestPath(rigPath))
 	rigInitOps := len(ops)
 	assertHooksAbsent(t, rigPath, "after rig add")
 
@@ -196,7 +205,7 @@ func TestLifecycleCoordination_InitRigAddStart(t *testing.T) {
 	if len(ops) <= rigInitOps {
 		t.Fatalf("expected start to append ops beyond %d entries, got %d: %v", rigInitOps, len(ops), ops)
 	}
-	assertOpSubsequence(t, ops[rigInitOps:], "start", "init "+cityPath, "init "+rigPath)
+	assertOpSubsequence(t, ops[rigInitOps:], "start", "init "+canonicalTestPath(cityPath), "init "+canonicalTestPath(rigPath))
 
 	// Verify gc hooks are absent at both paths after start.
 	assertHooksAbsent(t, cityPath, "after start")
@@ -231,14 +240,14 @@ func TestLifecycleCoordination_StartOrder(t *testing.T) {
 	ops := readOpLog(t, logFile)
 	want := []string{
 		"start",
-		"init " + cityPath + " or hq",
-		"init " + rigPath + " mr mr",
+		"init " + canonicalTestPath(cityPath) + " or hq",
+		"init " + canonicalTestPath(rigPath) + " mr mr",
 	}
 	if len(ops) != len(want) {
 		t.Fatalf("expected exactly %d lifecycle ops, got %d: %v", len(want), len(ops), ops)
 	}
 	for i := range want {
-		if ops[i] != want[i] {
+		if canonicalLifecycleOp(ops[i]) != canonicalLifecycleOp(want[i]) {
 			t.Fatalf("op[%d] = %q, want %q; all ops: %v", i, ops[i], want[i], ops)
 		}
 	}

@@ -166,7 +166,7 @@ func TestResolveBeadsMetadataCASStoreIsExact(t *testing.T) {
 		t.Fatalf("city resolution = (%q, %q, %v)", root, ref, err)
 	}
 	root, ref, err = resolveBeadsMetadataCASStore(cfg, cityPath, "rig:tributary")
-	if err != nil || root != filepath.Join(cityPath, "tributary") || ref != "rig:tributary" {
+	if err != nil || canonicalTestPath(root) != canonicalTestPath(filepath.Join(cityPath, "tributary")) || ref != "rig:tributary" {
 		t.Fatalf("rig resolution = (%q, %q, %v)", root, ref, err)
 	}
 

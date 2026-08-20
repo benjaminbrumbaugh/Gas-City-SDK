@@ -2801,7 +2801,7 @@ prefix = "ct"
 		t.Fatalf("GC_PACK_STATE_DIR = %q, want order pack state %q; env=%v", got["GC_PACK_STATE_DIR"], wantPackState, got)
 	}
 	wantDoltState := filepath.Join(cityDir, ".gc", "runtime", "packs", "dolt", "dolt-state.json")
-	if got["GC_DOLT_STATE_FILE"] != wantDoltState {
+	if canonicalTestPath(got["GC_DOLT_STATE_FILE"]) != canonicalTestPath(wantDoltState) {
 		t.Fatalf("GC_DOLT_STATE_FILE = %q, want %q; env=%v", got["GC_DOLT_STATE_FILE"], wantDoltState, got)
 	}
 }
@@ -2865,15 +2865,15 @@ provider = "bd"
 	ad.dispatch(context.Background(), cityDir, time.Now())
 
 	got := orderDispatchTestEnv(t, envCh)
-	if got["GC_CITY_RUNTIME_DIR"] != customRuntimeDir {
+	if canonicalTestPath(got["GC_CITY_RUNTIME_DIR"]) != canonicalTestPath(customRuntimeDir) {
 		t.Fatalf("GC_CITY_RUNTIME_DIR = %q, want %q; env=%v", got["GC_CITY_RUNTIME_DIR"], customRuntimeDir, got)
 	}
 	wantControlTrace := filepath.Join(customRuntimeDir, "control-dispatcher-trace.log")
-	if got["GC_CONTROL_DISPATCHER_TRACE_DEFAULT"] != wantControlTrace {
+	if canonicalTestPath(got["GC_CONTROL_DISPATCHER_TRACE_DEFAULT"]) != canonicalTestPath(wantControlTrace) {
 		t.Fatalf("GC_CONTROL_DISPATCHER_TRACE_DEFAULT = %q, want %q; env=%v", got["GC_CONTROL_DISPATCHER_TRACE_DEFAULT"], wantControlTrace, got)
 	}
 	wantStateFile := filepath.Join(packStateDir, "dolt-state.json")
-	if got["GC_DOLT_STATE_FILE"] != wantStateFile {
+	if canonicalTestPath(got["GC_DOLT_STATE_FILE"]) != canonicalTestPath(wantStateFile) {
 		t.Fatalf("GC_DOLT_STATE_FILE = %q, want %q; env=%v", got["GC_DOLT_STATE_FILE"], wantStateFile, got)
 	}
 }
@@ -2937,11 +2937,11 @@ provider = "bd"
 	ad.dispatch(context.Background(), cityDir, time.Now())
 
 	got := orderDispatchTestEnv(t, envCh)
-	if got["GC_CITY_RUNTIME_DIR"] != unsafeRuntimeDir {
+	if canonicalTestPath(got["GC_CITY_RUNTIME_DIR"]) != canonicalTestPath(unsafeRuntimeDir) {
 		t.Fatalf("GC_CITY_RUNTIME_DIR = %q, want %q; env=%v", got["GC_CITY_RUNTIME_DIR"], unsafeRuntimeDir, got)
 	}
 	wantControlTrace := filepath.Join(cityDir, ".gc", "runtime", "control-dispatcher-trace.log")
-	if got["GC_CONTROL_DISPATCHER_TRACE_DEFAULT"] != wantControlTrace {
+	if canonicalTestPath(got["GC_CONTROL_DISPATCHER_TRACE_DEFAULT"]) != canonicalTestPath(wantControlTrace) {
 		t.Fatalf("GC_CONTROL_DISPATCHER_TRACE_DEFAULT = %q, want %q; env=%v", got["GC_CONTROL_DISPATCHER_TRACE_DEFAULT"], wantControlTrace, got)
 	}
 }
@@ -3017,7 +3017,7 @@ func TestOrderDispatchExecRigUsesScopedWorkdirAndStoreEnv(t *testing.T) {
 	ad.dispatch(context.Background(), cityDir, time.Now())
 	ad.drain(context.Background())
 
-	if gotDir != rigDir {
+	if canonicalTestPath(gotDir) != canonicalTestPath(rigDir) {
 		t.Fatalf("exec dir = %q, want %q", gotDir, rigDir)
 	}
 	checks := map[string]string{
@@ -3031,9 +3031,17 @@ func TestOrderDispatchExecRigUsesScopedWorkdirAndStoreEnv(t *testing.T) {
 		"GC_RIG_ROOT":     rigDir,
 		"ORDER_DIR":       "/city/orders",
 	}
+	pathKeys := map[string]bool{
+		"GC_CITY": true, "GC_CITY_PATH": true, "BEADS_DIR": true,
+		"GC_STORE_ROOT": true, "GC_RIG_ROOT": true,
+	}
 	for key, want := range checks {
 		entry := key + "=" + want
-		if !slicesContain(gotEnv, entry) {
+		found := slicesContain(gotEnv, entry)
+		if pathKeys[key] {
+			found = canonicalTestPath(envSliceValue(gotEnv, key)) == canonicalTestPath(want)
+		}
+		if !found {
 			t.Fatalf("missing %s in env: %v", entry, gotEnv)
 		}
 	}
@@ -3083,8 +3091,15 @@ func TestOrderDispatchExecMarksExternalDoltTargetForManagedLocalOnlyOrders(t *te
 		"GC_DOLT_CONFIG_FILE":   filepath.Join(externalRoot, "dolt-config.yaml"),
 		"GC_DOLT_STATE_FILE":    filepath.Join(externalRoot, "dolt-state.json"),
 	}
+	pathKeys := map[string]bool{
+		"GC_DOLT_DATA_DIR": true, "GC_DOLT_CONFIG_FILE": true, "GC_DOLT_STATE_FILE": true,
+	}
 	for key, want := range checks {
-		if got[key] != want {
+		matches := got[key] == want
+		if pathKeys[key] {
+			matches = canonicalTestPath(got[key]) == canonicalTestPath(want)
+		}
+		if !matches {
 			t.Fatalf("%s = %q, want %q; env=%v", key, got[key], want, got)
 		}
 	}
@@ -3278,7 +3293,7 @@ func TestOrderDispatchExecIgnoresPublishedRunningDataDirWithUnreachablePort(t *t
 	ad.dispatch(context.Background(), cityDir, time.Now())
 
 	got := orderDispatchTestEnv(t, envCh)
-	if got["GC_DOLT_DATA_DIR"] != defaultDataDir {
+	if canonicalTestPath(got["GC_DOLT_DATA_DIR"]) != canonicalTestPath(defaultDataDir) {
 		t.Fatalf("GC_DOLT_DATA_DIR = %q, want default %q; env=%v", got["GC_DOLT_DATA_DIR"], defaultDataDir, got)
 	}
 }
@@ -9549,7 +9564,7 @@ dolt.auto-start: false
 	}
 	got := listToMap(opts.ConditionEnv)
 
-	if opts.ConditionDir != rigDir {
+	if canonicalTestPath(opts.ConditionDir) != canonicalTestPath(rigDir) {
 		t.Fatalf("ConditionDir = %q, want %q", opts.ConditionDir, rigDir)
 	}
 	assertNoDoltOrderEnv(t, got)

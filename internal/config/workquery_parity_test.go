@@ -24,6 +24,15 @@ var updateGolden = flag.Bool("update", false, "update workquery golden files")
 // oracle copies are eventually retired, TestWorkQueryGolden below remains as
 // the permanent byte-identity pin.
 
+// NOTE: this oracle's terminator was updated in step with gc-mece, which
+// replaced the work query's unconditional `printf "[]"` with
+// emptyWorkQueryGuardScript(). The oracle exists to pin S04b's table-driven
+// refactor as byte-identical, not to freeze the script against deliberate
+// change, so a change of intent is mirrored here rather than worked around. The
+// parity claim it protects — every exported accessor agrees with the frozen
+// build order — is unaffected; only the terminator moved, and it moved on both
+// sides. Note the sibling oracles below still end in `printf "[]"`, because the
+// guard was scoped to the hook's work query alone.
 func oldEffectiveWorkQuery(a *Agent, topo QueryTopology) string {
 	if a.WorkQuery != "" {
 		return a.WorkQuery
@@ -35,7 +44,7 @@ func oldEffectiveWorkQuery(a *Agent, topo QueryTopology) string {
 			poolDemandOriginGateScript() +
 			poolDemandFirstRowFunctionScript(topo) +
 			`probe_pool_demand "$1"; ` +
-			`printf "[]"`
+			emptyWorkQueryGuardScript()
 		return shellquote.Join([]string{"sh", "-c", script, "--", target})
 	}
 	script := legacyControlAssignedWorkQueryScript(topo) +
@@ -43,7 +52,7 @@ func oldEffectiveWorkQuery(a *Agent, topo QueryTopology) string {
 		poolDemandFirstRowFunctionScript(topo) +
 		`probe_pool_demand "$1"; ` +
 		`probe_pool_demand "$2"; ` +
-		`printf "[]"`
+		emptyWorkQueryGuardScript()
 	return shellquote.Join([]string{"sh", "-c", script, "--", target, legacyTarget})
 }
 

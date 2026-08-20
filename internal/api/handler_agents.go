@@ -297,10 +297,42 @@ func (s *Server) findLiveActiveBeadForAssignees(rig string, assignees ...string)
 	return s.findActiveBeadForAssigneesWithFreshness(rig, true, assignees...)
 }
 
-// findActiveBeadForAssigneesWithFreshness uses a targeted ListQuery with
-// Limit=1 instead of broad scans so active-bead lookup stays cheap even when
-// bead counts are large.
+// findActiveBeadForAssigneesWithFreshness resolves one identity set. It builds
+// a single-use index; callers resolving MANY identity sets in one pass should
+// build the index once with newActiveBeadIndex and reuse it.
 func (s *Server) findActiveBeadForAssigneesWithFreshness(rig string, live bool, assignees ...string) string {
+	return s.newActiveBeadIndex(rig, live).lookup(rig, assignees...)
+}
+
+// activeBeadIndex is a snapshot of in_progress work, read once per store and
+// reused across any number of identity lookups.
+//
+// It exists because the lookup is per-identity while its callers are per-row:
+// the agent list resolves three identities per agent and the session list four
+// per session. Giving each identity its own targeted
+// ListQuery{Assignee, Limit: 1} costs O(rows x identities x stores) store
+// reads, and CachingStore cannot absorb that — CachedList serves from a
+// whole-snapshot cache that reports a miss whenever ANY bead is dirty, so a
+// single dirty bead turns every one of those reads into a bd subprocess. On a
+// city with ~54 agents and 6 stores that is ~1000 subprocess spawns for one
+// /agents rebuild, which is how gc supervisor run came to burn >2 cores
+// steady-state while /agents exceeded a 60s client bound (gc-68qc).
+//
+// One unfiltered in_progress read per store is O(stores) instead, and the
+// identity match happens in memory. in_progress is bounded by work actually
+// underway, so the rows held here stay small.
+type activeBeadIndex struct {
+	rigNames []string
+	byRig    map[string][]beads.Bead
+}
+
+// newActiveBeadIndex reads in_progress work once per store in scope. A known
+// rig narrows the scope to that store; an empty or unknown rig spans every
+// store, matching the scope resolution of the per-identity lookup.
+//
+// live bypasses the read-model cache, preserving ListQuery.Live semantics for
+// the detail views that need to observe external reassignment immediately.
+func (s *Server) newActiveBeadIndex(rig string, live bool) *activeBeadIndex {
 	stores := s.state.BeadStores()
 	var rigNames []string
 	if rig != "" {
@@ -311,42 +343,78 @@ func (s *Server) findActiveBeadForAssigneesWithFreshness(rig string, live bool, 
 	if rigNames == nil {
 		rigNames = sortedRigNames(stores)
 	}
+	// No Limit: the rows have to cover every identity the index will be asked
+	// about, which is not known here. Sort is what makes the first match per
+	// identity the newest one, standing in for the replaced Limit: 1.
+	query := beads.ListQuery{
+		Status:     "in_progress",
+		Live:       live,
+		Sort:       beads.SortCreatedDesc,
+		SkipLabels: true,
+	}
+	idx := &activeBeadIndex{
+		rigNames: rigNames,
+		byRig:    make(map[string][]beads.Bead, len(rigNames)),
+	}
+	for _, rn := range rigNames {
+		idx.byRig[rn] = activeBeadRows(stores[rn], query, live)
+	}
+	return idx
+}
+
+// activeBeadRows reads one store, preferring the read-model cache on the
+// non-live path. A read error yields no rows for that store, which is how the
+// per-identity lookup treated it too: an unreadable store contributes no
+// candidates rather than failing the whole resolution.
+func activeBeadRows(store beads.Store, query beads.ListQuery, live bool) []beads.Bead {
+	if !live {
+		if cached, ok := store.(cachedListStore); ok {
+			if rows, cacheOK := cached.CachedList(query); cacheOK {
+				return rows
+			}
+		}
+	}
+	rows, err := store.List(query)
+	if err != nil {
+		return nil
+	}
+	return rows
+}
+
+// lookup returns the ID of the first in_progress bead assigned to any of the
+// given identities, or "" if none match.
+//
+// Precedence is identity-major, then store order, then newest-created — the
+// order the nested per-identity queries resolved in. It matters: identity
+// order encodes preference (concrete session id before session name before
+// alias or template), so a store-major walk would let a stale alias-assigned
+// bead outrank the concrete session's own work.
+func (idx *activeBeadIndex) lookup(rig string, assignees ...string) string {
+	if idx == nil {
+		return ""
+	}
+	rigNames := idx.rigNames
+	if rig != "" {
+		if _, ok := idx.byRig[rig]; ok {
+			rigNames = []string{rig}
+		}
+	}
 	seen := make(map[string]bool, len(assignees))
-	var unique []string
 	for _, assignee := range assignees {
 		assignee = strings.TrimSpace(assignee)
 		if assignee == "" || seen[assignee] {
 			continue
 		}
 		seen[assignee] = true
-		unique = append(unique, assignee)
-	}
-	for _, assignee := range unique {
 		for _, rn := range rigNames {
-			query := beads.ListQuery{
-				Assignee: assignee,
-				Status:   "in_progress",
-				Live:     live,
-				Limit:    1,
-				Sort:     beads.SortCreatedDesc,
-			}
-			if !live {
-				if cached, ok := stores[rn].(cachedListStore); ok {
-					matches, cacheOK := cached.CachedList(query)
-					if cacheOK {
-						if len(matches) > 0 {
-							return matches[0].ID
-						}
-						continue
-					}
+			// Rows are created-desc, so the first assignee match is the
+			// newest — the bead the replaced Limit: 1 query returned.
+			// Matching by exact equality also cuts any superset a backing
+			// store returned for a filter it could not push down.
+			for _, b := range idx.byRig[rn] {
+				if b.Assignee == assignee {
+					return b.ID
 				}
-			}
-			matches, err := stores[rn].List(query)
-			if err != nil {
-				continue
-			}
-			if len(matches) > 0 {
-				return matches[0].ID
 			}
 		}
 	}

@@ -39,7 +39,10 @@ type activeBeadQueryStore struct {
 }
 
 func (s *activeBeadQueryStore) List(query beads.ListQuery) ([]beads.Bead, error) {
-	if query.Assignee != "" && query.Status == "in_progress" {
+	// Keyed on the in_progress status alone: the active-bead lookup batches
+	// every identity into one read per store, so keying on a per-identity
+	// Assignee would silently record nothing and assert nothing.
+	if query.Status == "in_progress" {
 		s.queries = append(s.queries, query)
 	}
 	return s.Store.List(query)

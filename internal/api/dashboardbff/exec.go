@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -19,6 +20,10 @@ const (
 	gitLogTimeout   = 10 * time.Second
 	bdDoctorTimeout = 15 * time.Second
 	gitLogRecentN   = "200"
+
+	// execWaitDelay bounds os/exec's pipe-draining wait when a descendant
+	// escapes the process group while retaining inherited stdout/stderr.
+	execWaitDelay = 2 * time.Second
 )
 
 // execErrKind classifies why a sandboxed subprocess failed.
@@ -63,10 +68,7 @@ func newExecRunner() *execRunner {
 // and bounding wall-clock time. It returns an *execError on validation,
 // timeout, or spawn failure; a non-zero exit code is reported in the result,
 // not as an error.
-func (r *execRunner) run(ctx context.Context, cmd string, args []string, timeout time.Duration, capBytes int) (*execResult, error) {
-	if capBytes <= 0 {
-		capBytes = maxBytes
-	}
+func (r *execRunner) run(ctx context.Context, cmd string, args []string, timeout time.Duration) (*execResult, error) {
 	select {
 	case r.sem <- struct{}{}:
 		defer func() { <-r.sem }()
@@ -80,7 +82,22 @@ func (r *execRunner) run(ctx context.Context, cmd string, args []string, timeout
 	start := time.Now()
 	c := exec.CommandContext(cctx, cmd, args...)
 	c.Env = cleanEnv()
-	stdout := &cappedBuffer{limit: capBytes, onOverflow: cancel}
+	// Keep descendants in a dedicated group so cancellation and output
+	// overflow terminate the whole command tree, not just its leader.
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error {
+		if c.Process == nil {
+			return nil
+		}
+		if err := syscall.Kill(-c.Process.Pid, syscall.SIGKILL); err == nil {
+			return nil
+		}
+		return c.Process.Kill()
+	}
+	// A descendant can still retain a pipe after escaping the group. WaitDelay
+	// makes os/exec close those pipes rather than waiting indefinitely.
+	c.WaitDelay = execWaitDelay
+	stdout := &cappedBuffer{limit: maxBytes, onOverflow: cancel}
 	stderr := &cappedBuffer{limit: maxBytes}
 	c.Stdout = stdout
 	c.Stderr = stderr
@@ -256,7 +273,7 @@ func (r *execRunner) execGitLog(ctx context.Context, view string) (*execResult, 
 	if !ok {
 		return nil, validationErr("unknown git view")
 	}
-	return r.run(ctx, "git", gitArgs(gitRepoPath(), args...), gitLogTimeout, maxBytes)
+	return r.run(ctx, "git", gitArgs(gitRepoPath(), args...), gitLogTimeout)
 }
 
 // execBdDoctor runs a read-only `bd doctor` health probe of a rig's embedded
@@ -266,5 +283,5 @@ func (r *execRunner) execBdDoctor(ctx context.Context, beadsPath string) (*execR
 	if !isValidHostPath(beadsPath) || !strings.HasSuffix(beadsPath, "/.beads") {
 		return nil, validationErr("invalid beads store path")
 	}
-	return r.run(ctx, "bd", []string{"doctor", "--readonly", "--db", beadsPath, "--json"}, bdDoctorTimeout, maxBytes)
+	return r.run(ctx, "bd", []string{"doctor", "--readonly", "--db", beadsPath, "--json"}, bdDoctorTimeout)
 }

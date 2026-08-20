@@ -2974,12 +2974,8 @@ provider = "file"
 	factoryCalled := false
 	controllerStateOpenRigStoreAtForCity = func(_ context.Context, opts beads.StoreOpenOptions) (beads.StoreOpenResult, error) {
 		factoryCalled = true
-		if opts.ScopeRoot != rigDir {
-			t.Fatalf("factory ScopeRoot = %q, want %q", opts.ScopeRoot, rigDir)
-		}
-		if opts.CityPath != cityDir {
-			t.Fatalf("factory CityPath = %q, want %q", opts.CityPath, cityDir)
-		}
+		assertSameTestPath(t, opts.ScopeRoot, rigDir)
+		assertSameTestPath(t, opts.CityPath, cityDir)
 		if opts.Provider != "bd" {
 			t.Fatalf("factory Provider = %q, want bd", opts.Provider)
 		}
@@ -4013,7 +4009,7 @@ func TestBuildStores_ExecProviderSetsPerRigEnv(t *testing.T) {
 			t.Errorf("rig %q: want %s in env, got:\n%s", tc.rig, wantPrefix, env)
 		}
 
-		wantRigRoot := "GC_RIG_ROOT=" + tc.rigPath
+		wantRigRoot := "GC_RIG_ROOT=" + canonicalTestPath(tc.rigPath)
 		if !strings.Contains(env, wantRigRoot) {
 			t.Errorf("rig %q: want %s in env, got:\n%s", tc.rig, wantRigRoot, env)
 		}
@@ -4108,10 +4104,10 @@ func TestBuildStoresBdProviderUsesPassedConfigForRigEnv(t *testing.T) {
 	if !strings.Contains(env, "GC_RIG=alpha\n") {
 		t.Fatalf("captured env missing GC_RIG=alpha; got:\n%s", env)
 	}
-	if !strings.Contains(env, "GC_RIG_ROOT="+rigDir+"\n") {
+	if !strings.Contains(env, "GC_RIG_ROOT="+canonicalTestPath(rigDir)+"\n") {
 		t.Fatalf("captured env missing rig root %q; got:\n%s", rigDir, env)
 	}
-	if !strings.Contains(env, "BEADS_DIR="+filepath.Join(rigDir, ".beads")+"\n") {
+	if !strings.Contains(env, "BEADS_DIR="+filepath.Join(canonicalTestPath(rigDir), ".beads")+"\n") {
 		t.Fatalf("captured env missing rig BEADS_DIR; got:\n%s", env)
 	}
 }

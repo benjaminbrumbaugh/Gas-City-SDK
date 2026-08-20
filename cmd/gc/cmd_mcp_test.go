@@ -140,9 +140,10 @@ API_TOKEN = "super-secret"
 	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
 		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
 	}
-	if got.SchemaVersion != "1" || got.CityPath != cityDir || got.Query.Agent != "mayor" {
+	if got.SchemaVersion != "1" || got.Query.Agent != "mayor" {
 		t.Fatalf("metadata = %+v", got)
 	}
+	assertSameTestPath(t, got.CityPath, cityDir)
 	if got.Projection.Provider != "gemini" || got.Projection.Target == "" {
 		t.Fatalf("projection = %+v", got.Projection)
 	}

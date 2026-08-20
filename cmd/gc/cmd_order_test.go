@@ -282,10 +282,10 @@ func TestCityOrderRootsUseLocalFormulaLayerForVisibleRoot(t *testing.T) {
 	visibleRoot := filepath.Join(cityDir, "orders")
 	wantLayer := filepath.Join(cityDir, "formulas")
 	for _, root := range roots {
-		if root.Dir != visibleRoot {
+		if canonicalTestPath(root.Dir) != canonicalTestPath(visibleRoot) {
 			continue
 		}
-		if root.FormulaLayer != wantLayer {
+		if canonicalTestPath(root.FormulaLayer) != canonicalTestPath(wantLayer) {
 			t.Fatalf("FormulaLayer = %q, want %q", root.FormulaLayer, wantLayer)
 		}
 		return
@@ -310,10 +310,10 @@ func TestCityOrderRootsUseTopLevelPackOrders(t *testing.T) {
 
 	roots := cityOrderRoots(cityDir, cfg)
 	for _, root := range roots {
-		if root.Dir != ordersDir {
+		if canonicalTestPath(root.Dir) != canonicalTestPath(ordersDir) {
 			continue
 		}
-		if root.FormulaLayer != formulasDir {
+		if canonicalTestPath(root.FormulaLayer) != canonicalTestPath(formulasDir) {
 			t.Fatalf("FormulaLayer = %q, want %q", root.FormulaLayer, formulasDir)
 		}
 		return
@@ -334,7 +334,7 @@ func TestCityOrderRootsDedupesLegacyLocalRoot(t *testing.T) {
 
 	var count int
 	for _, root := range roots {
-		if root.Dir == citylayout.OrdersPath(cityDir) {
+		if canonicalTestPath(root.Dir) == canonicalTestPath(citylayout.OrdersPath(cityDir)) {
 			count++
 		}
 	}
@@ -367,7 +367,7 @@ func TestCityOrderRootsPackDirsDedupe(t *testing.T) {
 	ordersDir := filepath.Join(packDir, "orders")
 	var count int
 	for _, root := range roots {
-		if root.Dir == ordersDir {
+		if canonicalTestPath(root.Dir) == canonicalTestPath(ordersDir) {
 			count++
 		}
 	}
@@ -407,9 +407,7 @@ schedule = "*/5 * * * *"
 	if aa[0].Name != "health-check" {
 		t.Fatalf("Name = %q, want %q", aa[0].Name, "health-check")
 	}
-	if aa[0].Source != filepath.Join(cityDir, "orders", "health-check.toml") {
-		t.Fatalf("Source = %q, want %q", aa[0].Source, filepath.Join(cityDir, "orders", "health-check.toml"))
-	}
+	assertSameTestPath(t, aa[0].Source, filepath.Join(cityDir, "orders", "health-check.toml"))
 }
 
 func TestScanAllOrdersRemoteImportedFlatPackOrders(t *testing.T) {
@@ -506,9 +504,7 @@ fetched = "2026-04-10T00:00:00Z"
 	if imported.Name != "health-check" {
 		t.Fatalf("Name = %q, want %q", imported.Name, "health-check")
 	}
-	if imported.Source != filepath.Join(cacheDir, "orders", "health-check.toml") {
-		t.Fatalf("Source = %q, want %q", imported.Source, filepath.Join(cacheDir, "orders", "health-check.toml"))
-	}
+	assertSameTestPath(t, imported.Source, filepath.Join(cacheDir, "orders", "health-check.toml"))
 }
 
 func TestScanAllOrdersCityLegacyFormulaOrdersRejects(t *testing.T) {
@@ -2618,13 +2614,13 @@ prefix = "fe"
 	if len(lines) != 7 {
 		t.Fatalf("exec env lines = %d, want 7 (%q)", len(lines), string(data))
 	}
-	if lines[0] != rigDir {
+	if canonicalTestPath(lines[0]) != canonicalTestPath(rigDir) {
 		t.Fatalf("pwd = %q, want %q", lines[0], rigDir)
 	}
-	if lines[1] != filepath.Join(rigDir, ".beads") {
+	if canonicalTestPath(lines[1]) != canonicalTestPath(filepath.Join(rigDir, ".beads")) {
 		t.Fatalf("BEADS_DIR = %q, want %q", lines[1], filepath.Join(rigDir, ".beads"))
 	}
-	if lines[2] != rigDir {
+	if canonicalTestPath(lines[2]) != canonicalTestPath(rigDir) {
 		t.Fatalf("GC_STORE_ROOT = %q, want %q", lines[2], rigDir)
 	}
 	if lines[3] != "rig" {
@@ -2636,7 +2632,7 @@ prefix = "fe"
 	if lines[5] != "frontend" {
 		t.Fatalf("GC_RIG = %q, want frontend", lines[5])
 	}
-	if lines[6] != rigDir {
+	if canonicalTestPath(lines[6]) != canonicalTestPath(rigDir) {
 		t.Fatalf("GC_RIG_ROOT = %q, want %q", lines[6], rigDir)
 	}
 }
@@ -2837,9 +2833,9 @@ prefix = "ct"
 		"host=<external.example.internal>",
 		"port=<4406>",
 		"pack_state=<>",
-		"data=<" + externalRoot + ">",
-		"config=<" + filepath.Join(externalRoot, "dolt-config.yaml") + ">",
-		"state=<" + filepath.Join(externalRoot, "dolt-state.json") + ">",
+		"data=<" + canonicalTestPath(externalRoot) + ">",
+		"config=<" + canonicalTestPath(filepath.Join(externalRoot, "dolt-config.yaml")) + ">",
+		"state=<" + canonicalTestPath(filepath.Join(externalRoot, "dolt-state.json")) + ">",
 	}, "\n")
 	if got != want {
 		t.Fatalf("order exec env:\ngot:\n%s\nwant:\n%s", got, want)
@@ -2915,8 +2911,8 @@ prefix = "ct"
 	want := strings.Join([]string{
 		"managed=<1>",
 		"port=<" + port + ">",
-		"data=<" + dataDir + ">",
-		"config=<" + configFile + ">",
+		"data=<" + canonicalTestPath(dataDir) + ">",
+		"config=<" + canonicalTestPath(configFile) + ">",
 	}, "\n")
 	if got != want {
 		t.Fatalf("order exec env:\ngot:\n%s\nwant:\n%s", got, want)

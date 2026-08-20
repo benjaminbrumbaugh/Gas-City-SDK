@@ -19,6 +19,25 @@ import (
 	"github.com/gastownhall/gascity/internal/events"
 )
 
+func hookOutputPath(out, key string) string {
+	prefix := key + "="
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimPrefix(line, prefix)
+		}
+	}
+	return ""
+}
+
+func assertHookOutputPath(t *testing.T, out, key, want string) {
+	t.Helper()
+	got := hookOutputPath(out, key)
+	if got == "" {
+		t.Fatalf("stdout = %q, missing %s path", out, key)
+	}
+	assertSameTestPath(t, got, want)
+}
+
 // setHookRunExecutableForTest stubs the re-exec target of `gc hook run` to the
 // shell so tests can drive the wrapper with `sh -c` scripts instead of the real
 // gc binary. The stub is restored on cleanup.
@@ -2311,12 +2330,8 @@ max = 5
 		t.Fatalf("cmdHook() = %d, want 0; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "pwd="+rigDir) {
-		t.Fatalf("stdout = %q, want command to run from rig root %q", out, rigDir)
-	}
-	if !strings.Contains(out, "store_root="+rigDir) {
-		t.Fatalf("stdout = %q, want GC_STORE_ROOT=%q", out, rigDir)
-	}
+	assertHookOutputPath(t, out, "pwd", rigDir)
+	assertHookOutputPath(t, out, "store_root", rigDir)
 	if !strings.Contains(out, "store_scope=rig") {
 		t.Fatalf("stdout = %q, want GC_STORE_SCOPE=rig", out)
 	}
@@ -2326,9 +2341,7 @@ max = 5
 	if !strings.Contains(out, "rig=myrig") {
 		t.Fatalf("stdout = %q, want GC_RIG=myrig", out)
 	}
-	if !strings.Contains(out, "rig_root="+rigDir) {
-		t.Fatalf("stdout = %q, want GC_RIG_ROOT=%q", out, rigDir)
-	}
+	assertHookOutputPath(t, out, "rig_root", rigDir)
 	// Tiered query: first tier checks in_progress assigned to session name.
 	if !strings.Contains(out, "args=list --status in_progress --assignee=host-session --json --limit=1") {
 		t.Fatalf("stdout = %q, want pool work_query args", out)
@@ -2391,16 +2404,11 @@ dir = "myrig"
 		t.Fatalf("cmdHook() = %d, want 0; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	wantBeads := filepath.Join(rigDir, ".beads")
-	if !strings.Contains(out, "beads_dir="+wantBeads) {
-		t.Fatalf("stdout = %q, want BEADS_DIR=%s (rig store), not inherited city value", out, wantBeads)
-	}
-	if strings.Contains(out, "beads_dir="+cityBeads) {
+	assertHookOutputPath(t, out, "beads_dir", filepath.Join(rigDir, ".beads"))
+	if got := hookOutputPath(out, "beads_dir"); canonicalTestPath(got) == canonicalTestPath(filepath.Join(cityDir, ".beads")) {
 		t.Fatalf("stdout = %q, inherited city BEADS_DIR leaked into subprocess", out)
 	}
-	if !strings.Contains(out, "rig_root="+rigDir) {
-		t.Fatalf("stdout = %q, want GC_RIG_ROOT=%s", out, rigDir)
-	}
+	assertHookOutputPath(t, out, "rig_root", rigDir)
 	if !strings.Contains(out, "rig=myrig") {
 		t.Fatalf("stdout = %q, want GC_RIG=myrig", out)
 	}
@@ -2527,13 +2535,8 @@ dir = "myrig"
 		t.Fatalf("cmdHook() = %d, want 0; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	wantBeads := filepath.Join(rigAbs, ".beads")
-	if !strings.Contains(out, "beads_dir="+wantBeads) {
-		t.Fatalf("stdout = %q, want absolute BEADS_DIR=%s (relative rig path should be resolved)", out, wantBeads)
-	}
-	if !strings.Contains(out, "rig_root="+rigAbs) {
-		t.Fatalf("stdout = %q, want absolute GC_RIG_ROOT=%s", out, rigAbs)
-	}
+	assertHookOutputPath(t, out, "beads_dir", filepath.Join(rigAbs, ".beads"))
+	assertHookOutputPath(t, out, "rig_root", rigAbs)
 	// GC_RIG is only set when bdRuntimeEnvForRig's loop finds a matching
 	// rig config. With unresolved relative paths, samePath() fails and
 	// GC_RIG stays empty — this assertion catches that regression.
@@ -2634,7 +2637,7 @@ dir = "workdir"
 		t.Fatalf("cmdHook() = %d, want 0; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	wantBeads := filepath.Join(cityDir, ".beads")
+	wantBeads := filepath.Join(canonicalTestPath(cityDir), ".beads")
 	if !strings.Contains(out, "beads_dir="+wantBeads) {
 		t.Fatalf("stdout = %q, want BEADS_DIR=%s (city store), non-rig agent must not be pointed at <dir>/.beads", out, wantBeads)
 	}
@@ -2709,9 +2712,7 @@ max = 5
 		t.Fatalf("cmdHook() = %d, want 0; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "pwd="+rigDir) {
-		t.Fatalf("stdout = %q, want command to run from rig root %q", out, rigDir)
-	}
+	assertHookOutputPath(t, out, "pwd", rigDir)
 	// Tiered query: first tier checks in_progress assigned to session name.
 	if !strings.Contains(out, "args=list --status in_progress --assignee=host-session --json --limit=1") {
 		t.Fatalf("stdout = %q, want pool template work_query args", out)

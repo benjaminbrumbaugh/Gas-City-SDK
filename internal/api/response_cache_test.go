@@ -17,6 +17,7 @@ type countingStore struct {
 	listCalls           int
 	listByLabelCalls    int
 	listByAssigneeCalls int
+	activeBeadReads     int
 }
 
 func (s *countingStore) ListOpen(status ...string) ([]beads.Bead, error) {
@@ -25,6 +26,13 @@ func (s *countingStore) ListOpen(status ...string) ([]beads.Bead, error) {
 }
 
 func (s *countingStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	// Additive, deliberately outside the switch below: the active-bead index
+	// read is also a status-scoped read, and diverting it out of listCalls
+	// would silently change what the orders and formula feed tests count.
+	// The non-live guard keeps the Live workflow-projection reads out.
+	if query.Status == "in_progress" && !query.Live {
+		s.activeBeadReads++
+	}
 	switch {
 	case query.Assignee != "":
 		s.listByAssigneeCalls++
@@ -195,8 +203,11 @@ func TestHandleAgentListCachesUntilIndexChanges(t *testing.T) {
 		t.Fatalf("second agents = %d, want 200", rec.Code)
 	}
 
-	if store.listByAssigneeCalls != 2 {
-		t.Fatalf("ListByAssignee calls after cached repeat = %d, want 2", store.listByAssigneeCalls)
+	// One rebuild, so one active-bead read — not one per identity. The
+	// second request must add none of its own: that is the cache hit this
+	// test exists to pin.
+	if store.activeBeadReads != 1 {
+		t.Fatalf("active-bead reads after cached repeat = %d, want 1", store.activeBeadReads)
 	}
 
 	state.eventProv.Record(events.Event{Type: events.SessionWoke, Actor: "gc"})
@@ -205,8 +216,8 @@ func TestHandleAgentListCachesUntilIndexChanges(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("third agents = %d, want 200", rec.Code)
 	}
-	if store.listByAssigneeCalls != 4 {
-		t.Fatalf("ListByAssignee calls after index change = %d, want 4", store.listByAssigneeCalls)
+	if store.activeBeadReads != 2 {
+		t.Fatalf("active-bead reads after index change = %d, want 2 (the index change must force one rebuild)", store.activeBeadReads)
 	}
 }
 

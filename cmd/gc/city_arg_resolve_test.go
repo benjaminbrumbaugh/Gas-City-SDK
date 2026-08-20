@@ -357,9 +357,8 @@ func makeCitySymlinkAliasFixture(t *testing.T) (cityPath, aliasCityPath string) 
 
 // TestResolveCityFlagValueResolvesSymlinkAlias pins ga-iawy13.8: --city must
 // canonicalize a symlink-alias path to the same value findCity would produce
-// from cwd discovery, not just filepath.Abs it. Deliberately compares with
-// raw == (not samePath, which normalizes both sides and would pass even
-// against the un-normalized result).
+// from cwd discovery, not just filepath.Abs it. Compare with the test path
+// helper because macOS may spell the same temporary path as /var or /private/var.
 func TestResolveCityFlagValueResolvesSymlinkAlias(t *testing.T) {
 	t.Setenv("GC_HOME", t.TempDir())
 	cityPath, aliasCityPath := makeCitySymlinkAliasFixture(t)
@@ -368,9 +367,7 @@ func TestResolveCityFlagValueResolvesSymlinkAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != cityPath {
-		t.Fatalf("resolveCityFlagValue(%q) = %q, want canonical %q (must resolve the symlink alias, not just Abs it)", aliasCityPath, got, cityPath)
-	}
+	assertSameTestPath(t, got, cityPath)
 }
 
 // TestResolveExplicitCityPathEnvResolvesSymlinkAlias pins ga-iawy13.8 for the
@@ -388,9 +385,7 @@ func TestResolveExplicitCityPathEnvResolvesSymlinkAlias(t *testing.T) {
 	if !ok {
 		t.Fatal("resolveExplicitCityPathEnv() ok = false, want true")
 	}
-	if got != cityPath {
-		t.Fatalf("resolveExplicitCityPathEnv() via GC_CITY_PATH = %q, want canonical %q (must resolve the symlink alias, not just Abs it)", got, cityPath)
-	}
+	assertSameTestPath(t, got, cityPath)
 }
 
 // TestResolveCommandContextPathArgResolvesSymlinkAlias pins ga-iawy13.8 for
@@ -406,9 +401,7 @@ func TestResolveCommandContextPathArgResolvesSymlinkAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ctx.CityPath != cityPath {
-		t.Fatalf("resolveCommandContext([%q]).CityPath = %q, want canonical %q (must resolve the symlink alias, not just Abs it)", aliasCityPath, ctx.CityPath, cityPath)
-	}
+	assertSameTestPath(t, ctx.CityPath, cityPath)
 }
 
 func TestResolveExplicitCityPathEnvByName(t *testing.T) {

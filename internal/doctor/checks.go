@@ -790,6 +790,33 @@ func (c *BDSplitStoreCheck) Run(_ *CheckContext) *CheckResult {
 			r.Message = "legacy split store directories present but no Dolt repos found"
 			return r
 		}
+		// Name what is actually on disk. The guards above test only
+		// directory EXISTENCE (splitStoreDirExists is os.Stat + IsDir), and
+		// bd creates both directories eagerly and leaves the unused one
+		// behind, so this branch used to report "both .beads/dolt and
+		// .beads/embeddeddolt contain or may contain data" while one of them
+		// was empty. That claim was false on most rigs, and a warning whose
+		// text is reliably wrong trains readers past the whole
+		// bd-split-store class — which is what leaves a genuine two-sided
+		// split indistinguishable from the standing noise (gc-dm9).
+		//
+		// Still a WARNING, deliberately. One populated local directory with
+		// no active local store is unread bead data sitting beside a ledger
+		// that lives elsewhere, which is the hazard
+		// unreadStoreBesideTheActiveOne exists for and which it cannot
+		// report here: it returns nil unless the active store is one of the
+		// two local dirs. Only the wording is wrong, not the signal.
+		if len(serverRepos) == 0 || len(embeddedRepos) == 0 {
+			populated, empty, repos := "embeddeddolt", "dolt", embeddedRepos
+			if len(serverRepos) > 0 {
+				populated, empty, repos = "dolt", "embeddeddolt", serverRepos
+			}
+			r.Status = StatusWarning
+			r.Message = fmt.Sprintf("unread bead data and no active local store was identified: .beads/%s contains %d Dolt repo(s), .beads/%s is empty", populated, len(repos), empty)
+			r.Details = splitStoreDetails("unknown", activeSource, serverRepos, embeddedRepos)
+			r.FixHint = splitStoreFixHint("unknown")
+			return r
+		}
 		r.Status = StatusWarning
 		r.Message = "legacy split store detected: both .beads/dolt and .beads/embeddeddolt contain or may contain data, but no active local store was identified"
 		r.Details = splitStoreDetails("unknown", activeSource, serverRepos, embeddedRepos)

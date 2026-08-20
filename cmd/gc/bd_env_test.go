@@ -701,12 +701,12 @@ func TestBdRuntimeEnvForRigResolvesSymlinkAlias(t *testing.T) {
 		t.Logf("bdRuntimeEnvForRigWithError() error = %v (ignored; BEADS_DIR/GC_RIG_ROOT are set before backend resolution)", err)
 	}
 
-	wantBeadsDir := filepath.Join(rigPath, ".beads")
+	wantBeadsDir := filepath.Join(canonicalTestPath(rigPath), ".beads")
 	if env["BEADS_DIR"] != wantBeadsDir {
 		t.Errorf("BEADS_DIR = %q, want canonical %q (must resolve the symlink alias, not just Clean it)", env["BEADS_DIR"], wantBeadsDir)
 	}
-	if env["GC_RIG_ROOT"] != rigPath {
-		t.Errorf("GC_RIG_ROOT = %q, want canonical %q (must resolve the symlink alias, not just Clean it)", env["GC_RIG_ROOT"], rigPath)
+	if env["GC_RIG_ROOT"] != canonicalTestPath(rigPath) {
+		t.Errorf("GC_RIG_ROOT = %q, want canonical %q (must resolve the symlink alias, not just Clean it)", env["GC_RIG_ROOT"], canonicalTestPath(rigPath))
 	}
 }
 
@@ -2733,7 +2733,7 @@ dolt.port: 4407
 	if got := env["BEADS_DOLT_SERVER_PORT"]; got != "4407" {
 		t.Fatalf("BEADS_DOLT_SERVER_PORT = %q, want rig scoped port", got)
 	}
-	if got := env["BEADS_DIR"]; got != filepath.Join(rigDir, ".beads") {
+	if got := env["BEADS_DIR"]; got != filepath.Join(canonicalTestPath(rigDir), ".beads") {
 		t.Fatalf("BEADS_DIR = %q, want rig scoped beads dir", got)
 	}
 }
@@ -2901,7 +2901,7 @@ func TestBdRuntimeEnvForRigFallsBackToManagedCityPort(t *testing.T) {
 	if got := env["BEADS_DOLT_SERVER_PORT"]; got != want {
 		t.Fatalf("BEADS_DOLT_SERVER_PORT = %q, want %q", got, want)
 	}
-	if got := env["BEADS_DIR"]; got != filepath.Join(rigDir, ".beads") {
+	if got := env["BEADS_DIR"]; got != filepath.Join(canonicalTestPath(rigDir), ".beads") {
 		t.Fatalf("BEADS_DIR = %q, want %q", got, filepath.Join(rigDir, ".beads"))
 	}
 }
@@ -3206,14 +3206,14 @@ func TestBdRuntimeEnvForRigPrefersExplicitRigDoltConfigOverManagedCity(t *testin
 	if got := env["BEADS_DOLT_SERVER_PORT"]; got != "3307" {
 		t.Fatalf("BEADS_DOLT_SERVER_PORT = %q, want %q", got, "3307")
 	}
-	if got := env["BEADS_DIR"]; got != filepath.Join(rigDir, ".beads") {
+	if got := env["BEADS_DIR"]; got != filepath.Join(canonicalTestPath(rigDir), ".beads") {
 		t.Fatalf("BEADS_DIR = %q, want %q", got, filepath.Join(rigDir, ".beads"))
 	}
 	if got := env["GC_RIG"]; got != "repo" {
 		t.Fatalf("GC_RIG = %q, want %q", got, "repo")
 	}
-	if got := env["GC_RIG_ROOT"]; got != rigDir {
-		t.Fatalf("GC_RIG_ROOT = %q, want %q", got, rigDir)
+	if got := env["GC_RIG_ROOT"]; got != canonicalTestPath(rigDir) {
+		t.Fatalf("GC_RIG_ROOT = %q, want %q", got, canonicalTestPath(rigDir))
 	}
 }
 

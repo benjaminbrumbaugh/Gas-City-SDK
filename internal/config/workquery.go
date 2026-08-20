@@ -722,6 +722,38 @@ func (a *Agent) EffectiveWorkQueryFor(topo QueryTopology) string {
 	return a.effectiveQuery(queryWork, topo)
 }
 
+// emptyWorkQueryGuardScript terminates a work-query script. Every probe found
+// nothing, so the answer is "[]" — which every caller reads as a confident "you
+// have no work". Before saying that, confirm the store was actually readable.
+//
+// The single-store probe tiers sink their own stderr and ignore their exit
+// status (readyReaderStderrSink / readyReaderFailurePropagation), and that
+// fall-through is deliberate: one tier failing says nothing about the tiers
+// after it. What it cannot express is the case where NO tier succeeded. A store
+// that is wholly unreadable — a bd binary older than the store schema, a stopped
+// dolt, a missing bd — fails every tier identically, reached the unconditional
+// `printf "[]"` that used to stand here, and made `gc hook` answer with an empty
+// array, exit 1, and a silent stderr: byte-identical to a genuinely empty hook,
+// so an agent booted and concluded it was idle while its beads sat routed to it
+// (gc-mece).
+//
+// The check runs ONLY on this path, where the answer is already "no work", so it
+// costs one extra round-trip on the idle branch and none when a probe found
+// work. That distinction matters: probe round-trip count is why
+// hookWorkQueryTimeout sits at 150s.
+//
+// Exit 70 is deliberately not 1: 1 is the documented "hook is empty" answer from
+// `gc hook` itself, and reusing it here would keep the two indistinguishable in
+// logs. Any non-zero status routes doHook to its error branch, which surfaces
+// the reader's own diagnostic captured below.
+func emptyWorkQueryGuardScript() string {
+	return `if ! probe_err=$(bd list --limit=1 --json 2>&1 >/dev/null); then ` +
+		`printf "gc work query: store unreadable, refusing to report an empty hook: %s\n" "$probe_err" >&2; ` +
+		`exit 70; ` +
+		`fi; ` +
+		`printf "[]"`
+}
+
 func buildWorkQuery(a *Agent, topo QueryTopology) string {
 	target := a.poolDemandTarget()
 	legacyTarget := legacyWorkflowControlQualifiedName(target)
@@ -730,7 +762,7 @@ func buildWorkQuery(a *Agent, topo QueryTopology) string {
 			poolDemandOriginGateScript() +
 			poolDemandFirstRowFunctionScript(topo) +
 			`probe_pool_demand "$1"; ` +
-			`printf "[]"`
+			emptyWorkQueryGuardScript()
 		return shellquote.Join([]string{"sh", "-c", script, "--", target})
 	}
 	script := legacyControlAssignedWorkQueryScript(topo) +
@@ -738,7 +770,7 @@ func buildWorkQuery(a *Agent, topo QueryTopology) string {
 		poolDemandFirstRowFunctionScript(topo) +
 		`probe_pool_demand "$1"; ` +
 		`probe_pool_demand "$2"; ` +
-		`printf "[]"`
+		emptyWorkQueryGuardScript()
 	return shellquote.Join([]string{"sh", "-c", script, "--", target, legacyTarget})
 }
 

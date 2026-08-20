@@ -360,13 +360,12 @@ func issuePrefixForScope(scopeRoot, cityPath string, cfg *config.City) string {
 	if cfg == nil {
 		return ""
 	}
-	scopeRoot = filepath.Clean(scopeRoot)
-	if filepath.Clean(cityPath) == scopeRoot {
+	if samePath(cityPath, scopeRoot) {
 		return config.EffectiveHQPrefix(cfg)
 	}
 	for i := range cfg.Rigs {
 		rigPath := resolveStoreScopeRoot(cityPath, cfg.Rigs[i].Path)
-		if filepath.Clean(rigPath) == scopeRoot {
+		if samePath(rigPath, scopeRoot) {
 			return cfg.Rigs[i].EffectivePrefix()
 		}
 	}
@@ -1491,6 +1490,7 @@ func cityIdentityAnchorsForCity(cityPath string) map[string]string {
 }
 
 func cityRuntimeProcessEnvWithError(cityPath string) ([]string, error) {
+	lookupCityPath := cityPath
 	cityPath = normalizePathForCompare(cityPath)
 	overrides := cityRuntimeEnvMapForCity(cityPath)
 	var projectionErr error
@@ -1504,7 +1504,7 @@ func cityRuntimeProcessEnvWithError(cityPath string) ([]string, error) {
 			mirrorBeadsDoltEnv(source)
 			projectionErr = err
 		} else if !bound {
-			err := applyResolvedCityDoltEnv(source, cityPath, false)
+			err := applyResolvedCityDoltEnv(source, lookupCityPath, false)
 			if err != nil {
 				// Mirror the storage-binding error branch: clearing the projected Dolt
 				// keys alone leaves BEADS_DOLT_SERVER_TLS unset in source, so it

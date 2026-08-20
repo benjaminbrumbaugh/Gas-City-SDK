@@ -1067,6 +1067,14 @@ func unclaimWorkAssignedToRetiredSessionBead(
 	if stderr == nil {
 		stderr = io.Discard
 	}
+	// The retired session is losing every bead it owns, so its claim
+	// back-channel must stop naming one. Cleared BEFORE the releases: a stale
+	// stamp is only dangerous once the work is detached, and clearing first
+	// means a release that fails mid-fan-out still leaves no session pointing at
+	// a bead it may no longer own.
+	if err := clearSessionCurrentClaim(store, sessionBead.ID); err != nil {
+		fmt.Fprintf(stderr, "session beads: clearing current claim on retired session %s: %v\n", sessionBead.ID, err) //nolint:errcheck
+	}
 	identifiers := sessionAssignmentIdentifiers(sessionBead)
 	seen := make(map[string]struct{})
 	sweepAssignedWorkLegs(cityPath, cfg, store, rigStores, identifiers, stderr, func(storeIndex int, ownerStore beads.Store) {
@@ -1206,6 +1214,14 @@ func reassignWorkAssignedToRetiredSessionBead(
 	if stderr == nil {
 		stderr = io.Discard
 	}
+	// The work moves to newSessionID, which stamps its own claim back-channel on
+	// its next hook tick. The RETIRED session must stop naming the bead now:
+	// `gc hook current` is how a formula step names the bead it closes, and a
+	// retired session left pointing at reassigned work would close the successor's
+	// bead out from under it.
+	if err := clearSessionCurrentClaim(store, retiredSession.ID); err != nil {
+		fmt.Fprintf(stderr, "session beads: clearing current claim on retired session %s: %v\n", retiredSession.ID, err) //nolint:errcheck
+	}
 	identifiers := sessionAssignmentIdentifiers(retiredSession)
 	seen := make(map[string]struct{})
 	sweepAssignedWorkLegs(cityPath, cfg, store, rigStores, identifiers, stderr, func(storeIndex int, ownerStore beads.Store) {
@@ -1254,6 +1270,11 @@ func reassignWorkAssignedToRetiredSessionInfo(
 	}
 	if stderr == nil {
 		stderr = io.Discard
+	}
+	// Same claim back-channel clear as the raw reassignment form above, so the
+	// two stay byte-identical in the bead writes they emit.
+	if err := clearSessionCurrentClaim(store, retiredSession.ID); err != nil {
+		fmt.Fprintf(stderr, "session beads: clearing current claim on retired session %s: %v\n", retiredSession.ID, err) //nolint:errcheck
 	}
 	identifiers := sessionAssignmentIdentifiersInfo(retiredSession)
 	seen := make(map[string]struct{})
@@ -1310,6 +1331,11 @@ func unclaimWorkAssignedToRetiredSessionInfo(
 	}
 	if stderr == nil {
 		stderr = io.Discard
+	}
+	// Same claim back-channel clear as the raw retirement form above, so the two
+	// stay byte-identical in the bead writes they emit.
+	if err := clearSessionCurrentClaim(store, retiredSession.ID); err != nil {
+		fmt.Fprintf(stderr, "session beads: clearing current claim on retired session %s: %v\n", retiredSession.ID, err) //nolint:errcheck
 	}
 	identifiers := sessionAssignmentIdentifiersInfo(retiredSession)
 	seen := make(map[string]struct{})
@@ -1503,7 +1529,34 @@ func cancelStateAssignedToRetiredSessionBead(store beads.Store, sessionID string
 // Returns a map of session_name → bead_id for all open session beads after
 // sync. Callers that don't need the index can ignore the return value.
 //
+// aliasUnavailableMustBlock reports whether an unavailable managed alias must
+// ABORT session creation rather than fall through and create the bead without
+// its alias.
+//
+// Falling through produces a "substitute target": a session named s-<beadID>
+// that can never hold the alias it was spawned to satisfy. For a pool member
+// that is fine — pool members are addressed by pool, not by name — but for a
+// named session it turns a stuck demand signal into an unbounded session leak.
+// Named demand is keyed on the alias, so no substitute can ever retire it: the
+// reconciler re-derives the same demand every ~60s window and spawns another
+// full provider session, without bound. Eight live s-gc-wisp-* mayor sessions
+// accumulated over ~3h that way, each running a fresh investigation before
+// going idle, while the only signal was alias-conflict lines that read as
+// ordinary contention noise (gc-mtb).
+//
+// isConfiguredNamed alone is not enough. It is derived from
+// tp.ConfiguredNamedIdentity, which the named-session path stamps; when the
+// same identity is materialized from POOL demand that field is empty, the guard
+// misses, and a substitute is created for what is really a named session. So
+// the alias itself is also checked against the configured named sessions —
+// being a named identity is a property of the alias, not of the route that
+// happened to ask for it.
+//
 //nolint:unparam // cityPath and skipClose are passed through to syncSessionBeadsWithSnapshot
+func aliasUnavailableMustBlock(cfg *config.City, isConfiguredNamed bool, managedAlias string) bool {
+	return isConfiguredNamed || isConfiguredNamedSessionIdentity(cfg, managedAlias)
+}
+
 func syncSessionBeads(
 	cityPath string,
 	store beads.Store,
@@ -1904,7 +1957,11 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 			finalizeCreatedSessionName := func() {
 				createdSessionName = strings.TrimSpace(newBead.Metadata["session_name"])
 				if isPoolInstance {
-					createdSessionName = PoolSessionName(qualifiedTemplate, newBead.ID)
+					// Derived from the pool identity, never the bead ID: a
+					// bead-ID name is a fresh runtime box per attempt, which is
+					// the ga-vcjr9 leak. Same derivation as the planner's
+					// create path (derivePoolSessionName).
+					createdSessionName = poolRuntimeSessionName(cfg, agentName, qualifiedTemplate, transientPoolSlot)
 					if err := sessFront.SetMarker(newBead.ID, "session_name", createdSessionName); err != nil {
 						finalizeErr = err
 						fmt.Fprintf(stderr, "session beads: setting pool session_name for %s: %v\n", agentName, err) //nolint:errcheck
@@ -1924,7 +1981,7 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 				lockFn := func() error {
 					if err := session.EnsureAliasAvailableWithConfigForOwner(store, cfg, managedAlias, "", managedAlias); err != nil {
 						fmt.Fprintf(stderr, "session beads: alias %q for %s unavailable: %v\n", managedAlias, agentName, err) //nolint:errcheck
-						if isConfiguredNamed {
+						if aliasUnavailableMustBlock(cfg, isConfiguredNamed, managedAlias) {
 							createErr = err
 							blocked = true
 							return nil
@@ -3250,6 +3307,13 @@ func releaseWorkFromClosedSessionBead(store beads.Store, sessionBead beads.Bead,
 	}
 	if stderr == nil {
 		stderr = io.Discard
+	}
+
+	// The closing session is losing every bead it owns, so its claim
+	// back-channel must stop naming one — otherwise a later reader of
+	// `gc hook current` for this id would be handed a bead it no longer owns.
+	if err := clearSessionCurrentClaim(store, sessionBead.ID); err != nil {
+		fmt.Fprintf(stderr, "session beads: clearing current claim on closing session %s: %v\n", sessionBead.ID, err) //nolint:errcheck
 	}
 
 	// The owning pool/agent route, recovered from the closing session's own

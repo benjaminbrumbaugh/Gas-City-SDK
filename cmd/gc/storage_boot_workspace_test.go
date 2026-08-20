@@ -115,7 +115,7 @@ func TestStorageGateRefusesAWorkspaceThatIsNotThere(t *testing.T) {
 	if !errors.Is(err, beadsworkspace.ErrWorkspaceUnavailable) {
 		t.Fatalf("the gate refused with %v, want %v", err, beadsworkspace.ErrWorkspaceUnavailable)
 	}
-	if !strings.Contains(err.Error(), root) {
+	if !strings.Contains(err.Error(), canonicalTestPath(root)) {
 		t.Errorf("the refusal does not name the workspace directory %s: %v", root, err)
 	}
 	if _, present, noteErr := readBornSplitServedNote(cityPath); noteErr != nil {
@@ -150,7 +150,7 @@ func TestStorageGateResolvesTheWorkspaceFromTheCityNotTheProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolving the second city's workspace: %v", err)
 	}
-	if firstRoot == secondRoot {
+	if canonicalTestPath(firstRoot) == canonicalTestPath(secondRoot) {
 		t.Fatalf("two cities sharing one configuration reference resolved the same workspace %s", firstRoot)
 	}
 
@@ -165,7 +165,7 @@ func TestStorageGateResolvesTheWorkspaceFromTheCityNotTheProcess(t *testing.T) {
 			_ = routes.close()
 			t.Fatalf("city %s served from a workspace that does not exist", city.path)
 		}
-		if !strings.Contains(err.Error(), city.root) {
+		if !strings.Contains(err.Error(), canonicalTestPath(city.root)) {
 			t.Errorf("city %s was refused about %v, want its own workspace %s", city.path, err, city.root)
 		}
 	}
@@ -202,10 +202,10 @@ func TestServedBindingLocationIsWhereTheProviderOpens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolving where the built-in binding serves from: %v", err)
 	}
-	if location != target.Database {
+	if canonicalTestPath(location) != canonicalTestPath(target.Database) {
 		t.Errorf("the built-in provider serves %s while the migration resolves %s; a relative path must mean the same database on both sides", location, target.Database)
 	}
-	if !strings.HasPrefix(location, cityPath) {
+	if !strings.HasPrefix(canonicalTestPath(location), canonicalTestPath(cityPath)) {
 		t.Errorf("the built-in binding resolved %s, which is not under the city %s", location, cityPath)
 	}
 
@@ -222,7 +222,7 @@ func TestServedBindingLocationIsWhereTheProviderOpens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolving the workspace root: %v", err)
 	}
-	if workspaceLocation != want {
+	if canonicalTestPath(workspaceLocation) != canonicalTestPath(want) {
 		t.Errorf("the workspace binding records %s, want the directory it opens %s", workspaceLocation, want)
 	}
 	if workspaceLocation == "infra" {

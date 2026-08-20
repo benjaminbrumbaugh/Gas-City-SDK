@@ -656,6 +656,7 @@ func TestReleaseOrphanedPoolAssignmentsWhenSnapshotsComplete_PartialSkipsComplet
 
 	released := releaseOrphanedPoolAssignmentsWhenSnapshotsComplete(
 		store,
+		beads.SessionStore{Store: store},
 		&config.City{Agents: []config.Agent{{Name: "worker", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(5)}}},
 		"",
 		nil,
@@ -679,6 +680,7 @@ func TestReleaseOrphanedPoolAssignmentsWhenSnapshotsComplete_PartialSkipsComplet
 
 	released = releaseOrphanedPoolAssignmentsWhenSnapshotsComplete(
 		store,
+		beads.SessionStore{Store: store},
 		&config.City{Agents: []config.Agent{{Name: "worker", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(5)}}},
 		"",
 		nil,
@@ -702,6 +704,7 @@ func TestReleaseOrphanedPoolAssignmentsWhenSnapshotsComplete_PartialSkipsComplet
 
 	released = releaseOrphanedPoolAssignmentsWhenSnapshotsComplete(
 		store,
+		beads.SessionStore{Store: store},
 		&config.City{Agents: []config.Agent{{Name: "worker", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(5)}}},
 		"",
 		nil,
@@ -2131,7 +2134,7 @@ func TestStartStandaloneBuildsSessionProviderFromResolvedCityConfig(t *testing.T
 	if gotCityName != cityName {
 		t.Errorf("city name = %q, want %q", gotCityName, cityName)
 	}
-	if gotCityPath != cityPath {
+	if canonicalTestPath(gotCityPath) != canonicalTestPath(cityPath) {
 		t.Errorf("city path = %q, want %q", gotCityPath, cityPath)
 	}
 }

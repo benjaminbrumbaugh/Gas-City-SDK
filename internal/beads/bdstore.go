@@ -23,7 +23,14 @@ import (
 const (
 	bdParentProjectionPollInterval = 50 * time.Millisecond
 	bdTxProjectionTimeout          = 5 * time.Second
+	// maxConcurrentBDCommands bounds the number of external bd processes a
+	// supervisor can have in flight. Census/reconciliation fans out across
+	// agents and rigs; without a process-wide cap, a slow or schema-gated store
+	// can retain one os/exec pipe set per caller until its timeout.
+	maxConcurrentBDCommands = 16
 )
+
+var bdExecSlots = make(chan struct{}, maxConcurrentBDCommands)
 
 // CommandRunner executes a command in the given directory and returns stdout bytes.
 // The dir argument sets the working directory; name and args specify the command.
@@ -77,6 +84,16 @@ func ExecCommandRunnerWithEnvContext(ctx context.Context, env map[string]string)
 
 func execCommandRunnerWithEnv(parent context.Context, env map[string]string) CommandRunner {
 	return func(dir, name string, args ...string) ([]byte, error) {
+		if parent == nil {
+			parent = context.Background()
+		}
+		select {
+		case bdExecSlots <- struct{}{}:
+			defer func() { <-bdExecSlots }()
+		case <-parent.Done():
+			return nil, parent.Err()
+		}
+
 		execName := name
 		if name == "bd" {
 			if pinned := strings.TrimSpace(env["BD_BIN"]); filepath.IsAbs(pinned) {
@@ -373,6 +390,10 @@ type BdStore struct {
 	readyProjectionMu      sync.Mutex
 	readyProjectionChecked bool
 	readyProjectionEnabled bool
+	// readyProjectionDoorValue names which bd verb fills this scope's
+	// is_blocked column: `bd sql` where the backend implements it, `bd blocked`
+	// where it does not. See bdstore_ready_projection.go.
+	readyProjectionDoorValue readyProjectionDoor
 	// readyProjectionVersionErr memoizes the ErrReadyProjectionUnsupported this
 	// store owes every later caller when the bd on PATH predates the is_blocked
 	// projection. Store-local rather than scope-latched: the bd binary is a

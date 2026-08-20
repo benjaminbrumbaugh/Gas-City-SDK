@@ -651,9 +651,7 @@ func TestConvoyStoreCandidatesPreferRigPrefixOnBd(t *testing.T) {
 		t.Fatalf("convoyStoreCandidates len = %d, want %d (%v)", len(got), len(want), got)
 	}
 	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("convoyStoreCandidates[%d] = %q, want %q (all=%v)", i, got[i], want[i], got)
-		}
+		assertSameTestPath(t, got[i], want[i])
 	}
 }
 
@@ -704,9 +702,7 @@ provider = "file"
 		t.Fatalf("convoyStoreCandidates len = %d, want %d (%v)", len(got), len(want), got)
 	}
 	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("convoyStoreCandidates[%d] = %q, want %q (all=%v)", i, got[i], want[i], got)
-		}
+		assertSameTestPath(t, got[i], want[i])
 	}
 }
 
@@ -741,9 +737,7 @@ provider = "file"
 		t.Fatalf("convoyStoreCandidates len = %d, want %d (%v)", len(got), len(want), got)
 	}
 	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("convoyStoreCandidates[%d] = %q, want %q (all=%v)", i, got[i], want[i], got)
-		}
+		assertSameTestPath(t, got[i], want[i])
 	}
 }
 

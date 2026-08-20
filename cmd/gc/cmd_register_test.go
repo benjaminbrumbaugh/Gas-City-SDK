@@ -723,9 +723,10 @@ func TestDoCities(t *testing.T) {
 	if got.SchemaVersion != "1" {
 		t.Fatalf("schema_version = %q, want 1", got.SchemaVersion)
 	}
-	if len(got.Cities) != 1 || got.Cities[0].Name != "bright-lights" || got.Cities[0].Path != cityPath {
+	if len(got.Cities) != 1 || got.Cities[0].Name != "bright-lights" {
 		t.Fatalf("cities = %+v, want bright-lights at %s", got.Cities, cityPath)
 	}
+	assertSameTestPath(t, got.Cities[0].Path, cityPath)
 }
 
 // Regression for gastownhall/gascity#602:

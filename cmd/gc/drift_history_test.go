@@ -574,7 +574,7 @@ func TestDriftRestartHistoryPath_UsesSupervisorDefaultHome(t *testing.T) {
 	t.Setenv("GC_HOME", dir)
 	got := driftRestartHistoryPath()
 	want := filepath.Join(dir, "drift-restart-history.json")
-	if got != want {
+	if canonicalTestPath(got) != canonicalTestPath(want) {
 		t.Errorf("driftRestartHistoryPath = %q, want %q", got, want)
 	}
 }

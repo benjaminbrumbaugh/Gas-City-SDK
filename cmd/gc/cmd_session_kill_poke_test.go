@@ -94,7 +94,7 @@ func TestCmdSessionKill_PokesControllerAfterSleep(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("poke called %d times, want exactly 1", calls)
 	}
-	if gotCityPath != cityDir {
+	if canonicalTestPath(gotCityPath) != canonicalTestPath(cityDir) {
 		t.Errorf("poke cityPath = %q, want %q", gotCityPath, cityDir)
 	}
 	if stateAtPoke != string(sessionpkg.StateAsleep) {

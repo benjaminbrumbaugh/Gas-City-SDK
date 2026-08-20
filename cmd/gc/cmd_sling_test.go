@@ -1288,7 +1288,7 @@ func TestDoSlingNudgePoolUsesCityStoreForSessionBeads(t *testing.T) {
 	}
 	prevOpen := slingOpenCityStore
 	slingOpenCityStore = func(path string) (beads.Store, error) {
-		if path != deps.CityPath {
+		if canonicalTestPath(path) != canonicalTestPath(deps.CityPath) {
 			t.Fatalf("slingOpenCityStore(%q), want %q", path, deps.CityPath)
 		}
 		return cityStore, nil
@@ -2028,16 +2028,17 @@ func TestCmdSlingInlineBeadRigScopedBdProvider(t *testing.T) {
 
 	create := firstBdCreate(t, *calls)
 	wantBeadsDir := filepath.Join(rigDir, ".beads")
-	if got := create.Env["BEADS_DIR"]; got != wantBeadsDir {
+	if got := create.Env["BEADS_DIR"]; canonicalTestPath(got) != canonicalTestPath(wantBeadsDir) {
 		t.Fatalf("bd create BEADS_DIR = %q, want %q (rig-scoped); all calls: %v", got, wantBeadsDir, *calls)
 	}
-	if got := create.Env["GC_RIG_ROOT"]; got != rigDir {
+	if got := create.Env["GC_RIG_ROOT"]; canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("bd create GC_RIG_ROOT = %q, want %q", got, rigDir)
 	}
 	if got := create.Env["GC_RIG"]; got != "frontend" {
 		t.Fatalf("bd create GC_RIG = %q, want %q", got, "frontend")
 	}
-	if got := create.Dir; got != rigDir {
+	got := create.Dir
+	if canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("bd create dir = %q, want %q", got, rigDir)
 	}
 }
@@ -2063,7 +2064,7 @@ func TestCmdSlingInlineBeadBareTargetFromRigCwdBdProvider(t *testing.T) {
 
 	create := firstBdCreate(t, *calls)
 	wantBeadsDir := filepath.Join(rigDir, ".beads")
-	if got := create.Env["BEADS_DIR"]; got != wantBeadsDir {
+	if got := create.Env["BEADS_DIR"]; canonicalTestPath(got) != canonicalTestPath(wantBeadsDir) {
 		t.Fatalf("bd create BEADS_DIR = %q, want %q (rig-scoped). Bare target %q from rig cwd must land in the rig store; all calls: %v",
 			got, wantBeadsDir, "worker", *calls)
 	}
@@ -2071,13 +2072,14 @@ func TestCmdSlingInlineBeadBareTargetFromRigCwdBdProvider(t *testing.T) {
 	// variant so a regression that sets BEADS_DIR correctly but drops
 	// GC_RIG/GC_RIG_ROOT via the currentRigContext path still fails
 	// loudly.
-	if got := create.Env["GC_RIG_ROOT"]; got != rigDir {
+	if got := create.Env["GC_RIG_ROOT"]; canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("bd create GC_RIG_ROOT = %q, want %q", got, rigDir)
 	}
 	if got := create.Env["GC_RIG"]; got != "frontend" {
 		t.Fatalf("bd create GC_RIG = %q, want %q", got, "frontend")
 	}
-	if got := create.Dir; got != rigDir {
+	got := create.Dir
+	if canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("bd create dir = %q, want %q", got, rigDir)
 	}
 }
@@ -3513,7 +3515,7 @@ dolt.auto-start: false
 	if got := env["GC_DOLT_PORT"]; got != wantPort {
 		t.Fatalf("GC_DOLT_PORT = %q, want %q", got, wantPort)
 	}
-	if got := env["BEADS_DIR"]; got != filepath.Join(rigDir, ".beads") {
+	if got := env["BEADS_DIR"]; canonicalTestPath(got) != canonicalTestPath(filepath.Join(rigDir, ".beads")) {
 		t.Fatalf("BEADS_DIR = %q, want %q", got, filepath.Join(rigDir, ".beads"))
 	}
 	if got := env["GC_RIG"]; got != "repo" {
@@ -4863,9 +4865,7 @@ func TestResolveSlingStoreRootUsesCanonicalRigRoot(t *testing.T) {
 
 	got := resolveSlingStoreRoot(cfg, cityPath, "plain text", config.Agent{Dir: "alpha"})
 	want := filepath.Join(cityPath, "rigs", "alpha")
-	if got != want {
-		t.Fatalf("resolveSlingStoreRoot() = %q, want %q", got, want)
-	}
+	assertSameTestPath(t, got, want)
 }
 
 func TestResolveSlingStoreRootPrefersBeadPrefixRig(t *testing.T) {
@@ -4879,9 +4879,7 @@ func TestResolveSlingStoreRootPrefersBeadPrefixRig(t *testing.T) {
 
 	got := resolveSlingStoreRoot(cfg, cityPath, "be-123", config.Agent{Dir: "alpha"})
 	want := filepath.Join(cityPath, "rigs", "beta")
-	if got != want {
-		t.Fatalf("resolveSlingStoreRoot() = %q, want %q", got, want)
-	}
+	assertSameTestPath(t, got, want)
 }
 
 func TestResolveSlingStoreRootUsesPrefixRigForConfiguredAllAlphaBeadID(t *testing.T) {
@@ -4895,9 +4893,7 @@ func TestResolveSlingStoreRootUsesPrefixRigForConfiguredAllAlphaBeadID(t *testin
 
 	got := resolveSlingStoreRoot(cfg, cityPath, "FE-hello", config.Agent{Dir: "orders"})
 	want := filepath.Join(cityPath, "rigs", "frontend")
-	if got != want {
-		t.Fatalf("resolveSlingStoreRoot() = %q, want %q", got, want)
-	}
+	assertSameTestPath(t, got, want)
 }
 
 func TestResolveSlingStoreRootHonorsHyphenatedRigPrefix(t *testing.T) {
@@ -4914,7 +4910,7 @@ func TestResolveSlingStoreRootHonorsHyphenatedRigPrefix(t *testing.T) {
 
 	got := resolveSlingStoreRoot(cfg, cityPath, "agent-diagnostics-hnn", config.Agent{Dir: "agent"})
 	want := filepath.Join(cityPath, "rigs", "agent-diag")
-	if got != want {
+	if canonicalTestPath(got) != canonicalTestPath(want) {
 		t.Fatalf("resolveSlingStoreRoot(agent-diagnostics-hnn) = %q, want %q (longest configured prefix should win)", got, want)
 	}
 
@@ -4922,9 +4918,7 @@ func TestResolveSlingStoreRootHonorsHyphenatedRigPrefix(t *testing.T) {
 	// to that rig.
 	got = resolveSlingStoreRoot(cfg, cityPath, "agent-x1", config.Agent{Dir: "agent-diagnostics"})
 	want = filepath.Join(cityPath, "rigs", "agent")
-	if got != want {
-		t.Fatalf("resolveSlingStoreRoot(agent-x1) = %q, want %q", got, want)
-	}
+	assertSameTestPath(t, got, want)
 }
 
 func TestResolveSlingStoreRootUsesCityRootForHQPrefix(t *testing.T) {
@@ -4937,7 +4931,7 @@ func TestResolveSlingStoreRootUsesCityRootForHQPrefix(t *testing.T) {
 	}
 
 	got := resolveSlingStoreRoot(cfg, cityPath, "hq-123", config.Agent{Dir: "alpha"})
-	if got != cityPath {
+	if canonicalTestPath(got) != canonicalTestPath(cityPath) {
 		t.Fatalf("resolveSlingStoreRoot() = %q, want city root %q", got, cityPath)
 	}
 }
@@ -4977,7 +4971,7 @@ provider = "file"
 	}
 
 	storeDir := resolveSlingStoreRoot(cfg, cityPath, "hq-123", config.Agent{Dir: "alpha"})
-	if storeDir != cityPath {
+	if canonicalTestPath(storeDir) != canonicalTestPath(cityPath) {
 		t.Fatalf("resolveSlingStoreRoot() = %q, want city root %q", storeDir, cityPath)
 	}
 	if got := authoritativeBeadsProviderForScope(storeDir, cityPath); got != "bd" {
@@ -4989,7 +4983,7 @@ provider = "file"
 	// the city-root fix above.
 	rigStoreDir := resolveSlingStoreRoot(cfg, cityPath, "al-1", config.Agent{Dir: "alpha"})
 	wantRigDir := filepath.Join(cityPath, "rigs", "alpha")
-	if rigStoreDir != wantRigDir {
+	if canonicalTestPath(rigStoreDir) != canonicalTestPath(wantRigDir) {
 		t.Fatalf("resolveSlingStoreRoot(rig bead) = %q, want %q", rigStoreDir, wantRigDir)
 	}
 	if got := authoritativeBeadsProviderForScope(rigStoreDir, cityPath); got != "file" {
@@ -5070,9 +5064,7 @@ func TestSlingFormulaRepoDirUsesCanonicalRigRoot(t *testing.T) {
 
 	got := sling.SlingFormulaRepoDir("plain text", deps, config.Agent{Dir: "alpha"})
 	want := filepath.Join(cityPath, "rigs", "alpha")
-	if got != want {
-		t.Fatalf("SlingFormulaRepoDir() = %q, want %q", got, want)
-	}
+	assertSameTestPath(t, got, want)
 }
 
 func TestCLIDirectSessionResolverMaterializesNamedSessionAliasShadow(t *testing.T) {
