@@ -59,7 +59,7 @@ Fork-specific changes stay on the fork's history. Upstream changes are fetched a
 |---|---|
 | `Gas-City-SDK/` | This SDK source/build fork |
 | `Gas-City/` | Live factory workspace: city configuration, packs, agents, formulas, Beads, and runtime state. It does not contain the `gc` command source. |
-| `Gas-City-Dashboard/` | Separate Python operational dashboard and lifecycle Hub; published front door is `http://localhost:8400/`. |
+| `Gas-City-Dashboard/` | Separate Python operational Dashboard Server, owned by the macOS `launchd` user service `com.gascity.dashboard`, with front door `http://localhost:8400/`. |
 | `~/.local/bin/gc` | Preferred installed runtime binary on this machine. |
 | `/opt/homebrew/bin/gc` | Optional Homebrew-packaged alternative; not a second supervisor and not additive to the custom binary. |
 | `~/go/bin/gc` | Compatibility path; keep it as a symlink to `~/.local/bin/gc`, not as an independent runtime build. |
@@ -72,19 +72,23 @@ A city is managed by a `gc` binary; it is not a binary built inside the city rep
 The production relationship is:
 
 ```text
-macOS launchd
-  └─ com.gascity.supervisor.plist
-      └─ ~/.local/bin/gc supervisor run
-          ├─ machine-wide supervisor API: 127.0.0.1:8372
-          ├─ registered Gas-City factory
-          └─ city controllers, sessions, and runtime providers
-
-separate lifecycle:
-  Gas-City-Dashboard/assets/gas-town-dashboard
-      └─ dashboard Hub + canonical Python child: http://localhost:8400/
+launchd user services:
+  ├─ com.gascity.supervisor
+  │   └─ ~/.local/bin/gc supervisor run
+  │       ├─ machine-wide supervisor API: 127.0.0.1:8372
+  │       ├─ registered Gas-City factory
+  │       └─ city controllers, sessions, and runtime providers
+  └─ com.gascity.dashboard
+      └─ Gas-City-Dashboard/assets/gas-town-dashboard/server.py :8400
 ```
 
-The SDK repository is used to produce the executable. The live `Gas-City` workspace is registered with the machine-wide supervisor. The Python dashboard is a separate product and should not be rebuilt from the SDK's embedded SPA.
+The Dashboard Server is intentionally independent at the process-lifecycle
+boundary while remaining coupled to Gas City as its data source and operator
+surface. It survives supervisor stop/start and reboot windows so it can show
+host state and Gas City unavailability. `gcx start` and `gcx stop` do not own or
+stop it; the dashboard repository installs/uninstalls `com.gascity.dashboard`.
+A future Wayfinder-specific dashboard must use a separate service label and
+source repository.
 
 ### Build a candidate
 
