@@ -4120,6 +4120,7 @@ gc session
 | Subcommand | Description |
 |------------|-------------|
 | [gc session attach](#gc-session-attach) | Attach to (or resume) a chat session |
+| [gc session clear-city-stop](#gc-session-clear-city-stop) | Value-fence removal of a stale city-stop latch |
 | [gc session close](#gc-session-close) | Close a session permanently |
 | [gc session close-stale](#gc-session-close-stale) | Revision-fence the close of a proven stale session |
 | [gc session kill](#gc-session-kill) | Force-kill session runtime (reconciler restarts) |
@@ -4151,6 +4152,23 @@ Accepts a session ID (e.g., gc-42) or session alias (e.g., mayor).
 ```
 gc session attach <session-id-or-alias>
 ```
+
+## gc session clear-city-stop
+
+Clear sleep_reason=city-stop on one exact future-held session.
+The command requires a direct bead ID and exact held_until value, observes runtime
+liveness, and uses metadata value-CAS. It never falls back to an unconditional
+write. --check validates the same predicates without writing.
+
+```
+gc session clear-city-stop <session-id> [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--check` | bool |  | validate every precondition without writing |
+| `--if-held-until` | string |  | required exact future held_until value |
+| `--json` | bool |  | emit JSONL |
 
 ## gc session close
 

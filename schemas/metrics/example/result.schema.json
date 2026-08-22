@@ -221,7 +221,8 @@
               "hca-list",
               "hca-request",
               "hca-show",
-              "session-close-stale"
+              "session-close-stale",
+              "session-clear-city-stop"
             ]
           },
           "event_id": {
