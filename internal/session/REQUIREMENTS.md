@@ -121,6 +121,7 @@ unless the row names how they map to the canonical projection.
 | SESSION-START-006 | Stop failure does not close | If provider stop fails during detailed close, the bead remains open; successful stop closes it. | `internal/session/manager_test.go` |
 | SESSION-START-007 | Template override safety | Template overrides are rejected for running sessions, recent wake-in-flight sessions, and pending create claims. Suspended sessions, old wake timestamps, and failed-create states can be updated where tests allow. | `internal/session/manager_test.go` |
 | SESSION-START-008 | Parallel lifecycle start | Independent start candidates can begin in the same wave before dependent sessions. A failed dependency blocks its dependent but not unrelated siblings. | `cmd/gc/session_lifecycle_parallel_test.go` |
+| SESSION-START-009 | Operator-guarded stale close | `gc session close-stale` accepts only an exact persisted session bead ID and requires exact revision, state, held-until value, and an operator reason. It refuses a session key, pending create claim, observed runtime, blocked issue, capability gap, or any row revision change. Terminal metadata and status close commit in one native Dolt transaction; no unconditional fallback is allowed. `--check` validates the same predicates without writing. | `internal/session/guarded_stale_close_test.go`; `internal/beads/native_dolt_store_close_conditional_internal_test.go`; `cmd/gc/session_close_stale_test.go` |
 
 ### Reconciler, Pools, And Scaling
 

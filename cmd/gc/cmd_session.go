@@ -45,7 +45,7 @@ continuity.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				fmt.Fprintln(stderr, "gc session: missing subcommand (new, list, attach, submit, suspend, pin, unpin, reset, close, rename, prune, peek, kill, nudge, logs, wake, wait)") //nolint:errcheck // best-effort stderr
+				fmt.Fprintln(stderr, "gc session: missing subcommand (new, list, attach, submit, suspend, pin, unpin, reset, close, close-stale, rename, prune, peek, kill, nudge, logs, wake, wait)") //nolint:errcheck // best-effort stderr
 			} else {
 				fmt.Fprintf(stderr, "gc session: unknown subcommand %q\n", args[0]) //nolint:errcheck // best-effort stderr
 			}
@@ -62,6 +62,7 @@ continuity.`,
 		newSessionUnpinCmd(stdout, stderr),
 		newSessionResetCmd(stdout, stderr),
 		newSessionCloseCmd(stdout, stderr),
+		newSessionCloseStaleCmd(stdout, stderr),
 		newSessionRenameCmd(stdout, stderr),
 		newSessionPruneCmd(stdout, stderr),
 		newSessionPeekCmd(stdout, stderr),
@@ -1896,6 +1897,132 @@ func cmdSessionClose(args []string, stdout, stderr io.Writer, jsonOutput ...bool
 		return 0
 	}
 	fmt.Fprintf(stdout, "Session %s closed.\n", sessionID) //nolint:errcheck // best-effort stdout
+	return 0
+}
+
+type sessionCloseStaleOptions struct {
+	ExpectedRevision  int64
+	ExpectedState     string
+	ExpectedHeldUntil string
+	Reason            string
+	CheckOnly         bool
+	JSON              bool
+}
+
+// newSessionCloseStaleCmd creates the deliberately narrow operator recovery
+// command. Ordinary close remains unchanged.
+func newSessionCloseStaleCmd(stdout, stderr io.Writer) *cobra.Command {
+	var opts sessionCloseStaleOptions
+	cmd := &cobra.Command{
+		Use:   "close-stale <session-id>",
+		Short: "Revision-fence the close of a proven stale session",
+		Long: `Close one proven stale session by exact bead ID. The command requires an
+exact opaque revision, lifecycle state, future hold value, and operator reason.
+It observes runtime liveness and fails closed if a runtime, session key, pending
+create claim, blocker, or any row revision change appears. --check performs all
+read-side checks without writing.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if cmdSessionCloseStale(args, opts, stdout, stderr) != 0 {
+				return errExit
+			}
+			return nil
+		},
+	}
+	cmd.Flags().Int64Var(&opts.ExpectedRevision, "if-revision", 0, "required opaque bead revision")
+	cmd.Flags().StringVar(&opts.ExpectedState, "if-state", "", "required exact persisted lifecycle state")
+	cmd.Flags().StringVar(&opts.ExpectedHeldUntil, "if-held-until", "", "required exact persisted held_until value")
+	cmd.Flags().StringVar(&opts.Reason, "reason", "", "required operator reason recorded on the closed bead")
+	cmd.Flags().BoolVar(&opts.CheckOnly, "check", false, "validate every precondition without writing")
+	cmd.Flags().BoolVar(&opts.JSON, "json", false, "emit JSONL")
+	for _, name := range []string{"if-revision", "if-state", "if-held-until", "reason"} {
+		_ = cmd.MarkFlagRequired(name)
+	}
+	return cmd
+}
+
+func cmdSessionCloseStale(args []string, opts sessionCloseStaleOptions, stdout, stderr io.Writer) int {
+	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+		fmt.Fprintln(stderr, "gc session close-stale: exact session bead ID required") //nolint:errcheck
+		return 1
+	}
+	sessionID := strings.TrimSpace(args[0])
+	store, code := openCityStore(stderr, "gc session close-stale")
+	if store == nil {
+		return code
+	}
+	cityPath, err := resolveCity()
+	if err != nil {
+		fmt.Fprintf(stderr, "gc session close-stale: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	cfg, err := loadCityConfig(cityPath, configWarnWriter(opts.JSON, stderr))
+	if err != nil {
+		fmt.Fprintf(stderr, "gc session close-stale: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	sessStore := cliSessionStore(store, cfg, cityPath)
+	bead, err := sessStore.Get(sessionID)
+	if err != nil || bead.ID != sessionID || !session.IsSessionBeadOrRepairable(bead) {
+		if err == nil {
+			err = fmt.Errorf("%q is not a session bead", sessionID)
+		}
+		fmt.Fprintf(stderr, "gc session close-stale: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	sp, err := newSessionProvider()
+	if err != nil {
+		fmt.Fprintf(stderr, "gc session close-stale: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	handle, err := workerHandleForSessionWithConfig(cityPath, sessStore, sp, cfg, sessionID)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc session close-stale: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	obs, err := handle.LiveObservation(context.Background())
+	if err != nil {
+		fmt.Fprintf(stderr, "gc session close-stale: runtime observation: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	req := session.GuardedStaleCloseRequest{
+		ExpectedRevision:  opts.ExpectedRevision,
+		ExpectedState:     session.State(strings.TrimSpace(opts.ExpectedState)),
+		ExpectedHeldUntil: strings.TrimSpace(opts.ExpectedHeldUntil),
+		Reason:            strings.TrimSpace(opts.Reason),
+		RuntimeRunning:    obs.Running,
+		RuntimeAlive:      obs.Alive,
+		Now:               time.Now().UTC(),
+	}
+	front := sessionFrontDoor(sessStore)
+	if opts.CheckOnly {
+		if err := front.CheckGuardedStaleSession(sessionID, req); err != nil {
+			fmt.Fprintf(stderr, "gc session close-stale: %v\n", err) //nolint:errcheck
+			return 1
+		}
+		if opts.JSON {
+			if err := writeSessionActionJSON(stdout, sessionActionResult{Command: "session close-stale", Action: "close-stale-check", SessionID: sessionID, State: string(req.ExpectedState)}); err != nil {
+				fmt.Fprintf(stderr, "gc session close-stale: %v\n", err) //nolint:errcheck
+				return 1
+			}
+			return 0
+		}
+		fmt.Fprintf(stdout, "Session %s stale-close preconditions match.\n", sessionID) //nolint:errcheck
+		return 0
+	}
+	if err := front.CloseGuardedStaleSession(sessionID, req); err != nil {
+		fmt.Fprintf(stderr, "gc session close-stale: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	unclaimWorkAssignedToRetiredSessionBead(cityPath, cfg, store, nil, bead, "", stderr)
+	if opts.JSON {
+		if err := writeSessionActionJSON(stdout, sessionActionResult{Command: "session close-stale", Action: "close-stale", SessionID: sessionID, State: "closed"}); err != nil {
+			fmt.Fprintf(stderr, "gc session close-stale: %v\n", err) //nolint:errcheck
+			return 1
+		}
+		return 0
+	}
+	fmt.Fprintf(stdout, "Session %s closed by exact stale-session fence.\n", sessionID) //nolint:errcheck
 	return 0
 }
 

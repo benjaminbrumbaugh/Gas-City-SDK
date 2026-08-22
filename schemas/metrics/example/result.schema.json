@@ -220,7 +220,8 @@
               "routing-targets",
               "hca-list",
               "hca-request",
-              "hca-show"
+              "hca-show",
+              "session-close-stale"
             ]
           },
           "event_id": {
