@@ -23,6 +23,7 @@ const (
 	StoreRelativePath  = ".gc/routing-decisions.db"
 	defaultLockTimeout = 250 * time.Millisecond
 	maxActiveQuery     = 256
+	maxOutcomeQuery    = 100
 	retentionMonths    = 6
 )
 
@@ -400,6 +401,56 @@ func (store *Store) ListDecisions(options ListOptions) (DecisionPage, error) {
 			scanned++
 			lastScanned = string(key)
 			if options.State == "" || record.State == options.State {
+				audits, err := auditsForDecision(tx, record.Payload.DecisionID)
+				if err != nil {
+					return err
+				}
+				page.Items = append(page.Items, DecisionWithAudits{Record: record, Audits: audits})
+			}
+			key, value = cursor.Next()
+		}
+		if key != nil && lastScanned != "" {
+			page.NextCursor = encodeKeysetCursor(lastScanned)
+		}
+		return nil
+	})
+	page.Total = len(page.Items)
+	return page, classifyStoreError(err)
+}
+
+// ListOutcomeDecisions returns claimed and terminal recommendation-outcome
+// candidates in stable decision-ID order. Each request returns at most 100
+// items and examines at most 100 ledger rows; a sparse/truncated scan advances
+// by the last examined decision ID so repeated calls make bounded progress.
+func (store *Store) ListOutcomeDecisions(options OutcomeListOptions) (DecisionPage, error) {
+	if options.Limit <= 0 || options.Limit > maxOutcomeQuery {
+		return DecisionPage{}, invalidf("outcome list limit must be between 1 and %d", maxOutcomeQuery)
+	}
+	after, err := decodeKeysetCursor(options.Cursor)
+	if err != nil {
+		return DecisionPage{}, err
+	}
+	page := DecisionPage{Items: make([]DecisionWithAudits, 0, options.Limit)}
+	err = store.db.View(func(tx *bbolt.Tx) error {
+		cursor := tx.Bucket(bucketDecisions).Cursor()
+		key, value := cursor.First()
+		if after != "" {
+			key, value = cursor.Seek([]byte(after))
+			if key != nil && string(key) == after {
+				key, value = cursor.Next()
+			}
+		}
+		scanned := 0
+		lastScanned := ""
+		for key != nil && scanned < maxOutcomeQuery && len(page.Items) < options.Limit {
+			var record Record
+			if err := decodeRecord(value, &record); err != nil || string(key) != record.Payload.DecisionID {
+				return ErrStoreCorrupt
+			}
+			scanned++
+			lastScanned = string(key)
+			validRecommendation := validateText("recommendation_id", record.Payload.RecommendationID, true) == nil
+			if validRecommendation && (record.State == StateClaimed || IsTerminalState(record.State)) {
 				audits, err := auditsForDecision(tx, record.Payload.DecisionID)
 				if err != nil {
 					return err

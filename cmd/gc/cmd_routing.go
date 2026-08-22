@@ -43,6 +43,7 @@ func newRoutingCmd(stdout, stderr io.Writer) *cobra.Command {
 		newRoutingTargetsCmd(stdout, stderr),
 		newRoutingEligibleCmd(stdout, stderr),
 		newRoutingDecisionsCmd(stdout, stderr),
+		newRoutingOutcomesCmd(stdout, stderr),
 		newRoutingIngestCmd(stdout, stderr),
 	)
 	return cmd
@@ -217,6 +218,48 @@ func routingStateKnown(state routingdecision.State) bool {
 		}
 	}
 	return false
+}
+
+func newRoutingOutcomesCmd(stdout, stderr io.Writer) *cobra.Command {
+	var cursor string
+	var limit int
+	var jsonOutput bool
+	cmd := &cobra.Command{Use: "outcomes", Short: "List authoritative redacted recommendation outcomes", Args: cobra.NoArgs}
+	cmd.Flags().IntVar(&limit, "limit", 100, "Maximum rows to return (1-100)")
+	cmd.Flags().StringVar(&cursor, "cursor", "", "Opaque decision-ID cursor")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	cmd.RunE = func(_ *cobra.Command, _ []string) error {
+		if limit < 1 || limit > 100 {
+			fmt.Fprintln(stderr, "gc routing outcomes: invalid --limit (want 1-100)") //nolint:errcheck
+			return errExit
+		}
+		client, err := routingClient(stderr, "outcomes")
+		if err != nil {
+			return err
+		}
+		page, err := client.RoutingOutcomes(gcapi.RoutingOutcomeListRequest{Limit: limit, Cursor: cursor})
+		if err != nil {
+			fmt.Fprintf(stderr, "gc routing outcomes: %v\n", err) //nolint:errcheck
+			return errExit
+		}
+		if jsonOutput {
+			return writeCLIJSONLine(stdout, page)
+		}
+		tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "RECOMMENDATION	DECISION	WORK	STATUS	DISPOSITION	COVERAGE") //nolint:errcheck
+		for _, item := range page.Items {
+			fmt.Fprintf(tw, "%s	%s	%s	%s	%s	%s\n", item.RecommendationID, item.RoutingDecisionID, item.WorkID, item.Status, item.Disposition, item.Coverage) //nolint:errcheck
+		}
+		if err := tw.Flush(); err != nil {
+			return err
+		}
+		if page.NextCursor != "" {
+			fmt.Fprintf(stdout, "Next cursor: %s\n", page.NextCursor) //nolint:errcheck
+		}
+		fmt.Fprintf(stdout, "Partial: %t\n", page.Partial) //nolint:errcheck
+		return nil
+	}
+	return cmd
 }
 
 func newRoutingIngestCmd(stdout, stderr io.Writer) *cobra.Command {

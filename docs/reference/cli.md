@@ -3789,6 +3789,7 @@ gc routing
 | [gc routing decisions](#gc-routing-decisions) | List durable routing decisions |
 | [gc routing eligible](#gc-routing-eligible) | Show deterministic eligible work and target inputs |
 | [gc routing ingest](#gc-routing-ingest) | Ingest one externally signed routing decision |
+| [gc routing outcomes](#gc-routing-outcomes) | List authoritative redacted recommendation outcomes |
 | [gc routing status](#gc-routing-status) | Show live routing authority and ledger status |
 | [gc routing targets](#gc-routing-targets) | List deterministic selection-safe targets |
 
@@ -3833,6 +3834,20 @@ gc routing ingest [flags]
 | `--idempotency-key` | string |  | Required stable retry key |
 | `--json` | bool |  | Output in JSON format |
 | `--write-grant-command` | string |  | Command that reads GrantBinding JSON on stdin and prints one city-write token |
+
+## gc routing outcomes
+
+List authoritative redacted recommendation outcomes
+
+```
+gc routing outcomes [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--cursor` | string |  | Opaque decision-ID cursor |
+| `--json` | bool |  | Output in JSON format |
+| `--limit` | int | `100` | Maximum rows to return (1-100) |
 
 ## gc routing status
 

@@ -32,6 +32,7 @@ type RoutingDecisionProvider interface {
 	RoutingDecisionTargets(context.Context) ([]routingdecision.TargetSnapshot, error)
 	RoutingDecisionEligible(context.Context) (routingdecision.SelectionSnapshot, error)
 	RoutingDecisionList(context.Context, routingdecision.ListOptions) (routingdecision.DecisionPage, error)
+	RoutingDecisionOutcomes(context.Context, routingdecision.OutcomeListOptions) (routingdecision.OutcomePage, error)
 	RoutingDecisionIngest(context.Context, routingdecision.IngestApprovedRequest) (routingdecision.IngestApprovedResult, error)
 }
 

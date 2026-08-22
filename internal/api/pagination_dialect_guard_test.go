@@ -95,12 +95,14 @@ var boundedLimitOnlyFeeds = map[string]bool{
 	"GET /v0/events":                               true,
 }
 
-// boundedKeysetLimits records the security-bounded keyset exceptions approved
-// with the durable routing-decision contract. Routing decisions deliberately
-// cap both returned and scanned durable rows at 256 per transaction; widening
-// to the general 1000-row API contract would violate that bounded-work rule.
+// boundedKeysetLimits records security-bounded keyset exceptions approved
+// with the durable routing contracts. Routing decisions cap both returned and
+// scanned durable rows at 256; recommendation outcomes use the stricter portable
+// contract limit of 100. Widening either to the general 1000-row API contract
+// would violate its bounded-work rule.
 var boundedKeysetLimits = map[string]float64{
 	"GET /v0/city/{cityName}/routing/decisions": 256,
+	"GET /v0/city/{cityName}/routing/outcomes":  100,
 }
 
 type specParam struct {

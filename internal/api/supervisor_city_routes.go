@@ -65,6 +65,12 @@ func (sm *SupervisorMux) registerCityRoutes() {
 		Errors:      []int{http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable},
 	}, (*Server).humaHandleRoutingDecisionList)
 	cityRegister(sm, huma.Operation{
+		OperationID: "list-routing-outcomes", Method: http.MethodGet, Path: "/routing/outcomes",
+		Summary:     "List authoritative recommendation outcomes",
+		Description: "Returns a bounded strict-redacted routing/outcome/v2 projection of claimed and terminal decisions in decision_id order. The handler performs no lifecycle or mutation operation.",
+		Errors:      []int{http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable},
+	}, (*Server).humaHandleRoutingOutcomeList)
+	cityRegister(sm, huma.Operation{
 		OperationID: "ingest-routing-decision", Method: http.MethodPost, Path: "/routing/decisions",
 		Summary: "Ingest one signed routing decision", DefaultStatus: http.StatusCreated,
 		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity, http.StatusServiceUnavailable},

@@ -1,0 +1,175 @@
+package routingdecision
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestDecisionRecommendationIDIsOptionalAndSignedWhenPresent(t *testing.T) {
+	legacy := testDecisionPayload(t)
+	legacy.RecommendationID = ""
+	legacy.BindingID = BindingID(legacy)
+	legacyBytes, err := CanonicalDecisionBytes(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(legacyBytes), "recommendation_id") {
+		t.Fatalf("legacy canonical bytes changed: %s", legacyBytes)
+	}
+
+	linked := legacy
+	linked.RecommendationID = "recommendation-opaque-1"
+	linked.BindingID = BindingID(linked)
+	linkedBytes, err := CanonicalDecisionBytes(linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(linkedBytes), `"recommendation_id":"recommendation-opaque-1"`) {
+		t.Fatalf("recommendation id is not signed: %s", linkedBytes)
+	}
+	if string(legacyBytes) == string(linkedBytes) {
+		t.Fatal("recommendation id did not change signed decision bytes")
+	}
+
+	invalid := linked
+	invalid.RecommendationID = " secret\n"
+	invalid.BindingID = BindingID(invalid)
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("non-canonical recommendation id accepted")
+	}
+}
+
+func TestProjectOutcomeUsesOnlyExactCarrierMetadataAndRedactsRawFields(t *testing.T) {
+	observed := time.Date(2026, 8, 22, 12, 34, 56, 0, time.UTC)
+	payload := testDecisionPayload(t)
+	payload.RecommendationID = "rec-1"
+	payload.BindingID = BindingID(payload)
+	item := DecisionWithAudits{
+		Record: Record{Payload: payload, State: StateOutcomeRecorded},
+		Audits: []TransitionAudit{{DecisionID: payload.DecisionID, To: StateOutcomeRecorded, At: observed.Add(-time.Minute)}},
+	}
+	work := OutcomeWorkSnapshot{
+		Found: true, WorkID: payload.WorkBeadID, Status: "closed", ClaimFence: payload.ClaimFence + 1,
+		Metadata: map[string]string{
+			"gc.routing_decision_id":          payload.DecisionID,
+			"gc.routing_decision_claim_fence": "7",
+			"gc.run_target":                   payload.Target,
+			"gc.work_outcome":                 "shipped",
+			"gc.failure_class":                "hard",
+			"gc.session_id":                   "session-1",
+			"gc.current_run_id":               "execution-1",
+			"gc.failure_reason":               "credential=secret",
+		},
+	}
+	work.Metadata["gc.routing_decision_claim_fence"] = "3"
+	payload.ClaimFence = 3
+	item.Record.Payload = payload
+
+	got := ProjectOutcome(item, work, observed)
+	if err := got.Validate(); err != nil {
+		t.Fatalf("projected outcome is schema-invalid: %v: %+v", err, got)
+	}
+	if !strings.HasPrefix(got.OutcomeID, "outcome_") {
+		t.Fatalf("outcome id = %q", got.OutcomeID)
+	}
+	same := ProjectOutcome(item, work, observed.Add(time.Hour))
+	if same.OutcomeID != got.OutcomeID {
+		t.Fatalf("same immutable input changed outcome id: %q != %q", same.OutcomeID, got.OutcomeID)
+	}
+	changedWork := work
+	changedWork.Metadata = make(map[string]string, len(work.Metadata))
+	for key, value := range work.Metadata {
+		changedWork.Metadata[key] = value
+	}
+	changedWork.Metadata["gc.work_outcome"] = "no-op"
+	changed := ProjectOutcome(item, changedWork, observed)
+	if changed.OutcomeID == got.OutcomeID {
+		t.Fatal("changed canonical outcome content retained outcome id")
+	}
+	if got.SchemaVersion != OutcomeSchemaVersion || got.CorrelationID != "rec-1" || got.RecommendationID != "rec-1" {
+		t.Fatalf("identity = %+v", got)
+	}
+	if got.RoutingDecisionID != payload.DecisionID || got.WorkID != payload.WorkBeadID {
+		t.Fatalf("join ids = %+v", got)
+	}
+	if got.Disposition != OutcomeDispositionShipped || got.FailureClass != OutcomeFailureNone || got.Coverage != OutcomeCoverageAvailable {
+		t.Fatalf("classification = %+v", got)
+	}
+	if got.Status != OutcomeStatusSucceeded || got.RequestedTargetID != payload.Target || got.ActualTargetID == nil || *got.ActualTargetID != payload.Target || got.RequestedConfigDigest != payload.TargetConfigDigest || got.ActualConfigDigest == nil || *got.ActualConfigDigest != payload.TargetConfigDigest {
+		t.Fatalf("targets = %+v", got)
+	}
+	if got.SessionID != "session-1" || got.ExecutionID != "execution-1" || got.ObservedAtUnix != observed.Add(-time.Minute).Unix() {
+		t.Fatalf("runtime ids/time = %+v", got)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"credential=secret", "failure_reason", "title", "description", "comments", "reason"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("redacted outcome leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestProjectOutcomeClassifiesClaimedNotAdmittedAndUnknownCoverage(t *testing.T) {
+	now := time.Date(2026, 8, 22, 13, 0, 0, 0, time.UTC)
+	payload := testDecisionPayload(t)
+	payload.RecommendationID = "rec-2"
+	payload.BindingID = BindingID(payload)
+
+	claimed := ProjectOutcome(DecisionWithAudits{Record: Record{Payload: payload, State: StateClaimed}}, OutcomeWorkSnapshot{}, now)
+	if claimed.Status != OutcomeStatusClaimed || claimed.Disposition != OutcomeDispositionUnknown || claimed.Coverage != OutcomeCoverageUnknown || claimed.FailureClass != OutcomeFailureUnknown || claimed.ActualTargetID == nil || claimed.ActualConfigDigest == nil {
+		t.Fatalf("claimed = %+v", claimed)
+	}
+
+	refused := ProjectOutcome(DecisionWithAudits{Record: Record{Payload: payload, State: StateRefusedAfterRace}}, OutcomeWorkSnapshot{}, now)
+	if refused.Status != OutcomeStatusFailed || refused.Disposition != OutcomeDispositionNotAdmitted || refused.FailureClass != OutcomeFailureUnknown || refused.ActualTargetID != nil || refused.ActualConfigDigest != nil {
+		t.Fatalf("refused = %+v", refused)
+	}
+
+	mismatched := OutcomeWorkSnapshot{Found: true, WorkID: payload.WorkBeadID, Metadata: map[string]string{"gc.routing_decision_id": "another-decision"}}
+	partial := ProjectOutcome(DecisionWithAudits{Record: Record{Payload: payload, State: StateOutcomeRecorded}}, mismatched, now)
+	if partial.Coverage != OutcomeCoveragePartial || partial.Disposition != OutcomeDispositionUnknown {
+		t.Fatalf("mismatched = %+v", partial)
+	}
+}
+
+func TestOutcomeRecordValidationEnforcesPortableConsistency(t *testing.T) {
+	valid := OutcomeRecord{
+		SchemaVersion: OutcomeSchemaVersion, OutcomeID: "outcome_" + strings.Repeat("a", 64),
+		CorrelationID: "rec", RecommendationID: "rec", RoutingDecisionID: "decision", WorkID: "work",
+		RequestedTargetID: "worker", RequestedConfigDigest: strings.Repeat("b", 64),
+		Status: OutcomeStatusFailed, Disposition: OutcomeDispositionNotAdmitted,
+		FailureClass: OutcomeFailureUnknown, Coverage: OutcomeCoverageUnknown,
+		Provenance: OutcomeProvenanceDecision, ObservedAtUnix: 1,
+	}
+	valid.OutcomeID = outcomeID(valid)
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid not-admitted outcome: %v", err)
+	}
+	for name, mutate := range map[string]func(*OutcomeRecord){
+		"zero observed time":       func(r *OutcomeRecord) { r.ObservedAtUnix = 0 },
+		"missing requested target": func(r *OutcomeRecord) { r.RequestedTargetID = "" },
+		"not admitted actual pair": func(r *OutcomeRecord) { value := "worker"; r.ActualTargetID = &value },
+		"not admitted none failure": func(r *OutcomeRecord) {
+			r.FailureClass = OutcomeFailureNone
+		},
+		"succeeded blocked": func(r *OutcomeRecord) {
+			target, digest := "worker", strings.Repeat("b", 64)
+			r.Status, r.Disposition, r.FailureClass = OutcomeStatusSucceeded, OutcomeDispositionBlocked, OutcomeFailureNone
+			r.ActualTargetID, r.ActualConfigDigest = &target, &digest
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := valid
+			mutate(&candidate)
+			candidate.OutcomeID = outcomeID(candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatalf("invalid outcome accepted: %+v", candidate)
+			}
+		})
+	}
+}

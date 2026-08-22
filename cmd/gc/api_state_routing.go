@@ -49,6 +49,14 @@ func (s *controllerState) RoutingDecisionList(ctx context.Context, opts routingd
 	return service.List(ctx, opts)
 }
 
+func (s *controllerState) RoutingDecisionOutcomes(ctx context.Context, opts routingdecision.OutcomeListOptions) (routingdecision.OutcomePage, error) {
+	service := s.routingDecisions()
+	if service == nil {
+		return routingdecision.OutcomePage{}, errors.New("routing decision service unavailable")
+	}
+	return service.Outcomes(ctx, opts)
+}
+
 func (s *controllerState) RoutingDecisionIngest(ctx context.Context, request routingdecision.IngestApprovedRequest) (routingdecision.IngestApprovedResult, error) {
 	service := s.routingDecisions()
 	if service == nil {

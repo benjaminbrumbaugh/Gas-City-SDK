@@ -28,12 +28,15 @@ type cityRoutingDecisionService struct {
 	lifecycleCursor string
 	targets         func() ([]routingdecision.TargetSnapshot, error)
 	eligible        func() (routingdecision.SelectionSnapshot, error)
+	now             func() time.Time
+	outcomeWork     func(context.Context, routingdecision.DecisionPayload) (routingdecision.OutcomeWorkSnapshot, error)
 }
 
 func initializeRoutingDecisionService(cr *CityRuntime) {
 	service := &cityRoutingDecisionService{
 		status: routingdecision.AvailabilityDenied, reason: routingdecision.ReasonAuthorityUnavailable,
 		targets: cr.routingDecisionTargetSnapshots, eligible: cr.routingDecisionEligibleSnapshot,
+		now: cr.routingDecisionNow, outcomeWork: cr.routingDecisionOutcomeWork,
 	}
 	cr.routingDecisionService = service
 	verifier, err := routingdecision.LoadAuthorityFile(cr.cityPath)
@@ -140,6 +143,81 @@ func (service *cityRoutingDecisionService) List(ctx context.Context, opts routin
 		return routingdecision.DecisionPage{}, errors.New("routing decision service unavailable")
 	}
 	return service.store.ListDecisions(opts)
+}
+
+func (service *cityRoutingDecisionService) Outcomes(ctx context.Context, opts routingdecision.OutcomeListOptions) (routingdecision.OutcomePage, error) {
+	if err := ctx.Err(); err != nil {
+		return routingdecision.OutcomePage{}, err
+	}
+	service.mu.RLock()
+	defer service.mu.RUnlock()
+	if service.closed || service.status != routingdecision.AvailabilityReady || service.store == nil || service.outcomeWork == nil {
+		return routingdecision.OutcomePage{}, errors.New("routing decision service unavailable")
+	}
+	decisions, err := service.store.ListOutcomeDecisions(opts)
+	if err != nil {
+		return routingdecision.OutcomePage{}, err
+	}
+	observedAt := time.Now().UTC()
+	if service.now != nil {
+		observedAt = service.now().UTC()
+	}
+	page := routingdecision.OutcomePage{
+		SchemaVersion: routingdecision.OutcomeSchemaVersion,
+		Items:         make([]routingdecision.OutcomeRecord, 0, len(decisions.Items)),
+		NextCursor:    decisions.NextCursor,
+	}
+	for _, decision := range decisions.Items {
+		work, workErr := service.outcomeWork(ctx, decision.Record.Payload)
+		if workErr != nil {
+			work = routingdecision.OutcomeWorkSnapshot{}
+		}
+		outcome := routingdecision.ProjectOutcome(decision, work, observedAt)
+		if err := outcome.Validate(); err != nil {
+			return routingdecision.OutcomePage{}, errors.New("routing outcome projection invalid")
+		}
+		if outcome.Coverage != routingdecision.OutcomeCoverageAvailable {
+			page.Partial = true
+		}
+		page.Items = append(page.Items, outcome)
+	}
+	return page, nil
+}
+
+func (cr *CityRuntime) routingDecisionOutcomeWork(ctx context.Context, payload routingdecision.DecisionPayload) (routingdecision.OutcomeWorkSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return routingdecision.OutcomeWorkSnapshot{}, err
+	}
+	var store beads.Store
+	for _, scope := range cr.routingDecisionScopes() {
+		if scope.rig == payload.Rig {
+			store = scope.store
+			break
+		}
+	}
+	if store == nil {
+		return routingdecision.OutcomeWorkSnapshot{}, errors.New("routing outcome work scope unavailable")
+	}
+	work, err := beads.HandlesFor(store).Live.Get(payload.WorkBeadID)
+	if err != nil {
+		return routingdecision.OutcomeWorkSnapshot{}, errors.New("routing outcome work unavailable")
+	}
+	metadata := make(map[string]string, 9)
+	for _, key := range []string{
+		beadmeta.RoutingDecisionIDMetadataKey, beadmeta.RoutingDecisionClaimFenceMetadataKey,
+		beadmeta.RunTargetMetadataKey, beadmeta.RoutedToMetadataKey,
+		beadmeta.WorkOutcomeMetadataKey, beadmeta.FailureClassMetadataKey,
+		beadmeta.SessionIDMetadataKey, beadmeta.SessionIDCamelMetadataKey,
+		beadmeta.CurrentRunIDMetadataKey,
+	} {
+		if value := work.Metadata[key]; value != "" {
+			metadata[key] = value
+		}
+	}
+	return routingdecision.OutcomeWorkSnapshot{
+		Found: true, WorkID: work.ID, Status: work.Status, Assignee: work.Assignee,
+		ClaimFence: work.ClaimFence, Metadata: metadata,
+	}, nil
 }
 
 func (service *cityRoutingDecisionService) Ingest(ctx context.Context, request routingdecision.IngestApprovedRequest) (routingdecision.IngestApprovedResult, error) {

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "next_id": 213,
+  "next_id": 214,
   "permanent_ids": [
     {
       "name": "help",
@@ -3532,6 +3532,21 @@
       "classification": "routing-ingest",
       "owner": "immediate",
       "id": 205
+    },
+    {
+      "path": "gc routing outcomes",
+      "aliases": [],
+      "conditional_modes": [],
+      "hidden": false,
+      "effective_hidden": false,
+      "disable_flag_parsing": false,
+      "shape": "runnable",
+      "recording_policy": "recordable",
+      "mode": "standard",
+      "notice_policy": "eligible",
+      "classification": "routing-outcomes",
+      "owner": "immediate",
+      "id": 213
     },
     {
       "path": "gc routing status",

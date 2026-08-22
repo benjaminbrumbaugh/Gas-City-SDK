@@ -52,6 +52,18 @@ func (s *routingTestState) RoutingDecisionList(_ context.Context, opts routingde
 	return s.store.ListDecisions(opts)
 }
 
+func (s *routingTestState) RoutingDecisionOutcomes(_ context.Context, _ routingdecision.OutcomeListOptions) (routingdecision.OutcomePage, error) {
+	return routingdecision.OutcomePage{
+		SchemaVersion: routingdecision.OutcomeSchemaVersion,
+		Items: []routingdecision.OutcomeRecord{{
+			SchemaVersion: routingdecision.OutcomeSchemaVersion, CorrelationID: "rec-1", RecommendationID: "rec-1",
+			RoutingDecisionID: "decision-1", WorkID: "work-1", Status: routingdecision.OutcomeStatusClaimed,
+			Disposition: routingdecision.OutcomeDispositionUnknown, FailureClass: routingdecision.OutcomeFailureUnknown,
+			Coverage: routingdecision.OutcomeCoverageAvailable, Provenance: routingdecision.OutcomeProvenanceExactWork,
+		}},
+	}, nil
+}
+
 func (s *routingTestState) RoutingDecisionIngest(_ context.Context, request routingdecision.IngestApprovedRequest) (routingdecision.IngestApprovedResult, error) {
 	return s.store.IngestApproved(request, s.verifier)
 }
@@ -124,7 +136,7 @@ func TestRoutingReadRoutesExposeTypedDeterministicSnapshots(t *testing.T) {
 	now := time.Date(2026, 8, 7, 20, 0, 0, 0, time.UTC)
 	state, _ := newRoutingTestState(t, now)
 	h := newTestCityHandler(t, state)
-	for _, path := range []string{"/routing/status", "/routing/targets", "/routing/eligible", "/routing/decisions?limit=1"} {
+	for _, path := range []string{"/routing/status", "/routing/targets", "/routing/eligible", "/routing/decisions?limit=1", "/routing/outcomes?limit=1"} {
 		req := httptest.NewRequest(http.MethodGet, cityURL(state, path), nil)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -178,6 +190,7 @@ func TestRoutingRoutesExposeExactTypedContract(t *testing.T) {
 		{http.MethodGet, "/v0/city/{cityName}/routing/targets", "list-routing-targets"},
 		{http.MethodGet, "/v0/city/{cityName}/routing/eligible", "get-routing-eligible"},
 		{http.MethodGet, "/v0/city/{cityName}/routing/decisions", "list-routing-decisions"},
+		{http.MethodGet, "/v0/city/{cityName}/routing/outcomes", "list-routing-outcomes"},
 		{http.MethodPost, "/v0/city/{cityName}/routing/decisions", "ingest-routing-decision"},
 	} {
 		op, ok := spec.Paths[want.path][strings.ToLower(want.method)]

@@ -51,6 +51,18 @@ type RoutingDecisionListOutput struct {
 	Body RoutingDecisionListBody
 }
 
+// RoutingOutcomeListInput is the Huma input for bounded outcome projection.
+type RoutingOutcomeListInput struct {
+	CityScope
+	Limit  int    `query:"limit" required:"false" minimum:"1" maximum:"100" default:"100" doc:"Maximum claimed or terminal outcome records to return."`
+	Cursor string `query:"cursor" required:"false" doc:"Opaque stable decision-ID keyset cursor."`
+}
+
+// RoutingOutcomeListOutput wraps one strict redacted routing/outcome/v2 page.
+type RoutingOutcomeListOutput struct {
+	Body routingdecision.OutcomePage
+}
+
 // RoutingDecisionIngestBody is the exact signed approval envelope.
 type RoutingDecisionIngestBody struct {
 	Payload   routingdecision.DecisionPayload `json:"payload"`
