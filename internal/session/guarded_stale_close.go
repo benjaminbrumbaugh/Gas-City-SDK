@@ -24,6 +24,7 @@ type GuardedStaleCloseRequest struct {
 // GuardedStaleCloseFacts is the pure decision input gathered by the command
 // adapter and session store.
 type GuardedStaleCloseFacts struct {
+	Now               time.Time
 	Revision          int64
 	Status            string
 	State             State
@@ -57,6 +58,13 @@ func DecideGuardedStaleClose(f GuardedStaleCloseFacts) error {
 	}
 	if f.ExpectedHeldUntil == "" || f.HeldUntil != f.ExpectedHeldUntil {
 		return fmt.Errorf("guarded stale close hold changed: got %q want %q", f.HeldUntil, f.ExpectedHeldUntil)
+	}
+	heldUntil, err := time.Parse(time.RFC3339, f.HeldUntil)
+	if err != nil {
+		return fmt.Errorf("guarded stale close hold is not RFC3339: %w", err)
+	}
+	if f.Now.IsZero() || !heldUntil.After(f.Now.UTC()) {
+		return errors.New("guarded stale close hold is not in the future")
 	}
 	if strings.TrimSpace(f.SessionKey) != "" {
 		return errors.New("guarded stale close target has a session key")
@@ -116,7 +124,12 @@ func (s *Store) guardedStaleCloseWriter(id string, req GuardedStaleCloseRequest)
 	if !IsSessionBeadOrRepairable(bead) {
 		return nil, fmt.Errorf("guarded stale close target %q is not a session bead", id)
 	}
+	now := req.Now.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
 	facts := GuardedStaleCloseFacts{
+		Now:               now,
 		Revision:          bead.Revision,
 		Status:            bead.Status,
 		State:             State(bead.Metadata["state"]),

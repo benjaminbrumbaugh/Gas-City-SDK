@@ -26,6 +26,7 @@ func (s *guardedCloseTestStore) CloseWithMetadataIfMatch(id string, revision int
 
 func TestDecideGuardedStaleCloseRequiresExactStaleSnapshot(t *testing.T) {
 	base := GuardedStaleCloseFacts{
+		Now:               time.Date(2026, 8, 22, 2, 0, 0, 0, time.UTC),
 		Revision:          42,
 		Status:            "open",
 		State:             StateAsleep,
@@ -50,6 +51,10 @@ func TestDecideGuardedStaleCloseRequiresExactStaleSnapshot(t *testing.T) {
 		{"non-open", func(f *GuardedStaleCloseFacts) { f.Status = "in_progress" }, "status changed"},
 		{"state changed", func(f *GuardedStaleCloseFacts) { f.State = StateActive }, "state changed"},
 		{"hold changed", func(f *GuardedStaleCloseFacts) { f.HeldUntil = "" }, "hold changed"},
+		{"malformed hold", func(f *GuardedStaleCloseFacts) { f.HeldUntil, f.ExpectedHeldUntil = "not-a-time", "not-a-time" }, "not RFC3339"},
+		{"expired hold", func(f *GuardedStaleCloseFacts) {
+			f.HeldUntil, f.ExpectedHeldUntil = "2026-08-22T01:59:59Z", "2026-08-22T01:59:59Z"
+		}, "not in the future"},
 		{"session key", func(f *GuardedStaleCloseFacts) { f.SessionKey = "runtime-key" }, "session key"},
 		{"pending create", func(f *GuardedStaleCloseFacts) { f.PendingCreate = "true" }, "pending create"},
 		{"running", func(f *GuardedStaleCloseFacts) { f.RuntimeRunning = true }, "live runtime"},
@@ -127,10 +132,12 @@ func TestStoreCloseGuardedStaleSessionClosesExactSnapshot(t *testing.T) {
 }
 
 func TestStoreCloseGuardedStaleSessionRefusesCapabilityOrStaleRevision(t *testing.T) {
+	now := time.Date(2026, 8, 22, 2, 0, 0, 0, time.UTC)
+	future := "2126-08-22T02:00:00Z"
 	plain := beads.NewMemStore()
 	created, err := plain.Create(beads.Bead{
 		Type: BeadType, Labels: []string{LabelSession},
-		Metadata: map[string]string{"state": string(StateAsleep), "held_until": "future"},
+		Metadata: map[string]string{"state": string(StateAsleep), "held_until": future},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -138,7 +145,7 @@ func TestStoreCloseGuardedStaleSessionRefusesCapabilityOrStaleRevision(t *testin
 	current, _ := plain.Get(created.ID)
 	front := NewStore(beads.SessionStore{Store: plain})
 	err = front.CloseGuardedStaleSession(created.ID, GuardedStaleCloseRequest{
-		ExpectedRevision: current.Revision, ExpectedState: StateAsleep, ExpectedHeldUntil: "future", Reason: "reason",
+		ExpectedRevision: current.Revision, ExpectedState: StateAsleep, ExpectedHeldUntil: future, Reason: "reason", Now: now,
 	})
 	if !errors.Is(err, beads.ErrConditionalWriteUnsupported) {
 		t.Fatalf("unsupported error = %v", err)
@@ -147,7 +154,7 @@ func TestStoreCloseGuardedStaleSessionRefusesCapabilityOrStaleRevision(t *testin
 	backing := &guardedCloseTestStore{MemStore: beads.NewMemStore()}
 	created, _ = backing.Create(beads.Bead{
 		Type: BeadType, Labels: []string{LabelSession},
-		Metadata: map[string]string{"state": string(StateAsleep), "held_until": "future"},
+		Metadata: map[string]string{"state": string(StateAsleep), "held_until": future},
 	})
 	snapshot, _ := backing.Get(created.ID)
 	changed := "changed"
@@ -156,7 +163,7 @@ func TestStoreCloseGuardedStaleSessionRefusesCapabilityOrStaleRevision(t *testin
 	}
 	front = NewStore(beads.SessionStore{Store: backing})
 	err = front.CloseGuardedStaleSession(created.ID, GuardedStaleCloseRequest{
-		ExpectedRevision: snapshot.Revision, ExpectedState: StateAsleep, ExpectedHeldUntil: "future", Reason: "reason",
+		ExpectedRevision: snapshot.Revision, ExpectedState: StateAsleep, ExpectedHeldUntil: future, Reason: "reason", Now: now,
 	})
 	if err == nil || !strings.Contains(err.Error(), "revision changed") {
 		t.Fatalf("stale error = %v", err)
