@@ -268,24 +268,8 @@ func latestOutcomeObservedAt(item DecisionWithAudits, fallback time.Time) time.T
 }
 
 func outcomeID(record OutcomeRecord) string {
-	canonical := struct {
-		RecommendationID      string              `json:"recommendation_id"`
-		RoutingDecisionID     *string             `json:"routing_decision_id"`
-		Status                OutcomeStatus       `json:"status"`
-		ObservedAtUnix        int64               `json:"observed_at_unix"`
-		Disposition           OutcomeDisposition  `json:"disposition"`
-		FailureClass          OutcomeFailureClass `json:"failure_class"`
-		RequestedTargetID     string              `json:"requested_target_id"`
-		ActualTargetID        *string             `json:"actual_target_id"`
-		RequestedConfigDigest string              `json:"requested_config_digest"`
-		ActualConfigDigest    *string             `json:"actual_config_digest"`
-	}{
-		RecommendationID: record.RecommendationID, RoutingDecisionID: record.RoutingDecisionID,
-		Status: record.Status, ObservedAtUnix: record.ObservedAtUnix,
-		Disposition: record.Disposition, FailureClass: record.FailureClass,
-		RequestedTargetID: record.RequestedTargetID, ActualTargetID: record.ActualTargetID,
-		RequestedConfigDigest: record.RequestedConfigDigest, ActualConfigDigest: record.ActualConfigDigest,
-	}
+	canonical := record
+	canonical.OutcomeID = ""
 	encoded, _ := json.Marshal(canonical)
 	sum := sha256.Sum256(append([]byte("gascity.routing-outcome.v2\x00"), encoded...))
 	return "outcome_" + hex.EncodeToString(sum[:])

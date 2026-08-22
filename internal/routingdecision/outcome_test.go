@@ -2,9 +2,12 @@ package routingdecision
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/beadmeta"
 )
 
 func TestDecisionRecommendationIDIsOptionalAndSignedWhenPresent(t *testing.T) {
@@ -128,6 +131,17 @@ func TestProjectOutcomeClassifiesClaimedNotAdmittedAndUnknownCoverage(t *testing
 	claimed := ProjectOutcome(DecisionWithAudits{Record: Record{Payload: payload, State: StateClaimed}}, OutcomeWorkSnapshot{}, now)
 	if claimed.Status != OutcomeStatusClaimed || claimed.Disposition != OutcomeDispositionUnknown || claimed.Coverage != OutcomeCoverageUnknown || claimed.FailureClass != OutcomeFailureUnknown || claimed.ActualTargetID == nil || claimed.ActualConfigDigest == nil {
 		t.Fatalf("claimed = %+v", claimed)
+	}
+	exactClaimed := ProjectOutcome(DecisionWithAudits{Record: Record{Payload: payload, State: StateClaimed}}, OutcomeWorkSnapshot{
+		Found: true, WorkID: payload.WorkBeadID, Metadata: map[string]string{
+			beadmeta.RoutingDecisionIDMetadataKey:         payload.DecisionID,
+			beadmeta.RoutingDecisionClaimFenceMetadataKey: strconv.FormatInt(payload.ClaimFence, 10),
+			beadmeta.RunTargetMetadataKey:                 payload.Target,
+			beadmeta.SessionIDMetadataKey:                 "session-enriched",
+		},
+	}, now)
+	if exactClaimed.OutcomeID == claimed.OutcomeID {
+		t.Fatal("outcome evidence enrichment retained the same immutable outcome_id")
 	}
 
 	refused := ProjectOutcome(DecisionWithAudits{Record: Record{Payload: payload, State: StateRefusedAfterRace}}, OutcomeWorkSnapshot{}, now)
