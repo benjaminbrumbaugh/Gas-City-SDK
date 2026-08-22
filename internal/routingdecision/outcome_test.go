@@ -176,6 +176,17 @@ func TestOutcomeRecordValidationEnforcesPortableConsistency(t *testing.T) {
 		"not admitted none failure": func(r *OutcomeRecord) {
 			r.FailureClass = OutcomeFailureNone
 		},
+		"not admitted execution id": func(r *OutcomeRecord) {
+			r.ExecutionID = stringPointer("execution-a")
+		},
+		"failed shipped": func(r *OutcomeRecord) {
+			target, digest := "worker", "sha256:"+strings.Repeat("b", 64)
+			r.Disposition, r.FailureClass = OutcomeDispositionShipped, OutcomeFailureUnknown
+			r.ActualTargetID, r.ActualConfigDigest = &target, &digest
+		},
+		"jwt session": func(r *OutcomeRecord) {
+			r.SessionID = stringPointer("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ.signature")
+		},
 		"succeeded blocked": func(r *OutcomeRecord) {
 			target, digest := "worker", "sha256:"+strings.Repeat("b", 64)
 			r.Status, r.Disposition, r.FailureClass = OutcomeStatusSucceeded, OutcomeDispositionBlocked, OutcomeFailureNone

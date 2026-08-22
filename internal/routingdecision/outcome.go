@@ -188,7 +188,7 @@ func (record OutcomeRecord) Validate() error {
 		"recommendation_id": record.RecommendationID, "work_id": record.WorkID,
 		"requested_target_id": record.RequestedTargetID,
 	} {
-		if err := validateText(name, value, true); err != nil {
+		if err := validateOutcomeOpaque(name, value, true); err != nil {
 			return err
 		}
 	}
@@ -199,7 +199,7 @@ func (record OutcomeRecord) Validate() error {
 		"execution_id":         record.ExecutionID,
 	} {
 		if value != nil {
-			if err := validateText(name, *value, true); err != nil {
+			if err := validateOutcomeOpaque(name, *value, true); err != nil {
 				return err
 			}
 		}
@@ -211,7 +211,7 @@ func (record OutcomeRecord) Validate() error {
 		return invalidf("actual target and config digest must be a nullable pair")
 	}
 	if record.ActualTargetID != nil {
-		if err := validateText("actual_target_id", *record.ActualTargetID, true); err != nil {
+		if err := validateOutcomeOpaque("actual_target_id", *record.ActualTargetID, true); err != nil {
 			return err
 		}
 		if !validPortableDigest(*record.ActualConfigDigest) {
@@ -239,10 +239,10 @@ func (record OutcomeRecord) Validate() error {
 		}
 	case OutcomeStatusFailed:
 		if record.Disposition == OutcomeDispositionNotAdmitted {
-			if record.ActualTargetID != nil || record.FailureClass == OutcomeFailureNone {
+			if record.ActualTargetID != nil || record.FailureClass == OutcomeFailureNone || record.AdmissionReceiptID != nil || record.SessionID != nil || record.ExecutionID != nil {
 				return invalidf("not-admitted outcome consistency is invalid")
 			}
-		} else if record.ActualTargetID == nil || record.FailureClass == OutcomeFailureNone {
+		} else if record.ActualTargetID == nil || record.FailureClass == OutcomeFailureNone || record.Disposition == OutcomeDispositionShipped || record.Disposition == OutcomeDispositionNoOp {
 			return invalidf("failed execution outcome consistency is invalid")
 		}
 	default:
@@ -337,4 +337,38 @@ func validRecommendationID(value string) bool {
 func isHex(value string) bool {
 	_, err := hex.DecodeString(value)
 	return err == nil
+}
+
+func validateOutcomeOpaque(name, value string, required bool) error {
+	if err := validateText(name, value, required); err != nil || value == "" {
+		return err
+	}
+	if len(value) > 256 || !isOutcomeOpaqueChar(value[0]) {
+		return invalidf("%s is not a safe opaque identifier", name)
+	}
+	for index := 0; index < len(value); index++ {
+		if !isOutcomeOpaqueChar(value[index]) {
+			return invalidf("%s is not a safe opaque identifier", name)
+		}
+	}
+	lowered := strings.ToLower(value)
+	for _, marker := range []string{"api_key", "credential", "password", "private_key", "prompt", "secret", "token"} {
+		if strings.Contains(lowered, marker) {
+			return invalidf("%s resembles secret material", name)
+		}
+	}
+	for _, prefix := range []string{"sk-", "rk-", "ghp_", "gho_", "github_pat_", "xoxb-", "xoxp-", "bearer-", "basic-"} {
+		if strings.HasPrefix(lowered, prefix) {
+			return invalidf("%s resembles secret material", name)
+		}
+	}
+	segments := strings.Split(value, ".")
+	if strings.Contains(value, "://") || strings.ContainsAny(value, "?#=") || (strings.HasPrefix(value, "AKIA") && len(value) >= 20) || (len(segments) == 3 && strings.HasPrefix(segments[0], "eyJ") && strings.HasPrefix(segments[1], "eyJ")) {
+		return invalidf("%s resembles secret material", name)
+	}
+	return nil
+}
+
+func isOutcomeOpaqueChar(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || strings.ContainsRune(".:_/-", rune(value))
 }
