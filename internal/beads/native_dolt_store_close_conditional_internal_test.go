@@ -112,4 +112,27 @@ func TestNativeDoltStoreConditionalCloseRejectsStaleOrBlocked(t *testing.T) {
 	if blockedFinal.Status == "closed" || blockedFinal.Metadata["state"] == "operator-stale" {
 		t.Fatalf("blocked close mutated issue: %#v", blockedFinal)
 	}
+
+	nonOpen, err := store.Create(Bead{Title: "non-open stale session", Metadata: map[string]string{"state": "asleep"}})
+	if err != nil {
+		t.Fatalf("Create non-open: %v", err)
+	}
+	inProgress := "in_progress"
+	if err := store.Update(nonOpen.ID, UpdateOpts{Status: &inProgress}); err != nil {
+		t.Fatalf("mark non-open: %v", err)
+	}
+	nonOpenCurrent, err := store.Get(nonOpen.ID)
+	if err != nil {
+		t.Fatalf("Get non-open: %v", err)
+	}
+	if err := closer.CloseWithMetadataIfMatch(nonOpen.ID, nonOpenCurrent.Revision, map[string]string{"state": "operator-stale"}); !errors.Is(err, ErrNotClosableForConditionalClose) {
+		t.Fatalf("non-open close error = %v, want ErrNotClosableForConditionalClose", err)
+	}
+	nonOpenFinal, err := store.Get(nonOpen.ID)
+	if err != nil {
+		t.Fatalf("Get non-open final: %v", err)
+	}
+	if nonOpenFinal.Status == "closed" || nonOpenFinal.Metadata["state"] == "operator-stale" {
+		t.Fatalf("non-open close mutated issue: %#v", nonOpenFinal)
+	}
 }

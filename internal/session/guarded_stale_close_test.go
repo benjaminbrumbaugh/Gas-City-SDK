@@ -27,6 +27,7 @@ func (s *guardedCloseTestStore) CloseWithMetadataIfMatch(id string, revision int
 func TestDecideGuardedStaleCloseRequiresExactStaleSnapshot(t *testing.T) {
 	base := GuardedStaleCloseFacts{
 		Revision:          42,
+		Status:            "open",
 		State:             StateAsleep,
 		HeldUntil:         "2126-07-28T22:59:29Z",
 		ExpectedRevision:  42,
@@ -45,7 +46,8 @@ func TestDecideGuardedStaleCloseRequiresExactStaleSnapshot(t *testing.T) {
 	}{
 		{"zero expected revision", func(f *GuardedStaleCloseFacts) { f.ExpectedRevision = 0 }, "non-zero expected revision"},
 		{"revision changed", func(f *GuardedStaleCloseFacts) { f.Revision++ }, "revision changed"},
-		{"closed", func(f *GuardedStaleCloseFacts) { f.Closed = true }, "already closed"},
+		{"closed", func(f *GuardedStaleCloseFacts) { f.Status, f.Closed = "closed", true }, "status changed"},
+		{"non-open", func(f *GuardedStaleCloseFacts) { f.Status = "in_progress" }, "status changed"},
 		{"state changed", func(f *GuardedStaleCloseFacts) { f.State = StateActive }, "state changed"},
 		{"hold changed", func(f *GuardedStaleCloseFacts) { f.HeldUntil = "" }, "hold changed"},
 		{"session key", func(f *GuardedStaleCloseFacts) { f.SessionKey = "runtime-key" }, "session key"},

@@ -36,7 +36,7 @@ func (s *NativeDoltStore) CloseWithMetadataIfMatch(id string, expectedRevision i
 		if issue.RowVersion != expectedRevision {
 			return &PreconditionFailedError{ID: id, Expected: expectedRevision, Current: issue.RowVersion}
 		}
-		if issue.Status == beadslib.StatusClosed {
+		if issue.Status != beadslib.StatusOpen {
 			return ErrNotClosableForConditionalClose
 		}
 		blocked, _, err := tx.IsBlocked(ctx, id)

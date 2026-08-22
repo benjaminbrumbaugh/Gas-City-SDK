@@ -25,6 +25,7 @@ type GuardedStaleCloseRequest struct {
 // adapter and session store.
 type GuardedStaleCloseFacts struct {
 	Revision          int64
+	Status            string
 	State             State
 	HeldUntil         string
 	Closed            bool
@@ -48,8 +49,8 @@ func DecideGuardedStaleClose(f GuardedStaleCloseFacts) error {
 	if f.Revision != f.ExpectedRevision {
 		return fmt.Errorf("guarded stale close revision changed: got %d want %d", f.Revision, f.ExpectedRevision)
 	}
-	if f.Closed {
-		return errors.New("guarded stale close target is already closed")
+	if f.Status != "open" || f.Closed {
+		return fmt.Errorf("guarded stale close status changed: got %q want %q", f.Status, "open")
 	}
 	if f.ExpectedState == "" || f.State != f.ExpectedState {
 		return fmt.Errorf("guarded stale close state changed: got %q want %q", f.State, f.ExpectedState)
@@ -117,6 +118,7 @@ func (s *Store) guardedStaleCloseWriter(id string, req GuardedStaleCloseRequest)
 	}
 	facts := GuardedStaleCloseFacts{
 		Revision:          bead.Revision,
+		Status:            bead.Status,
 		State:             State(bead.Metadata["state"]),
 		HeldUntil:         bead.Metadata["held_until"],
 		Closed:            bead.Status == "closed",
