@@ -2,6 +2,7 @@ package routingdecision
 
 import (
 	"crypto/ed25519"
+	"strings"
 	"testing"
 	"time"
 )
@@ -19,7 +20,7 @@ func TestListOutcomeDecisionsIncludesClaimedAndTerminalWithStableCursor(t *testi
 	for id, want := range states {
 		payload, approval, signature, verifier := currentTestDecision(t, id, now)
 		if id != "decision-a-approved" && id != "decision-e-legacy" {
-			payload.RecommendationID = "recommendation-" + id
+			payload.RecommendationID = "routing/v2:" + strings.Repeat(string(id[len("decision-")]), 64)
 			payload.BindingID = BindingID(payload)
 			approval.BindingID = payload.BindingID
 			signing, err := SigningBytes(payload, approval)

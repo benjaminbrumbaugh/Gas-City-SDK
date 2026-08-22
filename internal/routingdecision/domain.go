@@ -280,6 +280,9 @@ func (payload DecisionPayload) Validate() error {
 			return err
 		}
 	}
+	if payload.RecommendationID != "" && !validRecommendationID(payload.RecommendationID) {
+		return invalidf("recommendation_id must be a routing/v2 decision identity")
+	}
 	for name, digest := range map[string]string{
 		"binding_id": payload.BindingID, "work_state_digest": payload.WorkStateDigest,
 		"target_config_digest": payload.TargetConfigDigest, "policy_digest": payload.PolicyDigest,

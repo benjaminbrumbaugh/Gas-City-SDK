@@ -248,7 +248,11 @@ func newRoutingOutcomesCmd(stdout, stderr io.Writer) *cobra.Command {
 		tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "RECOMMENDATION	DECISION	WORK	STATUS	DISPOSITION	COVERAGE") //nolint:errcheck
 		for _, item := range page.Items {
-			fmt.Fprintf(tw, "%s	%s	%s	%s	%s	%s\n", item.RecommendationID, item.RoutingDecisionID, item.WorkID, item.Status, item.Disposition, item.Coverage) //nolint:errcheck
+			decisionID := "-"
+			if item.RoutingDecisionID != nil {
+				decisionID = *item.RoutingDecisionID
+			}
+			fmt.Fprintf(tw, "%s	%s	%s	%s	%s	%s\n", item.RecommendationID, decisionID, item.WorkID, item.Status, item.Disposition, item.Coverage) //nolint:errcheck
 		}
 		if err := tw.Flush(); err != nil {
 			return err

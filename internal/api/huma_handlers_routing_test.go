@@ -56,8 +56,8 @@ func (s *routingTestState) RoutingDecisionOutcomes(_ context.Context, _ routingd
 	return routingdecision.OutcomePage{
 		SchemaVersion: routingdecision.OutcomeSchemaVersion,
 		Items: []routingdecision.OutcomeRecord{{
-			SchemaVersion: routingdecision.OutcomeSchemaVersion, CorrelationID: "rec-1", RecommendationID: "rec-1",
-			RoutingDecisionID: "decision-1", WorkID: "work-1", Status: routingdecision.OutcomeStatusClaimed,
+			SchemaVersion: routingdecision.OutcomeSchemaVersion, CorrelationID: "work-1", RecommendationID: "routing/v2:" + strings.Repeat("c", 64),
+			RoutingDecisionID: routingStringPointer("decision-1"), WorkID: "work-1", Status: routingdecision.OutcomeStatusClaimed,
 			Disposition: routingdecision.OutcomeDispositionUnknown, FailureClass: routingdecision.OutcomeFailureUnknown,
 			Coverage: routingdecision.OutcomeCoverageAvailable, Provenance: routingdecision.OutcomeProvenanceExactWork,
 		}},

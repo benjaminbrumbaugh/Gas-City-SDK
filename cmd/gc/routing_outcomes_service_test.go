@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 )
 
 func TestRoutingDecisionServiceProjectsClaimedAndTerminalWithoutLifecycleMutation(t *testing.T) {
-	fixture := newApprovedRoutingDecisionFixtureForRecommendation(t, "decision-outcome-service", "rec-service", routingdecision.StoreOptions{})
+	fixture := newApprovedRoutingDecisionFixtureForRecommendation(t, "decision-outcome-service", "routing/v2:"+strings.Repeat("c", 64), routingdecision.StoreOptions{})
 	if applied, err := fixture.cr.applyApprovedRoutingDecisions(); err != nil || applied != 1 {
 		t.Fatalf("admit = (%d, %v)", applied, err)
 	}
@@ -52,7 +53,7 @@ func TestRoutingDecisionServiceProjectsClaimedAndTerminalWithoutLifecycleMutatio
 		t.Fatalf("Outcomes = (%+v, %v)", page, err)
 	}
 	wantObserved := time.Date(2026, 8, 7, 23, 30, 0, 0, time.UTC).Unix()
-	if page.Items[0].Status != routingdecision.OutcomeStatusClaimed || page.Items[0].SessionID != "session-service" || page.Items[0].ObservedAtUnix != wantObserved {
+	if page.Items[0].Status != routingdecision.OutcomeStatusClaimed || page.Items[0].SessionID == nil || *page.Items[0].SessionID != "session-service" || page.Items[0].ObservedAtUnix != wantObserved {
 		t.Fatalf("item = %+v", page.Items[0])
 	}
 	after, err := fixture.ledger.Get(fixture.payload.DecisionID)

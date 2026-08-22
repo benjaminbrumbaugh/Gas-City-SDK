@@ -3111,11 +3111,11 @@ type OutcomePageSchemaVersion string
 type OutcomeRecord struct {
 	ActualConfigDigest    *string                    `json:"actual_config_digest"`
 	ActualTargetId        *string                    `json:"actual_target_id"`
-	AdmissionId           *string                    `json:"admission_id,omitempty"`
+	AdmissionReceiptId    *string                    `json:"admission_receipt_id"`
 	CorrelationId         string                     `json:"correlation_id"`
 	Coverage              OutcomeRecordCoverage      `json:"coverage"`
 	Disposition           OutcomeRecordDisposition   `json:"disposition"`
-	ExecutionId           *string                    `json:"execution_id,omitempty"`
+	ExecutionId           *string                    `json:"execution_id"`
 	FailureClass          OutcomeRecordFailureClass  `json:"failure_class"`
 	ObservedAtUnix        int64                      `json:"observed_at_unix"`
 	OutcomeId             string                     `json:"outcome_id"`
@@ -3123,9 +3123,9 @@ type OutcomeRecord struct {
 	RecommendationId      string                     `json:"recommendation_id"`
 	RequestedConfigDigest string                     `json:"requested_config_digest"`
 	RequestedTargetId     string                     `json:"requested_target_id"`
-	RoutingDecisionId     *string                    `json:"routing_decision_id,omitempty"`
+	RoutingDecisionId     *string                    `json:"routing_decision_id"`
 	SchemaVersion         OutcomeRecordSchemaVersion `json:"schema_version"`
-	SessionId             *string                    `json:"session_id,omitempty"`
+	SessionId             *string                    `json:"session_id"`
 	Status                OutcomeRecordStatus        `json:"status"`
 	WorkId                string                     `json:"work_id"`
 }

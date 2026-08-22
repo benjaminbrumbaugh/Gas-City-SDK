@@ -11,6 +11,8 @@ import (
 	"github.com/gastownhall/gascity/internal/routingdecision"
 )
 
+func routingStringPointer(value string) *string { return &value }
+
 func TestRoutingClientUsesGeneratedRoutesAndFinalGrantBinding(t *testing.T) {
 	var binding GrantBinding
 	transport := rtFunc(func(r *http.Request) (*http.Response, error) {
@@ -35,7 +37,7 @@ func TestRoutingClientUsesGeneratedRoutesAndFinalGrantBinding(t *testing.T) {
 			status = http.StatusOK
 			value = routingdecision.OutcomePage{
 				SchemaVersion: routingdecision.OutcomeSchemaVersion,
-				Items:         []routingdecision.OutcomeRecord{{SchemaVersion: routingdecision.OutcomeSchemaVersion, RecommendationID: "rec-1", RoutingDecisionID: "decision-1"}},
+				Items:         []routingdecision.OutcomeRecord{{SchemaVersion: routingdecision.OutcomeSchemaVersion, RecommendationID: "routing/v2:" + strings.Repeat("c", 64), RoutingDecisionID: routingStringPointer("decision-1")}},
 				NextCursor:    "next", Partial: true,
 			}
 		case r.Method == http.MethodPost && r.URL.Path == "/v0/city/acme/routing/decisions":
@@ -79,7 +81,7 @@ func TestRoutingClientUsesGeneratedRoutesAndFinalGrantBinding(t *testing.T) {
 		t.Fatalf("RoutingDecisions = (%+v, %v)", page, err)
 	}
 	outcomes, err := client.RoutingOutcomes(RoutingOutcomeListRequest{Limit: 10, Cursor: "after"})
-	if err != nil || outcomes.SchemaVersion != routingdecision.OutcomeSchemaVersion || len(outcomes.Items) != 1 || outcomes.Items[0].RecommendationID != "rec-1" || outcomes.NextCursor != "next" || !outcomes.Partial {
+	if err != nil || outcomes.SchemaVersion != routingdecision.OutcomeSchemaVersion || len(outcomes.Items) != 1 || outcomes.Items[0].RecommendationID != "routing/v2:"+strings.Repeat("c", 64) || outcomes.NextCursor != "next" || !outcomes.Partial {
 		t.Fatalf("RoutingOutcomes = (%+v, %v)", outcomes, err)
 	}
 	request := routingdecision.IngestApprovedRequest{

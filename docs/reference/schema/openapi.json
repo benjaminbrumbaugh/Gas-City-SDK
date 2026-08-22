@@ -5902,7 +5902,7 @@
         "additionalProperties": false,
         "properties": {
           "actual_config_digest": {
-            "pattern": "^[0-9a-f]{64}$",
+            "pattern": "^sha256:[0-9a-f]{64}$",
             "type": [
               "string",
               "null"
@@ -5914,8 +5914,11 @@
               "null"
             ]
           },
-          "admission_id": {
-            "type": "string"
+          "admission_receipt_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "correlation_id": {
             "minLength": 1,
@@ -5941,7 +5944,10 @@
             "type": "string"
           },
           "execution_id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "failure_class": {
             "enum": [
@@ -5969,11 +5975,11 @@
             "type": "string"
           },
           "recommendation_id": {
-            "minLength": 1,
+            "pattern": "^routing/v2:[0-9a-f]{64}$",
             "type": "string"
           },
           "requested_config_digest": {
-            "pattern": "^[0-9a-f]{64}$",
+            "pattern": "^sha256:[0-9a-f]{64}$",
             "type": "string"
           },
           "requested_target_id": {
@@ -5981,7 +5987,10 @@
             "type": "string"
           },
           "routing_decision_id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "schema_version": {
             "enum": [
@@ -5990,7 +5999,10 @@
             "type": "string"
           },
           "session_id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "status": {
             "enum": [
@@ -6010,7 +6022,11 @@
           "outcome_id",
           "correlation_id",
           "recommendation_id",
+          "routing_decision_id",
           "work_id",
+          "admission_receipt_id",
+          "session_id",
+          "execution_id",
           "requested_target_id",
           "actual_target_id",
           "requested_config_digest",

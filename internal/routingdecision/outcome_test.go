@@ -20,13 +20,13 @@ func TestDecisionRecommendationIDIsOptionalAndSignedWhenPresent(t *testing.T) {
 	}
 
 	linked := legacy
-	linked.RecommendationID = "recommendation-opaque-1"
+	linked.RecommendationID = "routing/v2:" + strings.Repeat("c", 64)
 	linked.BindingID = BindingID(linked)
 	linkedBytes, err := CanonicalDecisionBytes(linked)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(linkedBytes), `"recommendation_id":"recommendation-opaque-1"`) {
+	if !strings.Contains(string(linkedBytes), `"recommendation_id":"routing/v2:`) {
 		t.Fatalf("recommendation id is not signed: %s", linkedBytes)
 	}
 	if string(legacyBytes) == string(linkedBytes) {
@@ -34,6 +34,11 @@ func TestDecisionRecommendationIDIsOptionalAndSignedWhenPresent(t *testing.T) {
 	}
 
 	invalid := linked
+	invalid.RecommendationID = "recommendation-safe-but-not-v2"
+	invalid.BindingID = BindingID(invalid)
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("non-v2 recommendation id accepted")
+	}
 	invalid.RecommendationID = " secret\n"
 	invalid.BindingID = BindingID(invalid)
 	if err := invalid.Validate(); err == nil {
@@ -44,7 +49,7 @@ func TestDecisionRecommendationIDIsOptionalAndSignedWhenPresent(t *testing.T) {
 func TestProjectOutcomeUsesOnlyExactCarrierMetadataAndRedactsRawFields(t *testing.T) {
 	observed := time.Date(2026, 8, 22, 12, 34, 56, 0, time.UTC)
 	payload := testDecisionPayload(t)
-	payload.RecommendationID = "rec-1"
+	payload.RecommendationID = "routing/v2:" + strings.Repeat("c", 64)
 	payload.BindingID = BindingID(payload)
 	item := DecisionWithAudits{
 		Record: Record{Payload: payload, State: StateOutcomeRecorded},
@@ -88,19 +93,19 @@ func TestProjectOutcomeUsesOnlyExactCarrierMetadataAndRedactsRawFields(t *testin
 	if changed.OutcomeID == got.OutcomeID {
 		t.Fatal("changed canonical outcome content retained outcome id")
 	}
-	if got.SchemaVersion != OutcomeSchemaVersion || got.CorrelationID != "rec-1" || got.RecommendationID != "rec-1" {
+	if got.SchemaVersion != OutcomeSchemaVersion || got.CorrelationID != payload.WorkBeadID || got.RecommendationID != payload.RecommendationID {
 		t.Fatalf("identity = %+v", got)
 	}
-	if got.RoutingDecisionID != payload.DecisionID || got.WorkID != payload.WorkBeadID {
+	if got.RoutingDecisionID == nil || *got.RoutingDecisionID != payload.DecisionID || got.WorkID != payload.WorkBeadID {
 		t.Fatalf("join ids = %+v", got)
 	}
 	if got.Disposition != OutcomeDispositionShipped || got.FailureClass != OutcomeFailureNone || got.Coverage != OutcomeCoverageAvailable {
 		t.Fatalf("classification = %+v", got)
 	}
-	if got.Status != OutcomeStatusSucceeded || got.RequestedTargetID != payload.Target || got.ActualTargetID == nil || *got.ActualTargetID != payload.Target || got.RequestedConfigDigest != payload.TargetConfigDigest || got.ActualConfigDigest == nil || *got.ActualConfigDigest != payload.TargetConfigDigest {
+	if got.Status != OutcomeStatusSucceeded || got.RequestedTargetID != payload.Target || got.ActualTargetID == nil || *got.ActualTargetID != payload.Target || got.RequestedConfigDigest != "sha256:"+payload.TargetConfigDigest || got.ActualConfigDigest == nil || *got.ActualConfigDigest != "sha256:"+payload.TargetConfigDigest {
 		t.Fatalf("targets = %+v", got)
 	}
-	if got.SessionID != "session-1" || got.ExecutionID != "execution-1" || got.ObservedAtUnix != observed.Add(-time.Minute).Unix() {
+	if got.SessionID == nil || *got.SessionID != "session-1" || got.ExecutionID == nil || *got.ExecutionID != "execution-1" || got.ObservedAtUnix != observed.Add(-time.Minute).Unix() {
 		t.Fatalf("runtime ids/time = %+v", got)
 	}
 	encoded, err := json.Marshal(got)
@@ -117,7 +122,7 @@ func TestProjectOutcomeUsesOnlyExactCarrierMetadataAndRedactsRawFields(t *testin
 func TestProjectOutcomeClassifiesClaimedNotAdmittedAndUnknownCoverage(t *testing.T) {
 	now := time.Date(2026, 8, 22, 13, 0, 0, 0, time.UTC)
 	payload := testDecisionPayload(t)
-	payload.RecommendationID = "rec-2"
+	payload.RecommendationID = "routing/v2:" + strings.Repeat("d", 64)
 	payload.BindingID = BindingID(payload)
 
 	claimed := ProjectOutcome(DecisionWithAudits{Record: Record{Payload: payload, State: StateClaimed}}, OutcomeWorkSnapshot{}, now)
@@ -140,8 +145,8 @@ func TestProjectOutcomeClassifiesClaimedNotAdmittedAndUnknownCoverage(t *testing
 func TestOutcomeRecordValidationEnforcesPortableConsistency(t *testing.T) {
 	valid := OutcomeRecord{
 		SchemaVersion: OutcomeSchemaVersion, OutcomeID: "outcome_" + strings.Repeat("a", 64),
-		CorrelationID: "rec", RecommendationID: "rec", RoutingDecisionID: "decision", WorkID: "work",
-		RequestedTargetID: "worker", RequestedConfigDigest: strings.Repeat("b", 64),
+		CorrelationID: "corr", RecommendationID: "routing/v2:" + strings.Repeat("c", 64), RoutingDecisionID: stringPointer("decision"), WorkID: "work",
+		RequestedTargetID: "worker", RequestedConfigDigest: "sha256:" + strings.Repeat("b", 64),
 		Status: OutcomeStatusFailed, Disposition: OutcomeDispositionNotAdmitted,
 		FailureClass: OutcomeFailureUnknown, Coverage: OutcomeCoverageUnknown,
 		Provenance: OutcomeProvenanceDecision, ObservedAtUnix: 1,
@@ -158,7 +163,7 @@ func TestOutcomeRecordValidationEnforcesPortableConsistency(t *testing.T) {
 			r.FailureClass = OutcomeFailureNone
 		},
 		"succeeded blocked": func(r *OutcomeRecord) {
-			target, digest := "worker", strings.Repeat("b", 64)
+			target, digest := "worker", "sha256:"+strings.Repeat("b", 64)
 			r.Status, r.Disposition, r.FailureClass = OutcomeStatusSucceeded, OutcomeDispositionBlocked, OutcomeFailureNone
 			r.ActualTargetID, r.ActualConfigDigest = &target, &digest
 		},

@@ -16,7 +16,7 @@ const (
 	OutcomeSchemaVersion = "routing/outcome/v2"
 
 	OutcomeProvenanceDecision  = "authoritative_routing_decision"
-	OutcomeProvenanceExactWork = "authoritative_routing_decision+exact_work_bead_metadata"
+	OutcomeProvenanceExactWork = "authoritative_routing_decision_exact_work"
 )
 
 // OutcomeDisposition is the bounded public disposition vocabulary.
@@ -65,16 +65,16 @@ type OutcomeRecord struct {
 	SchemaVersion         string              `json:"schema_version" enum:"routing/outcome/v2"`
 	OutcomeID             string              `json:"outcome_id" pattern:"^outcome_[0-9a-f]{64}$"`
 	CorrelationID         string              `json:"correlation_id" minLength:"1"`
-	RecommendationID      string              `json:"recommendation_id" minLength:"1"`
-	RoutingDecisionID     string              `json:"routing_decision_id,omitempty"`
+	RecommendationID      string              `json:"recommendation_id" pattern:"^routing/v2:[0-9a-f]{64}$"`
+	RoutingDecisionID     *string             `json:"routing_decision_id"`
 	WorkID                string              `json:"work_id" minLength:"1"`
-	AdmissionID           string              `json:"admission_id,omitempty"`
-	SessionID             string              `json:"session_id,omitempty"`
-	ExecutionID           string              `json:"execution_id,omitempty"`
+	AdmissionReceiptID    *string             `json:"admission_receipt_id"`
+	SessionID             *string             `json:"session_id"`
+	ExecutionID           *string             `json:"execution_id"`
 	RequestedTargetID     string              `json:"requested_target_id" minLength:"1"`
 	ActualTargetID        *string             `json:"actual_target_id"`
-	RequestedConfigDigest string              `json:"requested_config_digest" pattern:"^[0-9a-f]{64}$"`
-	ActualConfigDigest    *string             `json:"actual_config_digest" pattern:"^[0-9a-f]{64}$"`
+	RequestedConfigDigest string              `json:"requested_config_digest" pattern:"^sha256:[0-9a-f]{64}$"`
+	ActualConfigDigest    *string             `json:"actual_config_digest" pattern:"^sha256:[0-9a-f]{64}$"`
 	Status                OutcomeStatus       `json:"status" enum:"claimed,succeeded,failed"`
 	Disposition           OutcomeDisposition  `json:"disposition" enum:"shipped,no_op,blocked,abandoned,not_admitted,unknown"`
 	FailureClass          OutcomeFailureClass `json:"failure_class" enum:"none,transient,hard,unknown"`
@@ -116,10 +116,10 @@ func ProjectOutcome(item DecisionWithAudits, work OutcomeWorkSnapshot, observedA
 	payload := item.Record.Payload
 	observedAt = latestOutcomeObservedAt(item, observedAt)
 	result = OutcomeRecord{
-		SchemaVersion: OutcomeSchemaVersion, CorrelationID: payload.RecommendationID,
-		RecommendationID: payload.RecommendationID, RoutingDecisionID: payload.DecisionID,
+		SchemaVersion: OutcomeSchemaVersion, CorrelationID: payload.WorkBeadID,
+		RecommendationID: payload.RecommendationID, RoutingDecisionID: stringPointer(payload.DecisionID),
 		WorkID: payload.WorkBeadID, RequestedTargetID: payload.Target,
-		RequestedConfigDigest: payload.TargetConfigDigest, Status: OutcomeStatusFailed,
+		RequestedConfigDigest: portableDigest(payload.TargetConfigDigest), Status: OutcomeStatusFailed,
 		Disposition: OutcomeDispositionUnknown, FailureClass: OutcomeFailureUnknown,
 		Coverage: OutcomeCoverageUnknown, Provenance: OutcomeProvenanceDecision,
 		ObservedAtUnix: observedAt.UTC().Unix(),
@@ -134,7 +134,7 @@ func ProjectOutcome(item DecisionWithAudits, work OutcomeWorkSnapshot, observedA
 		result.Status = OutcomeStatusClaimed
 	}
 	if item.Record.State == StateClaimed || item.Record.State == StateOutcomeRecorded {
-		actualTarget, actualDigest := payload.Target, payload.TargetConfigDigest
+		actualTarget, actualDigest := payload.Target, portableDigest(payload.TargetConfigDigest)
 		result.ActualTargetID, result.ActualConfigDigest = &actualTarget, &actualDigest
 	}
 	if !work.Found {
@@ -147,11 +147,11 @@ func ProjectOutcome(item DecisionWithAudits, work OutcomeWorkSnapshot, observedA
 	result.Provenance = OutcomeProvenanceExactWork
 	actualTarget := strings.TrimSpace(work.Metadata[beadmeta.RunTargetMetadataKey])
 	result.ActualTargetID = &actualTarget
-	result.SessionID = firstNonEmpty(
+	result.SessionID = optionalString(firstNonEmpty(
 		work.Metadata[beadmeta.SessionIDMetadataKey],
 		work.Metadata[beadmeta.SessionIDCamelMetadataKey],
-	)
-	result.ExecutionID = strings.TrimSpace(work.Metadata[beadmeta.CurrentRunIDMetadataKey])
+	))
+	result.ExecutionID = optionalString(strings.TrimSpace(work.Metadata[beadmeta.CurrentRunIDMetadataKey]))
 
 	if item.Record.State != StateOutcomeRecorded {
 		result.Coverage = OutcomeCoverageAvailable
@@ -192,8 +192,20 @@ func (record OutcomeRecord) Validate() error {
 			return err
 		}
 	}
-	if record.CorrelationID != record.RecommendationID || !validDigest(record.RequestedConfigDigest) {
-		return invalidf("outcome recommendation correlation or requested config digest is invalid")
+	for name, value := range map[string]*string{
+		"routing_decision_id":  record.RoutingDecisionID,
+		"admission_receipt_id": record.AdmissionReceiptID,
+		"session_id":           record.SessionID,
+		"execution_id":         record.ExecutionID,
+	} {
+		if value != nil {
+			if err := validateText(name, *value, true); err != nil {
+				return err
+			}
+		}
+	}
+	if !validRecommendationID(record.RecommendationID) || !validPortableDigest(record.RequestedConfigDigest) {
+		return invalidf("outcome recommendation identity or requested config digest is invalid")
 	}
 	if (record.ActualTargetID == nil) != (record.ActualConfigDigest == nil) {
 		return invalidf("actual target and config digest must be a nullable pair")
@@ -202,7 +214,7 @@ func (record OutcomeRecord) Validate() error {
 		if err := validateText("actual_target_id", *record.ActualTargetID, true); err != nil {
 			return err
 		}
-		if !validDigest(*record.ActualConfigDigest) {
+		if !validPortableDigest(*record.ActualConfigDigest) {
 			return invalidf("actual config digest is invalid")
 		}
 	}
@@ -258,7 +270,7 @@ func latestOutcomeObservedAt(item DecisionWithAudits, fallback time.Time) time.T
 func outcomeID(record OutcomeRecord) string {
 	canonical := struct {
 		RecommendationID      string              `json:"recommendation_id"`
-		RoutingDecisionID     string              `json:"routing_decision_id"`
+		RoutingDecisionID     *string             `json:"routing_decision_id"`
 		Status                OutcomeStatus       `json:"status"`
 		ObservedAtUnix        int64               `json:"observed_at_unix"`
 		Disposition           OutcomeDisposition  `json:"disposition"`
@@ -310,4 +322,35 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func stringPointer(value string) *string { return &value }
+
+func optionalString(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return stringPointer(value)
+}
+
+func portableDigest(value string) string {
+	if validPortableDigest(value) {
+		return value
+	}
+	return "sha256:" + value
+}
+
+func validPortableDigest(value string) bool {
+	return strings.HasPrefix(value, "sha256:") && validDigest(strings.TrimPrefix(value, "sha256:"))
+}
+
+func validRecommendationID(value string) bool {
+	digest := strings.TrimPrefix(value, "routing/v2:")
+	return digest != value && len(digest) == sha256.Size*2 && strings.ToLower(digest) == digest && isHex(digest)
+}
+
+func isHex(value string) bool {
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
