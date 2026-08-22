@@ -4121,6 +4121,7 @@ gc session
 |------------|-------------|
 | [gc session attach](#gc-session-attach) | Attach to (or resume) a chat session |
 | [gc session close](#gc-session-close) | Close a session permanently |
+| [gc session close-stale](#gc-session-close-stale) | Revision-fence the close of a proven stale session |
 | [gc session kill](#gc-session-kill) | Force-kill session runtime (reconciler restarts) |
 | [gc session list](#gc-session-list) | List chat sessions |
 | [gc session logs](#gc-session-logs) | Show session logs for a session |
@@ -4164,6 +4165,27 @@ gc session close <session-id-or-alias> [flags]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--json` | bool |  | emit JSONL |
+
+## gc session close-stale
+
+Close one proven stale session by exact bead ID. The command requires an
+exact opaque revision, lifecycle state, future hold value, and operator reason.
+It observes runtime liveness and fails closed if a runtime, session key, pending
+create claim, blocker, or any row revision change appears. --check performs all
+read-side checks without writing.
+
+```
+gc session close-stale <session-id> [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--check` | bool |  | validate every precondition without writing |
+| `--if-held-until` | string |  | required exact persisted held_until value |
+| `--if-revision` | int64 |  | required opaque bead revision |
+| `--if-state` | string |  | required exact persisted lifecycle state |
+| `--json` | bool |  | emit JSONL |
+| `--reason` | string |  | required operator reason recorded on the closed bead |
 
 ## gc session kill
 

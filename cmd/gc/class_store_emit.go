@@ -479,12 +479,37 @@ func (s *emittingClassStore) UpdateIfMatch(id string, revision int64, opts beads
 	return nil
 }
 
+func (s *emittingClassStore) UpdateIfReadyAndMatch(id string, revision int64, opts beads.UpdateOpts) error {
+	writer, ok := beads.ReadyConditionalWriterFor(s.Store)
+	if !ok {
+		return beads.ErrConditionalWriteUnsupported
+	}
+	wasClosed := s.closedBefore(id)
+	if err := writer.UpdateIfReadyAndMatch(id, revision, opts); err != nil {
+		return err
+	}
+	s.emitAfterUpdate(id, opts, wasClosed)
+	return nil
+}
+
 func (s *emittingClassStore) CloseIfMatch(id string, revision int64) error {
 	writer, ok := beads.ConditionalWriterFor(s.Store)
 	if !ok {
 		return beads.ErrConditionalWriteUnsupported
 	}
 	if err := writer.CloseIfMatch(id, revision); err != nil {
+		return err
+	}
+	s.emitClosed(id)
+	return nil
+}
+
+func (s *emittingClassStore) CloseWithMetadataIfMatch(id string, revision int64, metadata map[string]string) error {
+	writer, ok := beads.ConditionalCloseWriterFor(s.Store)
+	if !ok {
+		return beads.ErrConditionalWriteUnsupported
+	}
+	if err := writer.CloseWithMetadataIfMatch(id, revision, metadata); err != nil {
 		return err
 	}
 	s.emitClosed(id)

@@ -207,6 +207,36 @@ type ConditionalWriter interface {
 	CompareAndSetMetadataKey(id, key, expected, next string) (bool, error)
 }
 
+// ConditionalCloseWriter is the narrow capability for an atomic terminal close
+// that is fenced by the bead's opaque revision and can stamp terminal metadata
+// in the same backend transaction. It is deliberately separate from
+// ConditionalWriter: a backend may be able to fence this close without safely
+// claiming every update/delete/CAS verb in the broader interface.
+type ConditionalCloseWriter interface {
+	CloseWithMetadataIfMatch(id string, expectedRevision int64, metadata map[string]string) error
+}
+
+// ErrNotClosableForConditionalClose reports that the revision still matched but
+// a live blocker/dependency made the issue ineligible for terminal close.
+var ErrNotClosableForConditionalClose = errors.New("conditional close: issue is not closable")
+
+// ConditionalCloseWriterFor returns the narrow guarded-close capability from a
+// store or wrapper-declared resolution target. It never falls back to an
+// unconditional close.
+func ConditionalCloseWriterFor(store Store) (ConditionalCloseWriter, bool) {
+	if store == nil {
+		return nil, false
+	}
+	if writer, ok := store.(ConditionalCloseWriter); ok {
+		return writer, true
+	}
+	resolved := followConditionalWritesResolveTarget(store)
+	if writer, ok := resolved.(ConditionalCloseWriter); ok {
+		return writer, true
+	}
+	return nil, false
+}
+
 // ReadyConditionalWriter atomically evaluates controller readiness and applies
 // opts only when the bead is still ready and at expectedRevision. Unlike
 // ConditionalWriter, it covers dependency/defer/block projections that may
