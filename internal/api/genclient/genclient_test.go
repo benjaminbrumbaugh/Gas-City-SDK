@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/api/genclient"
+	"github.com/gastownhall/gascity/internal/routingdecision"
 )
 
 // TestGeneratedClientInSync regenerates client_gen.go from the live spec
@@ -54,6 +55,20 @@ func TestGeneratedClientInSync(t *testing.T) {
 	if !bytes.Equal(committed, out.Bytes()) {
 		t.Errorf("generated client differs from committed file at %s", committedPath)
 		t.Errorf("regenerate via `go generate ./internal/api/genclient` and commit the result")
+	}
+}
+
+func TestOutcomeProvenanceRuntimeEnumsMatchGeneratedClient(t *testing.T) {
+	for name, runtimeValue := range map[string]string{
+		"decision":   routingdecision.OutcomeProvenanceDecision,
+		"exact work": routingdecision.OutcomeProvenanceExactWork,
+	} {
+		t.Run(name, func(t *testing.T) {
+			generatedValue := genclient.OutcomeRecordProvenance(runtimeValue)
+			if !generatedValue.Valid() {
+				t.Fatalf("runtime provenance %q is outside generated client enum", runtimeValue)
+			}
+		})
 	}
 }
 

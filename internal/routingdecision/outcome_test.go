@@ -49,6 +49,23 @@ func TestDecisionRecommendationIDIsOptionalAndSignedWhenPresent(t *testing.T) {
 	}
 }
 
+func TestProjectOutcomeAcceptsPortableOpaqueIDsFromSignedDecision(t *testing.T) {
+	payload := testDecisionPayload(t)
+	payload.RecommendationID = "routing/v2:" + strings.Repeat("c", 64)
+	payload.WorkBeadID = "tokenizer-task"
+	payload.BindingID = BindingID(payload)
+	if err := payload.Validate(); err != nil {
+		t.Fatalf("signed decision precondition is invalid: %v", err)
+	}
+
+	record := ProjectOutcome(DecisionWithAudits{
+		Record: Record{Payload: payload, State: StateRefusedAfterRace},
+	}, OutcomeWorkSnapshot{}, time.Unix(1, 0).UTC())
+	if err := record.Validate(); err != nil {
+		t.Fatalf("accepted signed decision became unprojectable: %v", err)
+	}
+}
+
 func TestProjectOutcomeUsesOnlyExactCarrierMetadataAndRedactsRawFields(t *testing.T) {
 	observed := time.Date(2026, 8, 22, 12, 34, 56, 0, time.UTC)
 	payload := testDecisionPayload(t)
@@ -104,6 +121,9 @@ func TestProjectOutcomeUsesOnlyExactCarrierMetadataAndRedactsRawFields(t *testin
 	}
 	if got.Disposition != OutcomeDispositionShipped || got.FailureClass != OutcomeFailureNone || got.Coverage != OutcomeCoverageAvailable {
 		t.Fatalf("classification = %+v", got)
+	}
+	if got.Provenance != "authoritative_routing_decision+exact_work_bead_metadata" {
+		t.Fatalf("provenance = %q, want canonical exact-work enum", got.Provenance)
 	}
 	if got.Status != OutcomeStatusSucceeded || got.RequestedTargetID != payload.Target || got.ActualTargetID == nil || *got.ActualTargetID != payload.Target || got.RequestedConfigDigest != "sha256:"+payload.TargetConfigDigest || got.ActualConfigDigest == nil || *got.ActualConfigDigest != "sha256:"+payload.TargetConfigDigest {
 		t.Fatalf("targets = %+v", got)
@@ -184,9 +204,6 @@ func TestOutcomeRecordValidationEnforcesPortableConsistency(t *testing.T) {
 			r.Disposition, r.FailureClass = OutcomeDispositionShipped, OutcomeFailureUnknown
 			r.ActualTargetID, r.ActualConfigDigest = &target, &digest
 		},
-		"jwt session": func(r *OutcomeRecord) {
-			r.SessionID = stringPointer("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ.signature")
-		},
 		"succeeded blocked": func(r *OutcomeRecord) {
 			target, digest := "worker", "sha256:"+strings.Repeat("b", 64)
 			r.Status, r.Disposition, r.FailureClass = OutcomeStatusSucceeded, OutcomeDispositionBlocked, OutcomeFailureNone
@@ -199,6 +216,57 @@ func TestOutcomeRecordValidationEnforcesPortableConsistency(t *testing.T) {
 			candidate.OutcomeID = outcomeID(candidate)
 			if err := candidate.Validate(); err == nil {
 				t.Fatalf("invalid outcome accepted: %+v", candidate)
+			}
+		})
+	}
+}
+
+func TestValidateOutcomeOpaqueAllowsOrdinarySecurityWordIdentifiers(t *testing.T) {
+	for _, value := range []string{
+		"tokenizer-task",
+		"credential-check",
+		"password-reset",
+		"private_key_rotation",
+		"prompt-run",
+		"secretariat-task",
+		"sk-task",
+		"rk-job",
+		"bearer-worker",
+		"basic-session",
+		"github_pat_rotation",
+		"xoxb-worker",
+	} {
+		t.Run(value, func(t *testing.T) {
+			if err := validateOutcomeOpaque("work_id", value, true); err != nil {
+				t.Fatalf("ordinary identifier rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateOutcomeOpaqueRejectsCredentialShapesWithoutEcho(t *testing.T) {
+	for name, value := range map[string]string{
+		"OpenAI key":            "sk-" + strings.Repeat("a", 48),
+		"provider key":          "rk-" + strings.Repeat("a", 48),
+		"GitHub token":          "ghp_" + strings.Repeat("a", 36),
+		"GitHub OAuth token":    "gho_" + strings.Repeat("a", 36),
+		"GitHub fine-grained":   "github_pat_" + strings.Repeat("A", 82),
+		"Slack bot token":       "xoxb-" + strings.Repeat("1", 40),
+		"Slack user token":      "xoxp-" + strings.Repeat("1", 40),
+		"AWS access key":        "AKIA" + strings.Repeat("A", 16),
+		"AWS temporary key":     "ASIA" + strings.Repeat("A", 16),
+		"Google API key":        "AIza" + strings.Repeat("A", 35),
+		"JWT":                   "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature",
+		"bearer credential":     "bearer-" + strings.Repeat("a", 32),
+		"basic auth credential": "basic-" + strings.Repeat("a", 32),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := validateOutcomeOpaque("session_id", value, true)
+			if err == nil {
+				t.Fatal("credential-shaped identifier accepted")
+			}
+			if strings.Contains(err.Error(), value) {
+				t.Fatal("credential value echoed in validation error")
 			}
 		})
 	}

@@ -16,7 +16,7 @@ const (
 	OutcomeSchemaVersion = "routing/outcome/v2"
 
 	OutcomeProvenanceDecision  = "authoritative_routing_decision"
-	OutcomeProvenanceExactWork = "authoritative_routing_decision_exact_work"
+	OutcomeProvenanceExactWork = "authoritative_routing_decision+exact_work_bead_metadata"
 )
 
 // OutcomeDisposition is the bounded public disposition vocabulary.
@@ -351,22 +351,70 @@ func validateOutcomeOpaque(name, value string, required bool) error {
 			return invalidf("%s is not a safe opaque identifier", name)
 		}
 	}
-	lowered := strings.ToLower(value)
-	for _, marker := range []string{"api_key", "credential", "password", "private_key", "prompt", "secret", "token"} {
-		if strings.Contains(lowered, marker) {
-			return invalidf("%s resembles secret material", name)
-		}
-	}
-	for _, prefix := range []string{"sk-", "rk-", "ghp_", "gho_", "github_pat_", "xoxb-", "xoxp-", "bearer-", "basic-"} {
-		if strings.HasPrefix(lowered, prefix) {
-			return invalidf("%s resembles secret material", name)
-		}
-	}
-	segments := strings.Split(value, ".")
-	if strings.Contains(value, "://") || strings.ContainsAny(value, "?#=") || (strings.HasPrefix(value, "AKIA") && len(value) >= 20) || (len(segments) == 3 && strings.HasPrefix(segments[0], "eyJ") && strings.HasPrefix(segments[1], "eyJ")) {
+	if resemblesOutcomeSecret(value) {
 		return invalidf("%s resembles secret material", name)
 	}
 	return nil
+}
+
+func resemblesOutcomeSecret(value string) bool {
+	lowered := strings.ToLower(value)
+	for _, shape := range []struct {
+		prefix                 string
+		minimum, maximumSuffix int
+	}{
+		{prefix: "sk-", minimum: 16, maximumSuffix: 253},
+		{prefix: "rk-", minimum: 16, maximumSuffix: 253},
+		{prefix: "ghp_", minimum: 36, maximumSuffix: 36},
+		{prefix: "gho_", minimum: 36, maximumSuffix: 36},
+		{prefix: "github_pat_", minimum: 82, maximumSuffix: 82},
+		{prefix: "xoxb-", minimum: 20, maximumSuffix: 251},
+		{prefix: "xoxp-", minimum: 20, maximumSuffix: 251},
+		{prefix: "bearer-", minimum: 16, maximumSuffix: 249},
+		{prefix: "basic-", minimum: 16, maximumSuffix: 250},
+	} {
+		if strings.HasPrefix(lowered, shape.prefix) && outcomeCredentialSuffix(value[len(shape.prefix):], shape.minimum, shape.maximumSuffix) {
+			return true
+		}
+	}
+	if len(value) == 20 && (strings.HasPrefix(value, "AKIA") || strings.HasPrefix(value, "ASIA")) && outcomeUpperAlphaNumeric(value[4:]) {
+		return true
+	}
+	if len(value) == 39 && strings.HasPrefix(value, "AIza") && outcomeCredentialSuffix(value[4:], 35, 35) {
+		return true
+	}
+	segments := strings.Split(value, ".")
+	if len(segments) == 3 && len(segments[0]) >= 8 && len(segments[1]) >= 8 && len(segments[2]) >= 8 &&
+		strings.HasPrefix(segments[0], "eyJ") && strings.HasPrefix(segments[1], "eyJ") &&
+		outcomeCredentialSuffix(segments[0], 8, 256) && outcomeCredentialSuffix(segments[1], 8, 256) && outcomeCredentialSuffix(segments[2], 8, 256) {
+		return true
+	}
+	return strings.Contains(value, "://") || strings.ContainsAny(value, "?#=")
+}
+
+func outcomeCredentialSuffix(value string, minimum, maximum int) bool {
+	if len(value) < minimum || len(value) > maximum {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		if !isOutcomeAlphaNumeric(value[index]) && value[index] != '_' && value[index] != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func outcomeUpperAlphaNumeric(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if !(value[index] >= 'A' && value[index] <= 'Z' || value[index] >= '0' && value[index] <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func isOutcomeAlphaNumeric(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9'
 }
 
 func isOutcomeOpaqueChar(value byte) bool {
