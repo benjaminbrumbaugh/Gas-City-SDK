@@ -194,6 +194,11 @@ loaded from that pack. Pack-scoped defaults follow the precedence rules in the
 pack spec: explicit agent fields win, bound imports preserve inherited pack
 defaults, and unbound legacy includes yield to root city defaults.
 
+Default rig patches are different from blank-filling agent defaults.
+`[[defaults.rig.patches]]` supplies replacement values for matching rig agents
+after every city- and rig-level import has materialized. City-level agent
+patches and explicit rig patches run later and can override those values.
+
 ```toml
 [agent_defaults]
 default_sling_formula = "review"
@@ -232,8 +237,10 @@ decides the winner when two layers set the same field:
 ```text
 city.toml + city pack
   → imported packs (+ their pack-level patches)
-  → city-level imports → city-level patches
-  → rig-level imports (stamp rig agents) → rig overrides
+  → materialize city-level and rig-level imports for every rig
+  → default rig patches
+  → city-level patches
+  → explicit rig overrides and patches
   → pack globals
   → city agent defaults (blank fields only)
 ```
@@ -254,7 +261,7 @@ mean.
 | Reuse another pack | `[imports.<binding>]` with `source` and optional `version`. |
 | Make a city-wide local policy | `city.toml` defaults or patches. |
 | Change one city-level imported agent | `city.toml` `[[patches.agent]]`. |
-| Change one rig-level imported agent | The rig's `[[rigs.overrides]]` or a targeted city patch with `dir`. |
+| Change one rig-level imported agent | The rig's `[[rigs.patches]]` (legacy: `[[rigs.overrides]]`) or a targeted city patch with `dir`. |
 | Ship reusable behavior | The pack's own definitions and support files. |
 | Pin an exact resolved dependency | The lockfile, not the authored import. |
 
