@@ -93,6 +93,40 @@ name = "refinery"
 	}
 }
 
+func TestExpandPacks_AppliesDefaultRigPatches(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "packs/work/pack.toml", `
+[pack]
+name = "work"
+schema = 2
+
+[[agent]]
+name = "worker"
+scope = "rig"
+max_active_sessions = 2
+`)
+	maxSessions := 100
+	cfg := &City{
+		Defaults: PackDefaults{Rig: PackRigDefaults{Patches: []AgentOverride{{
+			Agent:             "worker",
+			MaxActiveSessions: &maxSessions,
+		}}}},
+		Rigs: []Rig{{
+			Name:     "alpha",
+			Path:     "/tmp/alpha",
+			Includes: []string{"packs/work"},
+		}},
+	}
+
+	if err := ExpandPacks(cfg, fsys.OSFS{}, dir, nil); err != nil {
+		t.Fatalf("ExpandPacks: %v", err)
+	}
+	agent := findAgentByQualifiedName(t, cfg.Agents, "alpha/worker")
+	if agent.MaxActiveSessions == nil || *agent.MaxActiveSessions != 100 {
+		t.Fatalf("max_active_sessions = %v, want 100", agent.MaxActiveSessions)
+	}
+}
+
 func TestExpandPacksAllowsSemanticallyInvalidFlatOrder(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "packs/tools/pack.toml", `
