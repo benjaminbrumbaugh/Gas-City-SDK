@@ -44,9 +44,22 @@ version = "sha:33d3a430a67d1782ad364556cb566bdb01d0afe3"
 gc rig add /path/to/myproject --name myproject
 ```
 
-### Increase or shrink scalable polecat sessions
+### Set a default polecat pool size for every rig
 
-This is the cleanest answer to "I want more or fewer polecats for this rig."
+Default rig patches configure pack agents before any rig-specific patch. They
+are valid even when the city has no registered rigs yet, so one durable setting
+applies to current and future rigs:
+
+```toml
+# city.toml
+[[defaults.rig.patches]]
+agent = "polecat"
+
+[defaults.rig.patches.pool]
+max = 100
+```
+
+An explicit rig patch applies later and can override that default for one rig:
 
 ```toml
 # city.toml
@@ -58,7 +71,7 @@ source = "https://github.com/gastownhall/gascity-packs/tree/main/gastown"
 version = "sha:33d3a430a67d1782ad364556cb566bdb01d0afe3"
 
 [[rigs.patches]]
-agent = "gastown.polecat"
+agent = "polecat"
 
 [rigs.patches.pool]
 max = 10
@@ -76,7 +89,7 @@ source = "https://github.com/gastownhall/gascity-packs/tree/main/gastown"
 version = "sha:33d3a430a67d1782ad364556cb566bdb01d0afe3"
 
 [[rigs.patches]]
-agent = "gastown.polecat"
+agent = "polecat"
 provider = "codex"
 ```
 

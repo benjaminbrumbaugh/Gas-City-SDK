@@ -286,6 +286,12 @@ Default rig imports are a city deployment concern. The canonical surface is
 `city.toml` `[defaults.rig.imports.<binding>]`. `pack.toml` must not define
 `[defaults.rig.imports]`.
 
+Default rig agent patches are also a city deployment concern. Declare
+`[[defaults.rig.patches]]` in `city.toml` to configure every current and future
+rig. These defaults apply before each rig's explicit `[[rigs.patches]]`, so a
+rig can still override the city-wide value. `pack.toml` must not define
+`[[defaults.rig.patches]]`.
+
 Rig imports are written under the `[[rigs]]` table they apply to:
 
 ```toml
