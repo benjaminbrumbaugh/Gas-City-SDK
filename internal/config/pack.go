@@ -84,6 +84,9 @@ type PackDefaults struct {
 // to rigs created from this pack.
 type PackRigDefaults struct {
 	Imports map[string]Import `toml:"imports,omitempty"`
+	// Patches are agent overrides inherited by every rig. Explicit
+	// [[rigs.patches]] entries apply later and therefore take precedence.
+	Patches []AgentOverride `toml:"patches,omitempty"`
 }
 
 // ExpandPacks resolves pack references on all rigs. For each rig
@@ -508,7 +511,8 @@ func expandPacks(cfg *City, fs fsys.FS, cityRoot string, rigFormulaDirs map[stri
 
 		// Apply or defer per-rig overrides/patches after all packs for this rig.
 		// V2 accepts both "overrides" (V1) and "patches" (V2) TOML keys.
-		allOverrides := append([]AgentOverride(nil), rig.Overrides...)
+		allOverrides := append([]AgentOverride(nil), cfg.Defaults.Rig.Patches...)
+		allOverrides = append(allOverrides, rig.Overrides...)
 		allOverrides = append(allOverrides, rig.RigPatches...)
 		if opts.deferRigPatches {
 			if opts.deferredRigPatches == nil {

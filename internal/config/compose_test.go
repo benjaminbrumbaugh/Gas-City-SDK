@@ -431,6 +431,14 @@ source = "../ops"
 			want: "[defaults.rig.imports] belongs in city.toml, not pack.toml",
 		},
 		{
+			name: "default_rig_patches",
+			packBody: `
+[[defaults.rig.patches]]
+agent = "worker"
+`,
+			want: "[[defaults.rig.patches]] belongs in city.toml, not pack.toml",
+		},
+		{
 			name: "formulas_dir",
 			packBody: `
 [formulas]

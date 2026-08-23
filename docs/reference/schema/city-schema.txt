@@ -2210,6 +2210,13 @@
             "$ref": "#/$defs/Import"
           },
           "type": "object"
+        },
+        "patches": {
+          "items": {
+            "$ref": "#/$defs/AgentOverride"
+          },
+          "type": "array",
+          "description": "Patches are agent overrides inherited by every rig. Explicit\n[[rigs.patches]] entries apply later and therefore take precedence."
         }
       },
       "additionalProperties": false,

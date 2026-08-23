@@ -528,6 +528,98 @@ scope = "rig"
 	}
 }
 
+func TestLoadWithIncludes_DefaultRigPatchMayWaitForFutureRigs(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "city.toml", `
+[workspace]
+name = "test"
+
+[[defaults.rig.patches]]
+agent = "worker"
+
+[defaults.rig.patches.pool]
+max = 100
+`)
+	writeFile(t, dir, "pack.toml", `
+[pack]
+name = "test"
+schema = 2
+`)
+
+	cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	if got := len(cfg.Defaults.Rig.Patches); got != 1 {
+		t.Fatalf("len(defaults.rig.patches) = %d, want 1", got)
+	}
+	patch := cfg.Defaults.Rig.Patches[0]
+	if patch.Agent != "worker" || patch.Pool == nil || patch.Pool.Max == nil || *patch.Pool.Max != 100 {
+		t.Fatalf("defaults.rig.patches[0] = %#v, want worker pool.max=100", patch)
+	}
+}
+
+func TestLoadWithIncludes_DefaultRigPatchAppliesBeforeRigSpecificPatch(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "city.toml", `
+[workspace]
+name = "test"
+
+[[defaults.rig.patches]]
+agent = "worker"
+
+[defaults.rig.patches.pool]
+max = 100
+
+[[rigs]]
+name = "alpha"
+path = "/tmp/alpha"
+
+[rigs.imports.gs]
+source = "./packs/gastown"
+
+[[rigs]]
+name = "beta"
+path = "/tmp/beta"
+
+[rigs.imports.gs]
+source = "./packs/gastown"
+
+[[rigs.patches]]
+agent = "worker"
+
+[rigs.patches.pool]
+max = 7
+`)
+	writeFile(t, dir, "packs/gastown/pack.toml", `
+[pack]
+name = "gastown"
+schema = 2
+
+[[agent]]
+name = "worker"
+scope = "rig"
+max_active_sessions = 2
+`)
+
+	cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	got := make(map[string]int)
+	for _, agent := range cfg.Agents {
+		if agent.Name == "worker" && agent.MaxActiveSessions != nil {
+			got[agent.QualifiedName()] = *agent.MaxActiveSessions
+		}
+	}
+	if got["alpha/gs.worker"] != 100 {
+		t.Errorf("alpha worker max_active_sessions = %d, want inherited default 100", got["alpha/gs.worker"])
+	}
+	if got["beta/gs.worker"] != 7 {
+		t.Errorf("beta worker max_active_sessions = %d, want rig override 7", got["beta/gs.worker"])
+	}
+}
+
 func TestLoadWithIncludes_ProvenanceUsesDeferredRigPatchFinalIdentity(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "city.toml", `

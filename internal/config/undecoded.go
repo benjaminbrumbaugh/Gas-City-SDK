@@ -136,6 +136,9 @@ func validatePackAuthoringSurface(md toml.MetaData, source string) error {
 	if md.IsDefined("defaults", "rig", "imports") {
 		return fmt.Errorf("%s: [defaults.rig.imports] belongs in city.toml, not pack.toml", source)
 	}
+	if md.IsDefined("defaults", "rig", "patches") {
+		return fmt.Errorf("%s: [[defaults.rig.patches]] belongs in city.toml, not pack.toml", source)
+	}
 	if md.IsDefined("formulas", "dir") {
 		return fmt.Errorf("%s: [formulas].dir is no longer supported; use the well-known formulas/ directory", source)
 	}
