@@ -2732,7 +2732,14 @@ func mergeHoistedCityNamedSessions(sessions, hoisted []NamedSession) []NamedSess
 }
 
 func applyDeferredRigPatches(cfg *City, deferred []deferredRigPatches) error {
-	for _, d := range deferred {
+	candidatesByRig := make(map[string][]int, len(deferred))
+	for i := range deferred {
+		if _, ok := candidatesByRig[deferred[i].rigName]; !ok {
+			candidatesByRig[deferred[i].rigName] = rigAgentIndexes(cfg.Agents, deferred[i].rigName)
+		}
+	}
+	for i := range deferred {
+		d := deferred[i]
 		if d.agentStart < 0 || d.agentEnd < d.agentStart || d.agentEnd > len(cfg.Agents) {
 			return fmt.Errorf("rig %q: deferred agent range [%d:%d] outside merged agents", d.rigName, d.agentStart, d.agentEnd)
 		}
@@ -2748,7 +2755,7 @@ func applyDeferredRigPatches(cfg *City, deferred []deferredRigPatches) error {
 				return fmt.Errorf("rig %q: agent at deferred range index %d changed before deferred rig patches: got %q, want %q", d.rigName, d.agentStart+i, got, want)
 			}
 		}
-		if err := applyOverrides(cfg.Agents, d.overrides, d.rigName); err != nil {
+		if err := applyOverridesToCandidates(cfg.Agents, candidatesByRig[d.rigName], d.overrides, d.rigName); err != nil {
 			return fmt.Errorf("rig %q: %w", d.rigName, err)
 		}
 	}
@@ -2795,7 +2802,10 @@ func qualifiedAgentNames(agents []Agent) []string {
 // Bare names are accepted when unambiguous; binding-qualified names select an
 // agent when multiple imported packs expose the same local name.
 func applyOverrides(agents []Agent, overrides []AgentOverride, rigName string) error {
-	candidates := rigAgentIndexes(agents, rigName)
+	return applyOverridesToCandidates(agents, rigAgentIndexes(agents, rigName), overrides, rigName)
+}
+
+func applyOverridesToCandidates(agents []Agent, candidates []int, overrides []AgentOverride, rigName string) error {
 	for i := range overrides {
 		ov := &overrides[i]
 		if strings.TrimSpace(ov.Agent) == "" {

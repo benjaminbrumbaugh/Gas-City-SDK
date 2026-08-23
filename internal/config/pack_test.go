@@ -1091,6 +1091,41 @@ func TestApplyDeferredRigPatchesRejectsShiftedAgentRange(t *testing.T) {
 	}
 }
 
+func TestApplyDeferredRigPatchesPreservesOriginalRigOwnership(t *testing.T) {
+	newDir := "beta"
+	suspended := true
+	cfg := &City{Agents: []Agent{
+		{Dir: "alpha", Name: "worker"},
+		{Dir: "beta", Name: "helper"},
+	}}
+	deferred := []deferredRigPatches{
+		{
+			rigName:            "alpha",
+			agentStart:         0,
+			agentEnd:           1,
+			expectedAgentCount: 2,
+			expectedAgentNames: []string{"alpha/worker"},
+			overrides:          []AgentOverride{{Agent: "worker", Dir: &newDir}},
+		},
+		{
+			rigName:            "beta",
+			agentStart:         1,
+			agentEnd:           2,
+			expectedAgentCount: 2,
+			expectedAgentNames: []string{"beta/helper"},
+			overrides:          []AgentOverride{{Agent: "worker", Suspended: &suspended}},
+		},
+	}
+
+	err := applyDeferredRigPatches(cfg, deferred)
+	if err == nil || !strings.Contains(err.Error(), `agent "worker" not found in rig "beta"`) {
+		t.Fatalf("applyDeferredRigPatches error = %v, want beta missing-target error", err)
+	}
+	if cfg.Agents[0].Suspended {
+		t.Fatal("beta patch captured the agent relocated from alpha")
+	}
+}
+
 // TestLoadWithIncludes_PatchTargetingMissingRigAgentStillErrors verifies
 // that a misspelled [[patches.agent]] target still produces a clear
 // "not found in merged config" error after the ordering fix. Without
