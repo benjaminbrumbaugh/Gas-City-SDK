@@ -72,8 +72,9 @@ func TestProjectOutcomeUsesOnlyExactCarrierMetadataAndRedactsRawFields(t *testin
 	payload.RecommendationID = "routing/v2:" + strings.Repeat("c", 64)
 	payload.BindingID = BindingID(payload)
 	item := DecisionWithAudits{
-		Record: Record{Payload: payload, State: StateOutcomeRecorded},
-		Audits: []TransitionAudit{{DecisionID: payload.DecisionID, To: StateOutcomeRecorded, At: observed.Add(-time.Minute)}},
+		Record:             Record{Payload: payload, State: StateOutcomeRecorded},
+		AdmissionReceiptID: "controller-admit:decision-1:2",
+		Audits:             []TransitionAudit{{DecisionID: payload.DecisionID, To: StateOutcomeRecorded, At: observed.Add(-time.Minute)}},
 	}
 	work := OutcomeWorkSnapshot{
 		Found: true, WorkID: payload.WorkBeadID, Status: "closed", ClaimFence: payload.ClaimFence + 1,
@@ -122,13 +123,13 @@ func TestProjectOutcomeUsesOnlyExactCarrierMetadataAndRedactsRawFields(t *testin
 	if got.Disposition != OutcomeDispositionShipped || got.FailureClass != OutcomeFailureNone || got.Coverage != OutcomeCoverageAvailable {
 		t.Fatalf("classification = %+v", got)
 	}
-	if got.Provenance != "authoritative_routing_decision+exact_work_bead_metadata" {
+	if got.Provenance != "authoritative_routing_decision_exact_work" {
 		t.Fatalf("provenance = %q, want canonical exact-work enum", got.Provenance)
 	}
 	if got.Status != OutcomeStatusSucceeded || got.RequestedTargetID != payload.Target || got.ActualTargetID == nil || *got.ActualTargetID != payload.Target || got.RequestedConfigDigest != "sha256:"+payload.TargetConfigDigest || got.ActualConfigDigest == nil || *got.ActualConfigDigest != "sha256:"+payload.TargetConfigDigest {
 		t.Fatalf("targets = %+v", got)
 	}
-	if got.SessionID == nil || *got.SessionID != "session-1" || got.ExecutionID == nil || *got.ExecutionID != "execution-1" || got.ObservedAtUnix != observed.Add(-time.Minute).Unix() {
+	if got.AdmissionReceiptID == nil || *got.AdmissionReceiptID != item.AdmissionReceiptID || got.SessionID == nil || *got.SessionID != "session-1" || got.ExecutionID == nil || *got.ExecutionID != "execution-1" || got.ObservedAtUnix != observed.Add(-time.Minute).Unix() {
 		t.Fatalf("runtime ids/time = %+v", got)
 	}
 	encoded, err := json.Marshal(got)
@@ -139,6 +140,55 @@ func TestProjectOutcomeUsesOnlyExactCarrierMetadataAndRedactsRawFields(t *testin
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("redacted outcome leaked %q: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestProjectOutcomeDoesNotClaimSuccessWithoutCompleteCausalExecutionIDs(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 34, 56, 0, time.UTC)
+	payload := testDecisionPayload(t)
+	payload.RecommendationID = "routing/v2:" + strings.Repeat("c", 64)
+	payload.BindingID = BindingID(payload)
+	baseItem := DecisionWithAudits{
+		Record:             Record{Payload: payload, State: StateOutcomeRecorded},
+		AdmissionReceiptID: "controller-admit:decision-1:2",
+	}
+	baseWork := OutcomeWorkSnapshot{
+		Found: true, WorkID: payload.WorkBeadID,
+		Metadata: map[string]string{
+			beadmeta.RoutingDecisionIDMetadataKey:         payload.DecisionID,
+			beadmeta.RoutingDecisionClaimFenceMetadataKey: strconv.FormatInt(payload.ClaimFence, 10),
+			beadmeta.RunTargetMetadataKey:                 payload.Target,
+			beadmeta.WorkOutcomeMetadataKey:               "shipped",
+			beadmeta.SessionIDMetadataKey:                 "session-1",
+			beadmeta.CurrentRunIDMetadataKey:              "execution-1",
+		},
+	}
+
+	for _, missing := range []string{"admission_receipt_id", "session_id", "execution_id"} {
+		t.Run(missing, func(t *testing.T) {
+			item := baseItem
+			work := baseWork
+			work.Metadata = make(map[string]string, len(baseWork.Metadata))
+			for key, value := range baseWork.Metadata {
+				work.Metadata[key] = value
+			}
+			switch missing {
+			case "admission_receipt_id":
+				item.AdmissionReceiptID = ""
+			case "session_id":
+				delete(work.Metadata, beadmeta.SessionIDMetadataKey)
+			case "execution_id":
+				delete(work.Metadata, beadmeta.CurrentRunIDMetadataKey)
+			}
+
+			got := ProjectOutcome(item, work, now)
+			if got.Status == OutcomeStatusSucceeded || got.Disposition != OutcomeDispositionUnknown || got.FailureClass != OutcomeFailureUnknown {
+				t.Fatalf("incomplete causal evidence invented success: %+v", got)
+			}
+			if err := got.Validate(); err != nil {
+				t.Fatalf("incomplete causal projection is invalid: %v: %+v", err, got)
+			}
+		})
 	}
 }
 
@@ -216,6 +266,43 @@ func TestOutcomeRecordValidationEnforcesPortableConsistency(t *testing.T) {
 			candidate.OutcomeID = outcomeID(candidate)
 			if err := candidate.Validate(); err == nil {
 				t.Fatalf("invalid outcome accepted: %+v", candidate)
+			}
+		})
+	}
+}
+
+func TestOutcomeRecordValidationRequiresCompleteCausalIDsForSuccess(t *testing.T) {
+	payload := testDecisionPayload(t)
+	payload.RecommendationID = "routing/v2:" + strings.Repeat("c", 64)
+	payload.BindingID = BindingID(payload)
+	record := ProjectOutcome(DecisionWithAudits{
+		Record:             Record{Payload: payload, State: StateOutcomeRecorded},
+		AdmissionReceiptID: "controller-admit:decision-1:2",
+	}, OutcomeWorkSnapshot{
+		Found: true, WorkID: payload.WorkBeadID,
+		Metadata: map[string]string{
+			beadmeta.RoutingDecisionIDMetadataKey:         payload.DecisionID,
+			beadmeta.RoutingDecisionClaimFenceMetadataKey: strconv.FormatInt(payload.ClaimFence, 10),
+			beadmeta.RunTargetMetadataKey:                 payload.Target,
+			beadmeta.WorkOutcomeMetadataKey:               "no_op",
+			beadmeta.SessionIDMetadataKey:                 "session-1",
+			beadmeta.CurrentRunIDMetadataKey:              "execution-1",
+		},
+	}, time.Unix(1, 0).UTC())
+	if record.Status != OutcomeStatusSucceeded {
+		t.Fatalf("complete causal record did not succeed: %+v", record)
+	}
+	for name, clear := range map[string]func(*OutcomeRecord){
+		"admission receipt": func(record *OutcomeRecord) { record.AdmissionReceiptID = nil },
+		"session":           func(record *OutcomeRecord) { record.SessionID = nil },
+		"execution":         func(record *OutcomeRecord) { record.ExecutionID = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := record
+			clear(&candidate)
+			candidate.OutcomeID = outcomeID(candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatalf("successful outcome accepted without %s id", name)
 			}
 		})
 	}

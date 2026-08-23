@@ -91,3 +91,53 @@ func TestListOutcomeDecisionsIncludesClaimedAndTerminalWithStableCursor(t *testi
 		}
 	}
 }
+
+func TestListOutcomeDecisionsCarriesOnlyAuthoritativeAdmissionReceiptIdentity(t *testing.T) {
+	now := time.Date(2026, 8, 22, 14, 0, 0, 0, time.UTC)
+	store := openTestStore(t, now)
+	payload, approval, signature, _ := currentTestDecision(t, "decision-admission-receipt", now)
+	payload.RecommendationID = "routing/v2:" + strings.Repeat("c", 64)
+	payload.BindingID = BindingID(payload)
+	approval.BindingID = payload.BindingID
+	_, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	verifier := NewVerifier(map[string]ed25519.PublicKey{"board": publicKey})
+	signing, err := SigningBytes(payload, approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature.Value = ed25519.Sign(privateKey, signing)
+	result, err := store.IngestApproved(IngestApprovedRequest{
+		Payload: payload, Approval: approval, Signature: signature, IdempotencyToken: "ingest-admission-receipt",
+	}, verifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const admissionReceiptID = "controller-admit:decision-admission-receipt:2"
+	admitted, err := store.FinalAdmission(FinalAdmissionRequest{
+		DecisionID: payload.DecisionID, ExpectedRevision: result.Record.RecordRevision,
+		IdempotencyToken: admissionReceiptID,
+	}, verifier, func(Record) (AdmissionCallbackResult, error) {
+		return AdmissionCallbackResult{State: StateAdmitted, Reason: "test admission"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Transition(TransitionRequest{
+		DecisionID: payload.DecisionID, ExpectedRevision: admitted.RecordRevision,
+		From: StateAdmitted, To: StateClaimed, IdempotencyToken: "claim-admission-receipt", Reason: "test claim",
+	}, Verifier{}); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListOutcomeDecisions(OutcomeListOptions{Limit: 10})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("ListOutcomeDecisions = (%+v, %v)", page, err)
+	}
+	if page.Items[0].AdmissionReceiptID != admissionReceiptID {
+		t.Fatalf("admission receipt identity = %q, want %q", page.Items[0].AdmissionReceiptID, admissionReceiptID)
+	}
+}

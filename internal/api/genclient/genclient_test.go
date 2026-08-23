@@ -59,6 +59,9 @@ func TestGeneratedClientInSync(t *testing.T) {
 }
 
 func TestOutcomeProvenanceRuntimeEnumsMatchGeneratedClient(t *testing.T) {
+	if routingdecision.OutcomeProvenanceExactWork != "authoritative_routing_decision_exact_work" {
+		t.Fatalf("exact-work provenance = %q, want safe-string-compatible canonical value", routingdecision.OutcomeProvenanceExactWork)
+	}
 	for name, runtimeValue := range map[string]string{
 		"decision":   routingdecision.OutcomeProvenanceDecision,
 		"exact work": routingdecision.OutcomeProvenanceExactWork,

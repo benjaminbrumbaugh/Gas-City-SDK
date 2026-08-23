@@ -5970,7 +5970,7 @@
           "provenance": {
             "enum": [
               "authoritative_routing_decision",
-              "authoritative_routing_decision+exact_work_bead_metadata"
+              "authoritative_routing_decision_exact_work"
             ],
             "type": "string"
           },

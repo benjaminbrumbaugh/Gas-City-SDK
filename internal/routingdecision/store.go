@@ -182,6 +182,10 @@ type IngestApprovedResult struct {
 type DecisionWithAudits struct {
 	Record Record            `json:"record"`
 	Audits []TransitionAudit `json:"audits"`
+	// AdmissionReceiptID is the durable idempotency-receipt identity for the
+	// authoritative admitted edge. It is internal projection evidence and must
+	// not alter the existing decision-list wire shape.
+	AdmissionReceiptID string `json:"-"`
 }
 
 // ListOptions controls one bounded decision-ID keyset page.
@@ -455,7 +459,11 @@ func (store *Store) ListOutcomeDecisions(options OutcomeListOptions) (DecisionPa
 				if err != nil {
 					return err
 				}
-				page.Items = append(page.Items, DecisionWithAudits{Record: record, Audits: audits})
+				admissionReceiptID, err := admissionReceiptIDForDecision(tx, record.Payload.DecisionID)
+				if err != nil {
+					return err
+				}
+				page.Items = append(page.Items, DecisionWithAudits{Record: record, Audits: audits, AdmissionReceiptID: admissionReceiptID})
 			}
 			key, value = cursor.Next()
 		}
@@ -466,6 +474,31 @@ func (store *Store) ListOutcomeDecisions(options OutcomeListOptions) (DecisionPa
 	})
 	page.Total = len(page.Items)
 	return page, classifyStoreError(err)
+}
+
+func admissionReceiptIDForDecision(tx *bbolt.Tx, decisionID string) (string, error) {
+	prefix := append(append([]byte(nil), []byte(decisionID)...), 0)
+	cursor := tx.Bucket(bucketReceiptByDecision).Cursor()
+	result := ""
+	for key, indexedToken := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, indexedToken = cursor.Next() {
+		raw := tx.Bucket(bucketIdempotency).Get(indexedToken)
+		if raw == nil {
+			return "", ErrStoreCorrupt
+		}
+		var receipt idempotencyRecord
+		if strictUnmarshal(raw, &receipt) != nil || receipt.DecisionID != decisionID {
+			return "", ErrStoreCorrupt
+		}
+		if receipt.Kind != "admission" || receipt.Transition == nil || receipt.Transition.State != StateAdmitted {
+			continue
+		}
+		candidate := string(indexedToken)
+		if result != "" && result != candidate {
+			return "", ErrStoreCorrupt
+		}
+		result = candidate
+	}
+	return result, nil
 }
 
 // Status returns exact counts from the transactionally maintained state index.

@@ -16,7 +16,7 @@ const (
 	OutcomeSchemaVersion = "routing/outcome/v2"
 
 	OutcomeProvenanceDecision  = "authoritative_routing_decision"
-	OutcomeProvenanceExactWork = "authoritative_routing_decision+exact_work_bead_metadata"
+	OutcomeProvenanceExactWork = "authoritative_routing_decision_exact_work"
 )
 
 // OutcomeDisposition is the bounded public disposition vocabulary.
@@ -79,7 +79,7 @@ type OutcomeRecord struct {
 	Disposition           OutcomeDisposition  `json:"disposition" enum:"shipped,no_op,blocked,abandoned,not_admitted,unknown"`
 	FailureClass          OutcomeFailureClass `json:"failure_class" enum:"none,transient,hard,unknown"`
 	Coverage              OutcomeCoverage     `json:"coverage" enum:"available,partial,unknown"`
-	Provenance            string              `json:"provenance" enum:"authoritative_routing_decision,authoritative_routing_decision+exact_work_bead_metadata"`
+	Provenance            string              `json:"provenance" enum:"authoritative_routing_decision,authoritative_routing_decision_exact_work"`
 	ObservedAtUnix        int64               `json:"observed_at_unix" minimum:"1"`
 }
 
@@ -147,6 +147,7 @@ func ProjectOutcome(item DecisionWithAudits, work OutcomeWorkSnapshot, observedA
 	result.Provenance = OutcomeProvenanceExactWork
 	actualTarget := strings.TrimSpace(work.Metadata[beadmeta.RunTargetMetadataKey])
 	result.ActualTargetID = &actualTarget
+	result.AdmissionReceiptID = optionalOutcomeOpaque(item.AdmissionReceiptID)
 	result.SessionID = optionalString(firstNonEmpty(
 		work.Metadata[beadmeta.SessionIDMetadataKey],
 		work.Metadata[beadmeta.SessionIDCamelMetadataKey],
@@ -161,13 +162,19 @@ func ProjectOutcome(item DecisionWithAudits, work OutcomeWorkSnapshot, observedA
 	if !ok {
 		return result
 	}
-	result.Disposition = disposition
-	result.Coverage = OutcomeCoverageAvailable
 	if disposition == OutcomeDispositionShipped || disposition == OutcomeDispositionNoOp {
+		if result.AdmissionReceiptID == nil || result.SessionID == nil || result.ExecutionID == nil {
+			result.Coverage = OutcomeCoveragePartial
+			return result
+		}
+		result.Disposition = disposition
+		result.Coverage = OutcomeCoverageAvailable
 		result.Status = OutcomeStatusSucceeded
 		result.FailureClass = OutcomeFailureNone
 		return result
 	}
+	result.Disposition = disposition
+	result.Coverage = OutcomeCoverageAvailable
 	switch strings.TrimSpace(work.Metadata[beadmeta.FailureClassMetadataKey]) {
 	case string(OutcomeFailureTransient):
 		result.FailureClass = OutcomeFailureTransient
@@ -234,7 +241,7 @@ func (record OutcomeRecord) Validate() error {
 			return invalidf("claimed outcome consistency is invalid")
 		}
 	case OutcomeStatusSucceeded:
-		if record.ActualTargetID == nil || record.Disposition != OutcomeDispositionShipped && record.Disposition != OutcomeDispositionNoOp || record.FailureClass != OutcomeFailureNone {
+		if record.ActualTargetID == nil || record.Disposition != OutcomeDispositionShipped && record.Disposition != OutcomeDispositionNoOp || record.FailureClass != OutcomeFailureNone || record.AdmissionReceiptID == nil || record.SessionID == nil || record.ExecutionID == nil {
 			return invalidf("succeeded outcome consistency is invalid")
 		}
 	case OutcomeStatusFailed:
@@ -313,6 +320,14 @@ func stringPointer(value string) *string { return &value }
 func optionalString(value string) *string {
 	value = strings.TrimSpace(value)
 	if value == "" {
+		return nil
+	}
+	return stringPointer(value)
+}
+
+func optionalOutcomeOpaque(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" || validateOutcomeOpaque("optional outcome identity", value, true) != nil {
 		return nil
 	}
 	return stringPointer(value)

@@ -396,6 +396,7 @@ export const zDecisionPayload = z.object({
     policy_digest: z.string(),
     provider: z.string(),
     reason: z.string(),
+    recommendation_id: z.string().optional(),
     rig: z.string(),
     schema: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
     serve_as: z.string(),
@@ -1070,6 +1071,55 @@ export const zOutboundEventPayload = z.object({
     message_id: z.string(),
     provider: z.string(),
     session: z.string()
+});
+
+export const zOutcomeRecord = z.object({
+    actual_config_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/).nullable(),
+    actual_target_id: z.string().nullable(),
+    admission_receipt_id: z.string().nullable(),
+    correlation_id: z.string().min(1),
+    coverage: z.enum([
+        'available',
+        'partial',
+        'unknown'
+    ]),
+    disposition: z.enum([
+        'shipped',
+        'no_op',
+        'blocked',
+        'abandoned',
+        'not_admitted',
+        'unknown'
+    ]),
+    execution_id: z.string().nullable(),
+    failure_class: z.enum([
+        'none',
+        'transient',
+        'hard',
+        'unknown'
+    ]),
+    observed_at_unix: z.coerce.bigint().gte(BigInt(1)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    outcome_id: z.string().regex(/^outcome_[0-9a-f]{64}$/),
+    provenance: z.enum(['authoritative_routing_decision', 'authoritative_routing_decision_exact_work']),
+    recommendation_id: z.string().regex(/^routing\/v2:[0-9a-f]{64}$/),
+    requested_config_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+    requested_target_id: z.string().min(1),
+    routing_decision_id: z.string().nullable(),
+    schema_version: z.enum(['routing/outcome/v2']),
+    session_id: z.string().nullable(),
+    status: z.enum([
+        'claimed',
+        'succeeded',
+        'failed'
+    ]),
+    work_id: z.string().min(1)
+});
+
+export const zOutcomePage = z.object({
+    items: z.array(zOutcomeRecord).nullable(),
+    next_cursor: z.string().optional(),
+    partial: z.boolean(),
+    schema_version: z.enum(['routing/outcome/v2'])
 });
 
 export const zOutputTurn = z.object({
@@ -9187,6 +9237,20 @@ export const zGetRoutingEligiblePath = z.object({
  * OK
  */
 export const zGetRoutingEligibleResponse = zSelectionSnapshot;
+
+export const zListRoutingOutcomesPath = z.object({
+    cityName: z.string().min(1).regex(/\S/)
+});
+
+export const zListRoutingOutcomesQuery = z.object({
+    limit: z.coerce.bigint().gte(BigInt(1)).lte(BigInt(100)).optional().default(BigInt(100)),
+    cursor: z.string().optional()
+});
+
+/**
+ * OK
+ */
+export const zListRoutingOutcomesResponse = zOutcomePage;
 
 export const zGetRoutingStatusPath = z.object({
     cityName: z.string().min(1).regex(/\S/)

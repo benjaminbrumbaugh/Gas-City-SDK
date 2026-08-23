@@ -209,8 +209,8 @@ func (e OutcomeRecordFailureClass) Valid() bool {
 
 // Defines values for OutcomeRecordProvenance.
 const (
-	AuthoritativeRoutingDecision                      OutcomeRecordProvenance = "authoritative_routing_decision"
-	AuthoritativeRoutingDecisionExactWorkBeadMetadata OutcomeRecordProvenance = "authoritative_routing_decision+exact_work_bead_metadata"
+	AuthoritativeRoutingDecision          OutcomeRecordProvenance = "authoritative_routing_decision"
+	AuthoritativeRoutingDecisionExactWork OutcomeRecordProvenance = "authoritative_routing_decision_exact_work"
 )
 
 // Valid indicates whether the value is a known member of the OutcomeRecordProvenance enum.
@@ -218,7 +218,7 @@ func (e OutcomeRecordProvenance) Valid() bool {
 	switch e {
 	case AuthoritativeRoutingDecision:
 		return true
-	case AuthoritativeRoutingDecisionExactWorkBeadMetadata:
+	case AuthoritativeRoutingDecisionExactWork:
 		return true
 	default:
 		return false
