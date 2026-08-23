@@ -561,7 +561,7 @@ func LoadWithIncludesOptions(fs fsys.FS, path string, opts LoadOptions, extraInc
 	// deferred so they still run after city-level [[patches.agent]].
 	rigFormulaDirs := make(map[string][]string)
 	var deferredRigPatches []deferredRigPatches
-	if HasPackRigs(root.Rigs) {
+	if len(root.Rigs) > 0 {
 		rigPackOpts := opts
 		rigPackOpts.deferRigPatches = true
 		rigPackOpts.deferredRigPatches = &deferredRigPatches

@@ -54,7 +54,7 @@ materialize that agent are unaffected, and defaults cannot override `dir`:
 ```toml
 # city.toml
 [[defaults.rig.patches]]
-agent = "polecat"
+agent = "gastown.polecat"
 
 [defaults.rig.patches.pool]
 max = 100
@@ -72,7 +72,7 @@ source = "https://github.com/gastownhall/gascity-packs/tree/main/gastown"
 version = "sha:33d3a430a67d1782ad364556cb566bdb01d0afe3"
 
 [[rigs.patches]]
-agent = "polecat"
+agent = "gastown.polecat"
 
 [rigs.patches.pool]
 max = 10
@@ -90,7 +90,7 @@ source = "https://github.com/gastownhall/gascity-packs/tree/main/gastown"
 version = "sha:33d3a430a67d1782ad364556cb566bdb01d0afe3"
 
 [[rigs.patches]]
-agent = "polecat"
+agent = "gastown.polecat"
 provider = "codex"
 ```
 

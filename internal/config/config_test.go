@@ -7709,13 +7709,25 @@ func TestLoadWithIncludes_DeprecatedAttachmentWarning_RigPatches(t *testing.T) {
 [workspace]
 name = "deprecated-in-rig-patches"
 
+[imports.gs]
+source = "./packs/gastown"
+
 [[rigs]]
 name = "main"
 path = "/tmp/main"
 
 [[rigs.patches]]
-name = "polecat"
+agent = "polecat"
 skills_append = ["incident-response"]
+`)
+	fs.Files["/city/packs/gastown/pack.toml"] = []byte(`
+[pack]
+name = "gastown"
+schema = 2
+
+[[agent]]
+name = "polecat"
+scope = "rig"
 `)
 
 	_, prov, err := LoadWithIncludes(fs, "/city/city.toml")
