@@ -16,9 +16,9 @@ ARG GH_VERSION=2.96.0
 ARG GH_SOURCE_REF=b300f2ec7ec9dc9addc39b2ad88c54097ded7ca0
 ARG GH_SOURCE_SHA256=a0c18c98c73f7333f73e19b3a0bf5bd18673f3dc226193ab6478b3ea1ea18f03
 ARG GH_SOURCE_DATE_EPOCH=1783026608
-ARG DOLT_VERSION=2.1.7
-ARG DOLT_SOURCE_REF=781cbb730221ea7df4fc7995255bb336df9c3864
-ARG DOLT_SOURCE_SHA256=0b0c9bce8baef26baa7e0e5825cd2d7d6101daf6fc9673f38dac9670afb66847
+ARG DOLT_VERSION=2.3.1
+ARG DOLT_SOURCE_REF=b15770fe588268027d799c11356af0ce24ba882a
+ARG DOLT_SOURCE_SHA256=fbbbe1605399250a95621004c07cbf29a394b632fe05b0ca4bdcad642687daa8
 ARG GRPC_VERSION=1.82.1
 ARG DOLT_TOOLCHAIN_RELEASE=20260611_0.0.5_trixie
 ARG DOLT_OPTCROSS_X86_64_SHA256=caf703fb1cbc0c9ff9a5b506f73da6c6f5233c04a455e638cdc50267a4d0c0c0
@@ -40,8 +40,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# The latest published gh and Dolt binaries predate grpc-go 1.82.1. Rebuild the
-# same released versions from checksum-pinned source with the patched module.
+# Rebuild the released gh and Dolt versions from checksum-pinned source so the
+# base image keeps deterministic static ICU and cross-architecture artifacts.
 RUN mkdir -p /src/gh /src/dolt /out \
     && curl -fsSL --retry 3 \
        "https://github.com/cli/cli/archive/${GH_SOURCE_REF}.tar.gz" \
