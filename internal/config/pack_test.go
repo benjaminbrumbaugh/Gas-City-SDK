@@ -792,6 +792,23 @@ func TestApplyDefaultRigPatchesRejectsAmbiguousBareAgent(t *testing.T) {
 	}
 }
 
+func TestApplyOverridesKeepsOriginalRigCandidatesAfterDirChange(t *testing.T) {
+	newDir := "ops"
+	maxSessions := 7
+	agents := []Agent{{Dir: "alpha", BindingName: "gs", Name: "worker"}}
+	overrides := []AgentOverride{
+		{Agent: "gs.worker", Dir: &newDir},
+		{Agent: "gs.worker", MaxActiveSessions: &maxSessions},
+	}
+
+	if err := applyOverrides(agents, overrides, "alpha"); err != nil {
+		t.Fatalf("applyOverrides: %v", err)
+	}
+	if agents[0].Dir != "ops" || agents[0].MaxActiveSessions == nil || *agents[0].MaxActiveSessions != 7 {
+		t.Fatalf("agent = %#v, want dir ops and max_active_sessions 7", agents[0])
+	}
+}
+
 func TestLoadWithIncludes_RigPatchMissingCityImportedTargetFails(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "city.toml", `
