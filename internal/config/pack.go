@@ -2795,12 +2795,13 @@ func qualifiedAgentNames(agents []Agent) []string {
 // Bare names are accepted when unambiguous; binding-qualified names select an
 // agent when multiple imported packs expose the same local name.
 func applyOverrides(agents []Agent, overrides []AgentOverride, rigName string) error {
+	candidates := rigAgentIndexes(agents, rigName)
 	for i := range overrides {
 		ov := &overrides[i]
 		if strings.TrimSpace(ov.Agent) == "" {
 			return fmt.Errorf("overrides[%d]: agent name is required", i)
 		}
-		matches := matchingRigAgentIndexes(agents, rigName, ov.Agent)
+		matches := matchingAgentIndexes(agents, candidates, rigName, ov.Agent)
 		switch len(matches) {
 		case 0:
 			return fmt.Errorf("overrides[%d]: agent %q not found in rig %q", i, ov.Agent, rigName)
@@ -2814,16 +2815,27 @@ func applyOverrides(agents []Agent, overrides []AgentOverride, rigName string) e
 }
 
 func matchingRigAgentIndexes(agents []Agent, rigName, target string) []int {
+	return matchingAgentIndexes(agents, rigAgentIndexes(agents, rigName), rigName, target)
+}
+
+func rigAgentIndexes(agents []Agent, rigName string) []int {
+	var indexes []int
+	for i := range agents {
+		if agents[i].Dir == rigName {
+			indexes = append(indexes, i)
+		}
+	}
+	return indexes
+}
+
+func matchingAgentIndexes(agents []Agent, candidates []int, rigName, target string) []int {
 	targetDir, targetName := ParseQualifiedName(strings.TrimSpace(target))
 	if targetName == "" || targetDir != "" && targetDir != rigName {
 		return nil
 	}
 	bindingQualified := strings.Contains(targetName, ".")
 	var matches []int
-	for i := range agents {
-		if agents[i].Dir != rigName {
-			continue
-		}
+	for _, i := range candidates {
 		if bindingQualified && agents[i].BindingQualifiedName() == targetName ||
 			!bindingQualified && agents[i].Name == targetName {
 			matches = append(matches, i)
