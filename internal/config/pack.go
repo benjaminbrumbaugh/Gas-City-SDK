@@ -107,7 +107,10 @@ type PackRigDefaults struct {
 // (Layer 3). cityRoot is the city directory (parent of city.toml), used
 // for path resolution.
 func ExpandPacks(cfg *City, fs fsys.FS, cityRoot string, rigFormulaDirs map[string][]string) error {
-	return expandPacks(cfg, fs, cityRoot, rigFormulaDirs, LoadOptions{})
+	if err := expandPacks(cfg, fs, cityRoot, rigFormulaDirs, LoadOptions{}); err != nil {
+		return err
+	}
+	return applyDefaultRigPatches(cfg)
 }
 
 func expandPacks(cfg *City, fs fsys.FS, cityRoot string, rigFormulaDirs map[string][]string, opts LoadOptions) error {
