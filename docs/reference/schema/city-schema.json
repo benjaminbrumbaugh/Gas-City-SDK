@@ -429,7 +429,7 @@
       "properties": {
         "agent": {
           "type": "string",
-          "description": "Agent is the name of the pack agent to override (required)."
+          "description": "Agent is the pack agent to override (required). A binding-qualified name\ndisambiguates imports that expose the same local agent name."
         },
         "dir": {
           "type": "string",
@@ -2216,7 +2216,7 @@
             "$ref": "#/$defs/AgentOverride"
           },
           "type": "array",
-          "description": "Patches are inherited by every rig that materializes the named agent.\nThey cannot set Dir. City agent patches and explicit [[rigs.patches]]\nentries apply later and therefore take precedence."
+          "description": "Patches are inherited by every rig that materializes the named agent.\nBinding-qualified names select among duplicate local names.\nThey cannot set Dir. City agent patches and explicit [[rigs.patches]]\nentries apply later and therefore take precedence."
         }
       },
       "additionalProperties": false,

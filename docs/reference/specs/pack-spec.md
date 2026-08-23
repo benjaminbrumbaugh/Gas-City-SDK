@@ -291,7 +291,10 @@ Default rig agent patches are also a city deployment concern. Declare
 rig that materializes the named agent. A rig without that agent is unaffected,
 and a default may wait for a future rig to introduce it. Defaults cannot set
 `dir`, because changing every matching agent to one shared identity would break
-rig isolation. These defaults apply before city-level `[[patches.agent]]` and
+rig isolation. Use a binding-qualified target such as `gastown.polecat` when
+multiple imports expose the same local name; a bare name is accepted only when
+it is unambiguous within each rig. These defaults apply before city-level
+`[[patches.agent]]` and
 each rig's explicit `[[rigs.patches]]`, so either narrower layer can override
 the city-wide value. `pack.toml` must not define `[[defaults.rig.patches]]`.
 
