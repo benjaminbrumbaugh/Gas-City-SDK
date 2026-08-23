@@ -5,6 +5,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/gastownhall/gascity/internal/extmsg"
+	"github.com/gastownhall/gascity/internal/routingdecision"
 	"github.com/gastownhall/gascity/internal/session"
 )
 
@@ -96,6 +97,7 @@ func registerNamedEnum(r huma.Registry, name, description string, values ...stri
 // schema types above whenever it encounters one of the domain enum
 // types. Called from the supervisor API setup.
 func registerEnumAliases(r huma.Registry) {
+	r.RegisterTypeAlias(reflect.TypeOf(routingdecision.OutcomeRecord{}), reflect.TypeOf(outcomeRecordSchema{}))
 	r.RegisterTypeAlias(reflect.TypeOf(session.SubmitIntent("")), reflect.TypeOf(submitIntentSchema{}))
 	r.RegisterTypeAlias(reflect.TypeOf(extmsg.ConversationKind("")), reflect.TypeOf(conversationKindSchema{}))
 	r.RegisterTypeAlias(reflect.TypeOf(extmsg.TranscriptMessageKind("")), reflect.TypeOf(transcriptMessageKindSchema{}))

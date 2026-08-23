@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/gastownhall/gascity/internal/api/apierr"
 	"github.com/gastownhall/gascity/internal/citywriteauth"
 	"github.com/gastownhall/gascity/internal/routingdecision"
@@ -216,6 +217,94 @@ func TestRoutingRoutesExposeExactTypedContract(t *testing.T) {
 		if _, ok := post.Responses[status]; !ok {
 			t.Errorf("POST routing decisions missing documented %s response", status)
 		}
+	}
+}
+
+func TestRoutingOutcomeOpenAPISchemaEnforcesPortableConstraints(t *testing.T) {
+	sm := NewSupervisorMux(&stateCityResolver{state: newFakeState(t)}, nil, false, "test", "", time.Time{})
+	registry := sm.humaAPI.OpenAPI().Components.Schemas
+	schema := registry.Map()["OutcomeRecord"]
+	if schema == nil {
+		t.Fatal("OutcomeRecord schema missing")
+	}
+
+	valid := map[string]any{
+		"actual_config_digest":    "sha256:" + strings.Repeat("a", 64),
+		"actual_target_id":        "target-a",
+		"admission_receipt_id":    "controller-admit:decision-a:2",
+		"correlation_id":          "work-a",
+		"coverage":                "available",
+		"disposition":             "shipped",
+		"execution_id":            "execution-a",
+		"failure_class":           "none",
+		"observed_at_unix":        float64(2_000),
+		"outcome_id":              "outcome_" + strings.Repeat("d", 64),
+		"provenance":              "authoritative_routing_decision_exact_work",
+		"recommendation_id":       "routing/v2:" + strings.Repeat("c", 64),
+		"requested_config_digest": "sha256:" + strings.Repeat("a", 64),
+		"requested_target_id":     "target-a",
+		"routing_decision_id":     "decision-a",
+		"schema_version":          "routing/outcome/v2",
+		"session_id":              "session-a",
+		"status":                  "succeeded",
+		"work_id":                 "work-a",
+	}
+	validate := func(value map[string]any) []error {
+		t.Helper()
+		result := &huma.ValidateResult{}
+		huma.Validate(registry, schema, huma.NewPathBuffer(nil, 0), huma.ModeReadFromServer, value, result)
+		return result.Errors
+	}
+	clone := func(value map[string]any) map[string]any {
+		copy := make(map[string]any, len(value))
+		for key, item := range value {
+			copy[key] = item
+		}
+		return copy
+	}
+
+	if errors := validate(valid); len(errors) != 0 {
+		t.Fatalf("valid succeeded outcome rejected: %v", errors)
+	}
+	for _, field := range []string{"correlation_id", "routing_decision_id", "work_id", "admission_receipt_id", "session_id", "execution_id", "requested_target_id", "actual_target_id"} {
+		t.Run("unsafe URL "+field, func(t *testing.T) {
+			candidate := clone(valid)
+			candidate[field] = "https://example.invalid/secret"
+			if errors := validate(candidate); len(errors) == 0 {
+				t.Fatalf("OutcomeRecord.%s accepted an unsafe URL identifier", field)
+			}
+		})
+	}
+	for _, field := range []string{"admission_receipt_id", "session_id", "execution_id"} {
+		t.Run("succeeded requires "+field, func(t *testing.T) {
+			candidate := clone(valid)
+			candidate[field] = nil
+			if errors := validate(candidate); len(errors) == 0 {
+				t.Fatalf("succeeded OutcomeRecord accepted null %s", field)
+			}
+		})
+	}
+
+	notAdmitted := clone(valid)
+	notAdmitted["actual_target_id"] = nil
+	notAdmitted["actual_config_digest"] = nil
+	notAdmitted["admission_receipt_id"] = nil
+	notAdmitted["session_id"] = nil
+	notAdmitted["execution_id"] = nil
+	notAdmitted["status"] = "failed"
+	notAdmitted["disposition"] = "not_admitted"
+	notAdmitted["failure_class"] = "unknown"
+	if errors := validate(notAdmitted); len(errors) != 0 {
+		t.Fatalf("valid not-admitted outcome rejected: %v", errors)
+	}
+	for _, field := range []string{"actual_target_id", "actual_config_digest"} {
+		t.Run("not admitted requires null "+field, func(t *testing.T) {
+			candidate := clone(notAdmitted)
+			candidate[field] = valid[field]
+			if errors := validate(candidate); len(errors) == 0 {
+				t.Fatalf("not-admitted OutcomeRecord accepted non-null %s", field)
+			}
+		})
 	}
 }
 

@@ -36,3 +36,63 @@ test('generated TypeScript and Zod clients share canonical exact-work provenance
     false,
   );
 });
+
+test('generated Zod outcome rejects unsafe URL identifiers', () => {
+  for (const field of [
+    'correlation_id',
+    'routing_decision_id',
+    'work_id',
+    'admission_receipt_id',
+    'session_id',
+    'execution_id',
+    'requested_target_id',
+    'actual_target_id',
+  ] satisfies Array<keyof OutcomeRecord>) {
+    assert.equal(
+      zOutcomeRecord.safeParse({
+        ...exactWorkOutcome,
+        [field]: 'https://example.invalid/secret',
+      }).success,
+      false,
+      `expected ${field} to reject an unsafe URL`,
+    );
+  }
+});
+
+test('generated Zod outcome enforces succeeded evidence IDs', () => {
+  for (const field of [
+    'admission_receipt_id',
+    'session_id',
+    'execution_id',
+  ] satisfies Array<keyof OutcomeRecord>) {
+    assert.equal(
+      zOutcomeRecord.safeParse({ ...exactWorkOutcome, [field]: null }).success,
+      false,
+      `expected succeeded outcome to require ${field}`,
+    );
+  }
+});
+
+test('generated Zod outcome enforces null actuals when not admitted', () => {
+  const notAdmittedOutcome: OutcomeRecord = {
+    ...exactWorkOutcome,
+    actual_config_digest: null,
+    actual_target_id: null,
+    admission_receipt_id: null,
+    disposition: 'not_admitted',
+    execution_id: null,
+    failure_class: 'unknown',
+    session_id: null,
+    status: 'failed',
+  };
+  assert.equal(zOutcomeRecord.safeParse(notAdmittedOutcome).success, true);
+  for (const field of ['actual_target_id', 'actual_config_digest'] satisfies Array<
+    keyof OutcomeRecord
+  >) {
+    assert.equal(
+      zOutcomeRecord.safeParse({ ...notAdmittedOutcome, [field]: exactWorkOutcome[field] }).success,
+      false,
+      `expected not-admitted outcome to require null ${field}`,
+    );
+  }
+});

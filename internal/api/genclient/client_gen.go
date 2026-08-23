@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/routingdecision"
 	"github.com/oapi-codegen/runtime"
 )
 
@@ -119,142 +120,13 @@ func (e EventRotateArchiveCompressionStatus) Valid() bool {
 
 // Defines values for OutcomePageSchemaVersion.
 const (
-	OutcomePageSchemaVersionRoutingoutcomev2 OutcomePageSchemaVersion = "routing/outcome/v2"
+	Routingoutcomev2 OutcomePageSchemaVersion = "routing/outcome/v2"
 )
 
 // Valid indicates whether the value is a known member of the OutcomePageSchemaVersion enum.
 func (e OutcomePageSchemaVersion) Valid() bool {
 	switch e {
-	case OutcomePageSchemaVersionRoutingoutcomev2:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for OutcomeRecordCoverage.
-const (
-	OutcomeRecordCoverageAvailable OutcomeRecordCoverage = "available"
-	OutcomeRecordCoveragePartial   OutcomeRecordCoverage = "partial"
-	OutcomeRecordCoverageUnknown   OutcomeRecordCoverage = "unknown"
-)
-
-// Valid indicates whether the value is a known member of the OutcomeRecordCoverage enum.
-func (e OutcomeRecordCoverage) Valid() bool {
-	switch e {
-	case OutcomeRecordCoverageAvailable:
-		return true
-	case OutcomeRecordCoveragePartial:
-		return true
-	case OutcomeRecordCoverageUnknown:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for OutcomeRecordDisposition.
-const (
-	OutcomeRecordDispositionAbandoned   OutcomeRecordDisposition = "abandoned"
-	OutcomeRecordDispositionBlocked     OutcomeRecordDisposition = "blocked"
-	OutcomeRecordDispositionNoOp        OutcomeRecordDisposition = "no_op"
-	OutcomeRecordDispositionNotAdmitted OutcomeRecordDisposition = "not_admitted"
-	OutcomeRecordDispositionShipped     OutcomeRecordDisposition = "shipped"
-	OutcomeRecordDispositionUnknown     OutcomeRecordDisposition = "unknown"
-)
-
-// Valid indicates whether the value is a known member of the OutcomeRecordDisposition enum.
-func (e OutcomeRecordDisposition) Valid() bool {
-	switch e {
-	case OutcomeRecordDispositionAbandoned:
-		return true
-	case OutcomeRecordDispositionBlocked:
-		return true
-	case OutcomeRecordDispositionNoOp:
-		return true
-	case OutcomeRecordDispositionNotAdmitted:
-		return true
-	case OutcomeRecordDispositionShipped:
-		return true
-	case OutcomeRecordDispositionUnknown:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for OutcomeRecordFailureClass.
-const (
-	OutcomeRecordFailureClassHard      OutcomeRecordFailureClass = "hard"
-	OutcomeRecordFailureClassNone      OutcomeRecordFailureClass = "none"
-	OutcomeRecordFailureClassTransient OutcomeRecordFailureClass = "transient"
-	OutcomeRecordFailureClassUnknown   OutcomeRecordFailureClass = "unknown"
-)
-
-// Valid indicates whether the value is a known member of the OutcomeRecordFailureClass enum.
-func (e OutcomeRecordFailureClass) Valid() bool {
-	switch e {
-	case OutcomeRecordFailureClassHard:
-		return true
-	case OutcomeRecordFailureClassNone:
-		return true
-	case OutcomeRecordFailureClassTransient:
-		return true
-	case OutcomeRecordFailureClassUnknown:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for OutcomeRecordProvenance.
-const (
-	AuthoritativeRoutingDecision          OutcomeRecordProvenance = "authoritative_routing_decision"
-	AuthoritativeRoutingDecisionExactWork OutcomeRecordProvenance = "authoritative_routing_decision_exact_work"
-)
-
-// Valid indicates whether the value is a known member of the OutcomeRecordProvenance enum.
-func (e OutcomeRecordProvenance) Valid() bool {
-	switch e {
-	case AuthoritativeRoutingDecision:
-		return true
-	case AuthoritativeRoutingDecisionExactWork:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for OutcomeRecordSchemaVersion.
-const (
-	OutcomeRecordSchemaVersionRoutingoutcomev2 OutcomeRecordSchemaVersion = "routing/outcome/v2"
-)
-
-// Valid indicates whether the value is a known member of the OutcomeRecordSchemaVersion enum.
-func (e OutcomeRecordSchemaVersion) Valid() bool {
-	switch e {
-	case OutcomeRecordSchemaVersionRoutingoutcomev2:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for OutcomeRecordStatus.
-const (
-	OutcomeRecordStatusClaimed   OutcomeRecordStatus = "claimed"
-	OutcomeRecordStatusFailed    OutcomeRecordStatus = "failed"
-	OutcomeRecordStatusSucceeded OutcomeRecordStatus = "succeeded"
-)
-
-// Valid indicates whether the value is a known member of the OutcomeRecordStatus enum.
-func (e OutcomeRecordStatus) Valid() bool {
-	switch e {
-	case OutcomeRecordStatusClaimed:
-		return true
-	case OutcomeRecordStatusFailed:
-		return true
-	case OutcomeRecordStatusSucceeded:
+	case Routingoutcomev2:
 		return true
 	default:
 		return false
@@ -845,19 +717,19 @@ func (e SupervisorShutdownPayloadSource) Valid() bool {
 
 // Defines values for SupervisorStartedPayloadPreviousExit.
 const (
-	SupervisorStartedPayloadPreviousExitClean   SupervisorStartedPayloadPreviousExit = "clean"
-	SupervisorStartedPayloadPreviousExitCrash   SupervisorStartedPayloadPreviousExit = "crash"
-	SupervisorStartedPayloadPreviousExitUnknown SupervisorStartedPayloadPreviousExit = "unknown"
+	Clean   SupervisorStartedPayloadPreviousExit = "clean"
+	Crash   SupervisorStartedPayloadPreviousExit = "crash"
+	Unknown SupervisorStartedPayloadPreviousExit = "unknown"
 )
 
 // Valid indicates whether the value is a known member of the SupervisorStartedPayloadPreviousExit enum.
 func (e SupervisorStartedPayloadPreviousExit) Valid() bool {
 	switch e {
-	case SupervisorStartedPayloadPreviousExitClean:
+	case Clean:
 		return true
-	case SupervisorStartedPayloadPreviousExitCrash:
+	case Crash:
 		return true
-	case SupervisorStartedPayloadPreviousExitUnknown:
+	case Unknown:
 		return true
 	default:
 		return false
@@ -1013,34 +885,34 @@ func (e PostV0CityByCityNameRigByNameByActionParamsAction) Valid() bool {
 
 // Defines values for ListRoutingDecisionsParamsState.
 const (
-	ListRoutingDecisionsParamsStateAdmitted         ListRoutingDecisionsParamsState = "admitted"
-	ListRoutingDecisionsParamsStateApproved         ListRoutingDecisionsParamsState = "approved"
-	ListRoutingDecisionsParamsStateClaimed          ListRoutingDecisionsParamsState = "claimed"
-	ListRoutingDecisionsParamsStateExpired          ListRoutingDecisionsParamsState = "expired"
-	ListRoutingDecisionsParamsStateOutcomeRecorded  ListRoutingDecisionsParamsState = "outcome_recorded"
-	ListRoutingDecisionsParamsStateProposed         ListRoutingDecisionsParamsState = "proposed"
-	ListRoutingDecisionsParamsStateRefusedAfterRace ListRoutingDecisionsParamsState = "refused_after_race"
-	ListRoutingDecisionsParamsStateRevoked          ListRoutingDecisionsParamsState = "revoked"
+	Admitted         ListRoutingDecisionsParamsState = "admitted"
+	Approved         ListRoutingDecisionsParamsState = "approved"
+	Claimed          ListRoutingDecisionsParamsState = "claimed"
+	Expired          ListRoutingDecisionsParamsState = "expired"
+	OutcomeRecorded  ListRoutingDecisionsParamsState = "outcome_recorded"
+	Proposed         ListRoutingDecisionsParamsState = "proposed"
+	RefusedAfterRace ListRoutingDecisionsParamsState = "refused_after_race"
+	Revoked          ListRoutingDecisionsParamsState = "revoked"
 )
 
 // Valid indicates whether the value is a known member of the ListRoutingDecisionsParamsState enum.
 func (e ListRoutingDecisionsParamsState) Valid() bool {
 	switch e {
-	case ListRoutingDecisionsParamsStateAdmitted:
+	case Admitted:
 		return true
-	case ListRoutingDecisionsParamsStateApproved:
+	case Approved:
 		return true
-	case ListRoutingDecisionsParamsStateClaimed:
+	case Claimed:
 		return true
-	case ListRoutingDecisionsParamsStateExpired:
+	case Expired:
 		return true
-	case ListRoutingDecisionsParamsStateOutcomeRecorded:
+	case OutcomeRecorded:
 		return true
-	case ListRoutingDecisionsParamsStateProposed:
+	case Proposed:
 		return true
-	case ListRoutingDecisionsParamsStateRefusedAfterRace:
+	case RefusedAfterRace:
 		return true
-	case ListRoutingDecisionsParamsStateRevoked:
+	case Revoked:
 		return true
 	default:
 		return false
@@ -3108,45 +2980,7 @@ type OutcomePage struct {
 type OutcomePageSchemaVersion string
 
 // OutcomeRecord defines model for OutcomeRecord.
-type OutcomeRecord struct {
-	ActualConfigDigest    *string                    `json:"actual_config_digest"`
-	ActualTargetId        *string                    `json:"actual_target_id"`
-	AdmissionReceiptId    *string                    `json:"admission_receipt_id"`
-	CorrelationId         string                     `json:"correlation_id"`
-	Coverage              OutcomeRecordCoverage      `json:"coverage"`
-	Disposition           OutcomeRecordDisposition   `json:"disposition"`
-	ExecutionId           *string                    `json:"execution_id"`
-	FailureClass          OutcomeRecordFailureClass  `json:"failure_class"`
-	ObservedAtUnix        int64                      `json:"observed_at_unix"`
-	OutcomeId             string                     `json:"outcome_id"`
-	Provenance            OutcomeRecordProvenance    `json:"provenance"`
-	RecommendationId      string                     `json:"recommendation_id"`
-	RequestedConfigDigest string                     `json:"requested_config_digest"`
-	RequestedTargetId     string                     `json:"requested_target_id"`
-	RoutingDecisionId     *string                    `json:"routing_decision_id"`
-	SchemaVersion         OutcomeRecordSchemaVersion `json:"schema_version"`
-	SessionId             *string                    `json:"session_id"`
-	Status                OutcomeRecordStatus        `json:"status"`
-	WorkId                string                     `json:"work_id"`
-}
-
-// OutcomeRecordCoverage defines model for OutcomeRecord.Coverage.
-type OutcomeRecordCoverage string
-
-// OutcomeRecordDisposition defines model for OutcomeRecord.Disposition.
-type OutcomeRecordDisposition string
-
-// OutcomeRecordFailureClass defines model for OutcomeRecord.FailureClass.
-type OutcomeRecordFailureClass string
-
-// OutcomeRecordProvenance defines model for OutcomeRecord.Provenance.
-type OutcomeRecordProvenance string
-
-// OutcomeRecordSchemaVersion defines model for OutcomeRecord.SchemaVersion.
-type OutcomeRecordSchemaVersion string
-
-// OutcomeRecordStatus defines model for OutcomeRecord.Status.
-type OutcomeRecordStatus string
+type OutcomeRecord = routingdecision.OutcomeRecord
 
 // OutputTurn defines model for OutputTurn.
 type OutputTurn struct {

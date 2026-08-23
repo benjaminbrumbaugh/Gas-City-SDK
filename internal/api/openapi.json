@@ -5899,146 +5899,276 @@
         "type": "object"
       },
       "OutcomeRecord": {
-        "additionalProperties": false,
-        "properties": {
-          "actual_config_digest": {
-            "pattern": "^sha256:[0-9a-f]{64}$",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "actual_target_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "admission_receipt_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "correlation_id": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "coverage": {
-            "enum": [
-              "available",
-              "partial",
-              "unknown"
+        "allOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "actual_config_digest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "actual_target_id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*(?::(?:/?[A-Za-z0-9._-][A-Za-z0-9._/-]*|/?))*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "admission_receipt_id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*(?::(?:/?[A-Za-z0-9._-][A-Za-z0-9._/-]*|/?))*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "correlation_id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*(?::(?:/?[A-Za-z0-9._-][A-Za-z0-9._/-]*|/?))*$",
+                "type": "string"
+              },
+              "coverage": {
+                "enum": [
+                  "available",
+                  "partial",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              "disposition": {
+                "enum": [
+                  "shipped",
+                  "no_op",
+                  "blocked",
+                  "abandoned",
+                  "not_admitted",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              "execution_id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*(?::(?:/?[A-Za-z0-9._-][A-Za-z0-9._/-]*|/?))*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "failure_class": {
+                "enum": [
+                  "none",
+                  "transient",
+                  "hard",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              "observed_at_unix": {
+                "format": "int64",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "outcome_id": {
+                "pattern": "^outcome_[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "provenance": {
+                "enum": [
+                  "authoritative_routing_decision",
+                  "authoritative_routing_decision_exact_work"
+                ],
+                "type": "string"
+              },
+              "recommendation_id": {
+                "pattern": "^routing/v2:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "requested_config_digest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "requested_target_id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*(?::(?:/?[A-Za-z0-9._-][A-Za-z0-9._/-]*|/?))*$",
+                "type": "string"
+              },
+              "routing_decision_id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*(?::(?:/?[A-Za-z0-9._-][A-Za-z0-9._/-]*|/?))*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "schema_version": {
+                "enum": [
+                  "routing/outcome/v2"
+                ],
+                "type": "string"
+              },
+              "session_id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*(?::(?:/?[A-Za-z0-9._-][A-Za-z0-9._/-]*|/?))*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "claimed",
+                  "succeeded",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              "work_id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*(?::(?:/?[A-Za-z0-9._-][A-Za-z0-9._/-]*|/?))*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "schema_version",
+              "outcome_id",
+              "correlation_id",
+              "recommendation_id",
+              "routing_decision_id",
+              "work_id",
+              "admission_receipt_id",
+              "session_id",
+              "execution_id",
+              "requested_target_id",
+              "actual_target_id",
+              "requested_config_digest",
+              "actual_config_digest",
+              "status",
+              "disposition",
+              "failure_class",
+              "coverage",
+              "provenance",
+              "observed_at_unix"
             ],
-            "type": "string"
+            "type": "object"
           },
-          "disposition": {
-            "enum": [
-              "shipped",
-              "no_op",
-              "blocked",
-              "abandoned",
-              "not_admitted",
-              "unknown"
-            ],
-            "type": "string"
-          },
-          "execution_id": {
-            "type": [
-              "string",
-              "null"
+          {
+            "allOf": [
+              {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "admission_receipt_id": {
+                        "type": "string"
+                      },
+                      "execution_id": {
+                        "type": "string"
+                      },
+                      "session_id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "enum": [
+                          "succeeded"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "admission_receipt_id",
+                      "session_id",
+                      "execution_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "status": {
+                        "enum": [
+                          "claimed",
+                          "failed"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "status"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "actual_config_digest": {
+                        "pattern": "a^",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "actual_target_id": {
+                        "pattern": "a^",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "disposition": {
+                        "enum": [
+                          "not_admitted"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "disposition",
+                      "actual_target_id",
+                      "actual_config_digest"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "disposition": {
+                        "enum": [
+                          "shipped",
+                          "no_op",
+                          "blocked",
+                          "abandoned",
+                          "unknown"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "disposition"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
             ]
-          },
-          "failure_class": {
-            "enum": [
-              "none",
-              "transient",
-              "hard",
-              "unknown"
-            ],
-            "type": "string"
-          },
-          "observed_at_unix": {
-            "format": "int64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "outcome_id": {
-            "pattern": "^outcome_[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "provenance": {
-            "enum": [
-              "authoritative_routing_decision",
-              "authoritative_routing_decision_exact_work"
-            ],
-            "type": "string"
-          },
-          "recommendation_id": {
-            "pattern": "^routing/v2:[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "requested_config_digest": {
-            "pattern": "^sha256:[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "requested_target_id": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "routing_decision_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "schema_version": {
-            "enum": [
-              "routing/outcome/v2"
-            ],
-            "type": "string"
-          },
-          "session_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "status": {
-            "enum": [
-              "claimed",
-              "succeeded",
-              "failed"
-            ],
-            "type": "string"
-          },
-          "work_id": {
-            "minLength": 1,
-            "type": "string"
           }
-        },
-        "required": [
-          "schema_version",
-          "outcome_id",
-          "correlation_id",
-          "recommendation_id",
-          "routing_decision_id",
-          "work_id",
-          "admission_receipt_id",
-          "session_id",
-          "execution_id",
-          "requested_target_id",
-          "actual_target_id",
-          "requested_config_digest",
-          "actual_config_digest",
-          "status",
-          "disposition",
-          "failure_class",
-          "coverage",
-          "provenance",
-          "observed_at_unix"
         ],
-        "type": "object"
+        "x-go-type": "routingdecision.OutcomeRecord",
+        "x-go-type-import": {
+          "path": "github.com/gastownhall/gascity/internal/routingdecision"
+        }
       },
       "OutputTurn": {
         "additionalProperties": false,

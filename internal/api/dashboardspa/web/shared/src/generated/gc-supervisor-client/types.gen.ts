@@ -2308,7 +2308,20 @@ export type OutcomeRecord = {
     session_id: string | null;
     status: 'claimed' | 'succeeded' | 'failed';
     work_id: string;
-};
+} & ({
+    admission_receipt_id: string;
+    execution_id: string;
+    session_id: string;
+    status: 'succeeded';
+} | {
+    status: 'claimed' | 'failed';
+}) & ({
+    actual_config_digest: string | null;
+    actual_target_id: string | null;
+    disposition: 'not_admitted';
+} | {
+    disposition: 'shipped' | 'no_op' | 'blocked' | 'abandoned' | 'unknown';
+});
 
 export type OutputTurn = {
     role: string;

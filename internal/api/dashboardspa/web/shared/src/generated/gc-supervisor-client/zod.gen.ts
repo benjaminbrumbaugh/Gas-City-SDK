@@ -1075,9 +1075,9 @@ export const zOutboundEventPayload = z.object({
 
 export const zOutcomeRecord = z.object({
     actual_config_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/).nullable(),
-    actual_target_id: z.string().nullable(),
-    admission_receipt_id: z.string().nullable(),
-    correlation_id: z.string().min(1),
+    actual_target_id: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/).nullable(),
+    admission_receipt_id: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/).nullable(),
+    correlation_id: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/),
     coverage: z.enum([
         'available',
         'partial',
@@ -1091,7 +1091,7 @@ export const zOutcomeRecord = z.object({
         'not_admitted',
         'unknown'
     ]),
-    execution_id: z.string().nullable(),
+    execution_id: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/).nullable(),
     failure_class: z.enum([
         'none',
         'transient',
@@ -1103,17 +1103,42 @@ export const zOutcomeRecord = z.object({
     provenance: z.enum(['authoritative_routing_decision', 'authoritative_routing_decision_exact_work']),
     recommendation_id: z.string().regex(/^routing\/v2:[0-9a-f]{64}$/),
     requested_config_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
-    requested_target_id: z.string().min(1),
-    routing_decision_id: z.string().nullable(),
+    requested_target_id: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/),
+    routing_decision_id: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/).nullable(),
     schema_version: z.enum(['routing/outcome/v2']),
-    session_id: z.string().nullable(),
+    session_id: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/).nullable(),
     status: z.enum([
         'claimed',
         'succeeded',
         'failed'
     ]),
-    work_id: z.string().min(1)
-});
+    work_id: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/)
+}).and(z.intersection(z.union([
+    z.object({
+        admission_receipt_id: z.string(),
+        execution_id: z.string(),
+        session_id: z.string(),
+        status: z.enum(['succeeded'])
+    }),
+    z.object({
+        status: z.enum(['claimed', 'failed'])
+    })
+]), z.union([
+    z.object({
+        actual_config_digest: z.string().regex(/a^/).nullable(),
+        actual_target_id: z.string().regex(/a^/).nullable(),
+        disposition: z.enum(['not_admitted'])
+    }),
+    z.object({
+        disposition: z.enum([
+            'shipped',
+            'no_op',
+            'blocked',
+            'abandoned',
+            'unknown'
+        ])
+    })
+])));
 
 export const zOutcomePage = z.object({
     items: z.array(zOutcomeRecord).nullable(),

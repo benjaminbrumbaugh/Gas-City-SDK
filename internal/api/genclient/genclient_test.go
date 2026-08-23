@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -67,11 +68,20 @@ func TestOutcomeProvenanceRuntimeEnumsMatchGeneratedClient(t *testing.T) {
 		"exact work": routingdecision.OutcomeProvenanceExactWork,
 	} {
 		t.Run(name, func(t *testing.T) {
-			generatedValue := genclient.OutcomeRecordProvenance(runtimeValue)
-			if !generatedValue.Valid() {
-				t.Fatalf("runtime provenance %q is outside generated client enum", runtimeValue)
+			generated := genclient.OutcomeRecord{Provenance: runtimeValue}
+			if generated.Provenance != runtimeValue {
+				t.Fatalf("generated provenance = %q, want runtime value %q", generated.Provenance, runtimeValue)
 			}
 		})
+	}
+}
+
+func TestGeneratedOutcomeRecordUsesValidatedRuntimeContract(t *testing.T) {
+	if got, want := reflect.TypeOf(genclient.OutcomeRecord{}), reflect.TypeOf(routingdecision.OutcomeRecord{}); got != want {
+		t.Fatalf("generated OutcomeRecord type = %v, want validated runtime type %v", got, want)
+	}
+	if _, ok := any(genclient.OutcomeRecord{}).(interface{ Validate() error }); !ok {
+		t.Fatal("generated OutcomeRecord does not expose routing/outcome/v2 validation")
 	}
 }
 
