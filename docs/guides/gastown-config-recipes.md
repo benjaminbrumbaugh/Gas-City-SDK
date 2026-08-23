@@ -44,9 +44,23 @@ version = "sha:33d3a430a67d1782ad364556cb566bdb01d0afe3"
 gc rig add /path/to/myproject --name myproject
 ```
 
-### Increase or shrink scalable polecat sessions
+### Set a default polecat pool size for every rig
 
-This is the cleanest answer to "I want more or fewer polecats for this rig."
+Default rig patches configure pack agents before any rig-specific patch. They
+are valid even when the city has no registered rigs yet, so one durable setting
+applies to the named agent in current and future rigs. Rigs that do not
+materialize that agent are unaffected, and defaults cannot override `dir`:
+
+```toml
+# city.toml
+[[defaults.rig.patches]]
+agent = "gastown.polecat"
+
+[defaults.rig.patches.pool]
+max = 100
+```
+
+An explicit rig patch applies later and can override that default for one rig:
 
 ```toml
 # city.toml

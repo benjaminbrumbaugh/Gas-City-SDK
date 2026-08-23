@@ -84,6 +84,11 @@ type PackDefaults struct {
 // to rigs created from this pack.
 type PackRigDefaults struct {
 	Imports map[string]Import `toml:"imports,omitempty"`
+	// Patches are inherited by every rig that materializes the named agent.
+	// Binding-qualified names select among duplicate local names.
+	// They cannot set Dir. City agent patches and explicit [[rigs.patches]]
+	// entries apply later and therefore take precedence.
+	Patches []AgentOverride `toml:"patches,omitempty"`
 }
 
 // ExpandPacks resolves pack references on all rigs. For each rig
@@ -103,7 +108,15 @@ type PackRigDefaults struct {
 // (Layer 3). cityRoot is the city directory (parent of city.toml), used
 // for path resolution.
 func ExpandPacks(cfg *City, fs fsys.FS, cityRoot string, rigFormulaDirs map[string][]string) error {
-	return expandPacks(cfg, fs, cityRoot, rigFormulaDirs, LoadOptions{})
+	var deferred []deferredRigPatches
+	opts := LoadOptions{deferRigPatches: true, deferredRigPatches: &deferred}
+	if err := expandPacks(cfg, fs, cityRoot, rigFormulaDirs, opts); err != nil {
+		return err
+	}
+	if err := applyDefaultRigPatches(cfg); err != nil {
+		return err
+	}
+	return applyDeferredRigPatches(cfg, deferred)
 }
 
 func expandPacks(cfg *City, fs fsys.FS, cityRoot string, rigFormulaDirs map[string][]string, opts LoadOptions) error {
@@ -133,7 +146,7 @@ func expandPacks(cfg *City, fs fsys.FS, cityRoot string, rigFormulaDirs map[stri
 					topoRefs = []string{packPath}
 				}
 			}
-			if len(topoRefs) == 0 {
+			if len(topoRefs) == 0 && (!opts.deferRigPatches || len(rig.Overrides) == 0 && len(rig.RigPatches) == 0) {
 				continue
 			}
 		}
@@ -2567,12 +2580,10 @@ func expandCityImportedAgentsForRigs(agents []Agent, rigs []Rig, bindingName str
 			if a.Scope == "city" {
 				continue
 			}
+			// Each rig receives an independent value before identity and
+			// dependency qualification mutate it.
+			a = a.Clone()
 			a.Dir = rigName
-			// Clone DependsOn before qualifying in place: the range copy shares
-			// the original slice's backing array, so an in-place rewrite would
-			// poison the city-scoped copies filtered afterward and lock the
-			// first rig's prefix onto every later rig.
-			a.DependsOn = append([]string(nil), a.DependsOn...)
 			qualifyAgentDependsOnInPlace(&a)
 			expanded = append(expanded, a)
 		}
@@ -2721,7 +2732,14 @@ func mergeHoistedCityNamedSessions(sessions, hoisted []NamedSession) []NamedSess
 }
 
 func applyDeferredRigPatches(cfg *City, deferred []deferredRigPatches) error {
-	for _, d := range deferred {
+	candidatesByRig := make(map[string][]int, len(deferred))
+	for i := range deferred {
+		if _, ok := candidatesByRig[deferred[i].rigName]; !ok {
+			candidatesByRig[deferred[i].rigName] = rigAgentIndexes(cfg.Agents, deferred[i].rigName)
+		}
+	}
+	for i := range deferred {
+		d := deferred[i]
 		if d.agentStart < 0 || d.agentEnd < d.agentStart || d.agentEnd > len(cfg.Agents) {
 			return fmt.Errorf("rig %q: deferred agent range [%d:%d] outside merged agents", d.rigName, d.agentStart, d.agentEnd)
 		}
@@ -2737,8 +2755,36 @@ func applyDeferredRigPatches(cfg *City, deferred []deferredRigPatches) error {
 				return fmt.Errorf("rig %q: agent at deferred range index %d changed before deferred rig patches: got %q, want %q", d.rigName, d.agentStart+i, got, want)
 			}
 		}
-		if err := applyOverrides(cfg.Agents[d.agentStart:d.agentEnd], d.overrides, d.rigName); err != nil {
+		if err := applyOverridesToCandidates(cfg.Agents, candidatesByRig[d.rigName], d.overrides, d.rigName); err != nil {
 			return fmt.Errorf("rig %q: %w", d.rigName, err)
+		}
+	}
+	return nil
+}
+
+func applyDefaultRigPatches(cfg *City) error {
+	for i := range cfg.Defaults.Rig.Patches {
+		patch := &cfg.Defaults.Rig.Patches[i]
+		if patch.Agent == "" {
+			return fmt.Errorf("defaults.rig.patches[%d]: agent name is required", i)
+		}
+		if patch.Dir != nil {
+			return fmt.Errorf("defaults.rig.patches[%d]: dir cannot be set", i)
+		}
+		if targetDir, _ := ParseQualifiedName(strings.TrimSpace(patch.Agent)); targetDir != "" {
+			return fmt.Errorf("defaults.rig.patches[%d]: agent must not include a rig prefix", i)
+		}
+		for j := range cfg.Rigs {
+			rigName := cfg.Rigs[j].Name
+			matches := matchingRigAgentIndexes(cfg.Agents, rigName, patch.Agent)
+			switch len(matches) {
+			case 0:
+				continue
+			case 1:
+				applyAgentOverride(&cfg.Agents[matches[0]], patch)
+			default:
+				return fmt.Errorf("defaults.rig.patches[%d]: agent %q is ambiguous in rig %q; use a binding-qualified name", i, patch.Agent, rigName)
+			}
 		}
 	}
 	return nil
@@ -2752,26 +2798,60 @@ func qualifiedAgentNames(agents []Agent) []string {
 	return names
 }
 
-// applyOverrides applies per-rig overrides to pack-stamped agents.
-// Each override targets an agent by name within the pack.
-func applyOverrides(agents []Agent, overrides []AgentOverride, _ string) error {
-	for i, ov := range overrides {
-		if ov.Agent == "" {
+// applyOverrides applies per-rig overrides to every effective agent in a rig.
+// Bare names are accepted when unambiguous; binding-qualified names select an
+// agent when multiple imported packs expose the same local name.
+func applyOverrides(agents []Agent, overrides []AgentOverride, rigName string) error {
+	return applyOverridesToCandidates(agents, rigAgentIndexes(agents, rigName), overrides, rigName)
+}
+
+func applyOverridesToCandidates(agents []Agent, candidates []int, overrides []AgentOverride, rigName string) error {
+	for i := range overrides {
+		ov := &overrides[i]
+		if strings.TrimSpace(ov.Agent) == "" {
 			return fmt.Errorf("overrides[%d]: agent name is required", i)
 		}
-		found := false
-		for j := range agents {
-			if agents[j].Name == ov.Agent {
-				applyAgentOverride(&agents[j], &ov)
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("overrides[%d]: agent %q not found in pack", i, ov.Agent)
+		matches := matchingAgentIndexes(agents, candidates, rigName, ov.Agent)
+		switch len(matches) {
+		case 0:
+			return fmt.Errorf("overrides[%d]: agent %q not found in rig %q", i, ov.Agent, rigName)
+		case 1:
+			applyAgentOverride(&agents[matches[0]], ov)
+		default:
+			return fmt.Errorf("overrides[%d]: agent %q is ambiguous in rig %q; use a binding-qualified name", i, ov.Agent, rigName)
 		}
 	}
 	return nil
+}
+
+func matchingRigAgentIndexes(agents []Agent, rigName, target string) []int {
+	return matchingAgentIndexes(agents, rigAgentIndexes(agents, rigName), rigName, target)
+}
+
+func rigAgentIndexes(agents []Agent, rigName string) []int {
+	var indexes []int
+	for i := range agents {
+		if agents[i].Dir == rigName {
+			indexes = append(indexes, i)
+		}
+	}
+	return indexes
+}
+
+func matchingAgentIndexes(agents []Agent, candidates []int, rigName, target string) []int {
+	targetDir, targetName := ParseQualifiedName(strings.TrimSpace(target))
+	if targetName == "" || targetDir != "" && targetDir != rigName {
+		return nil
+	}
+	bindingQualified := strings.Contains(targetName, ".")
+	var matches []int
+	for _, i := range candidates {
+		if bindingQualified && agents[i].BindingQualifiedName() == targetName ||
+			!bindingQualified && agents[i].Name == targetName {
+			matches = append(matches, i)
+		}
+	}
+	return matches
 }
 
 // applyAgentOverride applies a single rig-scoped override to an agent. The

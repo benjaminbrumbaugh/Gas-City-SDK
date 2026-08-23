@@ -561,7 +561,7 @@ func LoadWithIncludesOptions(fs fsys.FS, path string, opts LoadOptions, extraInc
 	// deferred so they still run after city-level [[patches.agent]].
 	rigFormulaDirs := make(map[string][]string)
 	var deferredRigPatches []deferredRigPatches
-	if HasPackRigs(root.Rigs) {
+	if len(root.Rigs) > 0 {
 		rigPackOpts := opts
 		rigPackOpts.deferRigPatches = true
 		rigPackOpts.deferredRigPatches = &deferredRigPatches
@@ -571,6 +571,9 @@ func LoadWithIncludesOptions(fs fsys.FS, path string, opts LoadOptions, extraInc
 		if len(root.LoadWarnings) > 0 {
 			prov.Warnings = appendUnique(prov.Warnings, root.LoadWarnings...)
 		}
+	}
+	if err := applyDefaultRigPatches(root); err != nil {
+		return nil, nil, fmt.Errorf("applying default rig patches: %w", err)
 	}
 
 	// Apply patches after all packs (city and rig) are expanded so that
@@ -639,7 +642,7 @@ func LoadWithIncludesOptions(fs fsys.FS, path string, opts LoadOptions, extraInc
 	if err := applyDeferredRigPatches(root, deferredRigPatches); err != nil {
 		return nil, nil, fmt.Errorf("applying rig patches: %w", err)
 	}
-	if HasPackRigs(root.Rigs) {
+	if len(root.Rigs) > 0 {
 		// Track pack-expanded agents in provenance after deferred rig patches so
 		// Dir overrides are keyed by the agent's final qualified identity.
 		trackPackExpandedAgents(prov, root.Agents)

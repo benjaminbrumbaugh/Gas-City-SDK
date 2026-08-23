@@ -666,7 +666,8 @@ type Rig struct {
 // AgentOverride modifies a pack-stamped agent for a specific rig.
 // Uses pointer fields to distinguish "not set" from "set to zero value."
 type AgentOverride struct {
-	// Agent is the name of the pack agent to override (required).
+	// Agent is the pack agent to override (required). A binding-qualified name
+	// disambiguates imports that expose the same local agent name.
 	Agent string `toml:"agent" jsonschema:"required"`
 	// Dir overrides the stamped dir (default: rig name).
 	Dir *string `toml:"dir,omitempty"`

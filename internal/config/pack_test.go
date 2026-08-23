@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,17 @@ func writeFile(t *testing.T, dir, name, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func findAgentByQualifiedName(t *testing.T, agents []Agent, qualifiedName string) *Agent {
+	t.Helper()
+	for i := range agents {
+		if agents[i].QualifiedName() == qualifiedName {
+			return &agents[i]
+		}
+	}
+	t.Fatalf("agent %q not found", qualifiedName)
+	return nil
 }
 
 type readCountingFS struct {
@@ -79,6 +91,45 @@ name = "refinery"
 	// witness should have adjusted prompt_template path.
 	if !strings.Contains(cfg.Agents[0].PromptTemplate, "prompts/witness.md") {
 		t.Errorf("witness prompt_template = %q, want to contain prompts/witness.md", cfg.Agents[0].PromptTemplate)
+	}
+}
+
+func TestExpandPacks_AppliesDefaultRigPatches(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "packs/work/pack.toml", `
+[pack]
+name = "work"
+schema = 2
+
+[[agent]]
+name = "worker"
+scope = "rig"
+max_active_sessions = 2
+`)
+	maxSessions := 100
+	rigMaxSessions := 7
+	cfg := &City{
+		Defaults: PackDefaults{Rig: PackRigDefaults{Patches: []AgentOverride{{
+			Agent:             "worker",
+			MaxActiveSessions: &maxSessions,
+		}}}},
+		Rigs: []Rig{{
+			Name:     "alpha",
+			Path:     "/tmp/alpha",
+			Includes: []string{"packs/work"},
+			RigPatches: []AgentOverride{{
+				Agent:             "worker",
+				MaxActiveSessions: &rigMaxSessions,
+			}},
+		}},
+	}
+
+	if err := ExpandPacks(cfg, fsys.OSFS{}, dir, nil); err != nil {
+		t.Fatalf("ExpandPacks: %v", err)
+	}
+	agent := findAgentByQualifiedName(t, cfg.Agents, "alpha/worker")
+	if agent.MaxActiveSessions == nil || *agent.MaxActiveSessions != 7 {
+		t.Fatalf("max_active_sessions = %v, want rig override 7", agent.MaxActiveSessions)
 	}
 }
 
@@ -528,6 +579,407 @@ scope = "rig"
 	}
 }
 
+func TestLoadWithIncludes_DefaultRigPatchMayWaitForFutureRigs(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "city.toml", `
+[workspace]
+name = "test"
+
+[[defaults.rig.patches]]
+agent = "worker"
+
+[defaults.rig.patches.pool]
+max = 100
+`)
+	writeFile(t, dir, "pack.toml", `
+[pack]
+name = "test"
+schema = 2
+`)
+
+	cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	if got := len(cfg.Defaults.Rig.Patches); got != 1 {
+		t.Fatalf("len(defaults.rig.patches) = %d, want 1", got)
+	}
+	patch := cfg.Defaults.Rig.Patches[0]
+	if patch.Agent != "worker" || patch.Pool == nil || patch.Pool.Max == nil || *patch.Pool.Max != 100 {
+		t.Fatalf("defaults.rig.patches[0] = %#v, want worker pool.max=100", patch)
+	}
+}
+
+func TestLoadWithIncludes_DefaultRigPatchAppliesBeforeRigSpecificPatch(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "city.toml", `
+[workspace]
+name = "test"
+
+[[defaults.rig.patches]]
+agent = "worker"
+
+[defaults.rig.patches.pool]
+max = 100
+
+[[patches.agent]]
+name = "worker"
+rig = "*"
+max_active_sessions = 50
+
+[[rigs]]
+name = "alpha"
+path = "/tmp/alpha"
+
+[rigs.imports.gs]
+source = "./packs/gastown"
+
+[[rigs]]
+name = "beta"
+path = "/tmp/beta"
+
+[rigs.imports.gs]
+source = "./packs/gastown"
+
+[[rigs.patches]]
+agent = "worker"
+
+[rigs.patches.pool]
+max = 7
+`)
+	writeFile(t, dir, "packs/gastown/pack.toml", `
+[pack]
+name = "gastown"
+schema = 2
+
+[[agent]]
+name = "worker"
+scope = "rig"
+max_active_sessions = 2
+`)
+
+	cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	got := make(map[string]int)
+	for _, agent := range cfg.Agents {
+		if agent.Name == "worker" && agent.MaxActiveSessions != nil {
+			got[agent.QualifiedName()] = *agent.MaxActiveSessions
+		}
+	}
+	if got["alpha/gs.worker"] != 50 {
+		t.Errorf("alpha worker max_active_sessions = %d, want city patch 50", got["alpha/gs.worker"])
+	}
+	if got["beta/gs.worker"] != 7 {
+		t.Errorf("beta worker max_active_sessions = %d, want rig override 7", got["beta/gs.worker"])
+	}
+}
+
+func TestLoadWithIncludes_DefaultRigPatchAppliesToCityImportedRigAgents(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "city.toml", `
+[workspace]
+name = "test"
+
+[imports.gs]
+source = "./packs/gastown"
+
+[[defaults.rig.patches]]
+agent = "worker"
+
+[defaults.rig.patches.pool]
+max = 100
+
+[[rigs]]
+name = "alpha"
+path = "/tmp/alpha"
+
+[[rigs.patches]]
+agent = "gs.worker"
+max_active_sessions = 7
+
+[[rigs]]
+name = "beta"
+path = "/tmp/beta"
+`)
+	writeFile(t, dir, "packs/gastown/pack.toml", `
+[pack]
+name = "gastown"
+schema = 2
+
+[[agent]]
+name = "worker"
+scope = "rig"
+max_active_sessions = 2
+`)
+
+	cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	alpha := findAgentByQualifiedName(t, cfg.Agents, "alpha/gs.worker")
+	if alpha.MaxActiveSessions == nil || *alpha.MaxActiveSessions != 7 {
+		t.Errorf("alpha/gs.worker max_active_sessions = %v, want rig override 7", alpha.MaxActiveSessions)
+	}
+	beta := findAgentByQualifiedName(t, cfg.Agents, "beta/gs.worker")
+	if beta.MaxActiveSessions == nil || *beta.MaxActiveSessions != 100 {
+		t.Errorf("beta/gs.worker max_active_sessions = %v, want default 100", beta.MaxActiveSessions)
+	}
+}
+
+func TestLoadWithIncludes_DefaultRigPatchTargetsBindingQualifiedAgent(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "city.toml", `
+[workspace]
+name = "test"
+
+[imports.one]
+source = "./packs/one"
+
+[imports.two]
+source = "./packs/two"
+
+[[defaults.rig.patches]]
+agent = "one.worker"
+max_active_sessions = 100
+
+[[rigs]]
+name = "alpha"
+path = "/tmp/alpha"
+`)
+	for binding, maxSessions := range map[string]int{"one": 2, "two": 3} {
+		writeFile(t, dir, "packs/"+binding+"/pack.toml", fmt.Sprintf(`
+[pack]
+name = %q
+schema = 2
+
+[[agent]]
+name = "worker"
+scope = "rig"
+max_active_sessions = %d
+`, binding, maxSessions))
+	}
+
+	cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	one := findAgentByQualifiedName(t, cfg.Agents, "alpha/one.worker")
+	two := findAgentByQualifiedName(t, cfg.Agents, "alpha/two.worker")
+	if *one.MaxActiveSessions != 100 || *two.MaxActiveSessions != 3 {
+		t.Fatalf("binding-selective default produced one=%d two=%d, want 100 and 3", *one.MaxActiveSessions, *two.MaxActiveSessions)
+	}
+}
+
+func TestApplyDefaultRigPatchesRejectsAmbiguousBareAgent(t *testing.T) {
+	maxSessions := 100
+	cfg := &City{
+		Defaults: PackDefaults{Rig: PackRigDefaults{Patches: []AgentOverride{{
+			Agent:             "worker",
+			MaxActiveSessions: &maxSessions,
+		}}}},
+		Rigs: []Rig{{Name: "alpha"}},
+		Agents: []Agent{
+			{Dir: "alpha", BindingName: "one", Name: "worker"},
+			{Dir: "alpha", BindingName: "two", Name: "worker"},
+		},
+	}
+
+	err := applyDefaultRigPatches(cfg)
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("applyDefaultRigPatches error = %v, want ambiguous bare target", err)
+	}
+}
+
+func TestApplyOverridesKeepsOriginalRigCandidatesAfterDirChange(t *testing.T) {
+	newDir := "ops"
+	maxSessions := 7
+	agents := []Agent{{Dir: "alpha", BindingName: "gs", Name: "worker"}}
+	overrides := []AgentOverride{
+		{Agent: "gs.worker", Dir: &newDir},
+		{Agent: "gs.worker", MaxActiveSessions: &maxSessions},
+	}
+
+	if err := applyOverrides(agents, overrides, "alpha"); err != nil {
+		t.Fatalf("applyOverrides: %v", err)
+	}
+	if agents[0].Dir != "ops" || agents[0].MaxActiveSessions == nil || *agents[0].MaxActiveSessions != 7 {
+		t.Fatalf("agent = %#v, want dir ops and max_active_sessions 7", agents[0])
+	}
+}
+
+func TestLoadWithIncludes_RigPatchMissingCityImportedTargetFails(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "city.toml", `
+[workspace]
+name = "test"
+
+[imports.gs]
+source = "./packs/gastown"
+
+[[rigs]]
+name = "alpha"
+path = "/tmp/alpha"
+
+[[rigs.patches]]
+agent = "missing"
+suspended = true
+`)
+	writeFile(t, dir, "packs/gastown/pack.toml", `
+[pack]
+name = "gastown"
+schema = 2
+
+[[agent]]
+name = "worker"
+scope = "rig"
+`)
+
+	_, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err == nil || !strings.Contains(err.Error(), `agent "missing" not found`) {
+		t.Fatalf("LoadWithIncludes error = %v, want missing explicit rig patch target", err)
+	}
+}
+
+func TestLoadWithIncludes_DefaultRigPatchSkipsRigsWithoutTarget(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "city.toml", `
+[workspace]
+name = "test"
+
+[[defaults.rig.patches]]
+agent = "worker"
+max_active_sessions = 100
+
+[[rigs]]
+name = "alpha"
+path = "/tmp/alpha"
+
+[rigs.imports.work]
+source = "./packs/work"
+
+[[rigs]]
+name = "beta"
+path = "/tmp/beta"
+
+[rigs.imports.other]
+source = "./packs/other"
+`)
+	writeFile(t, dir, "packs/work/pack.toml", `
+[pack]
+name = "work"
+schema = 2
+
+[[agent]]
+name = "worker"
+scope = "rig"
+max_active_sessions = 2
+`)
+	writeFile(t, dir, "packs/other/pack.toml", `
+[pack]
+name = "other"
+schema = 2
+
+[[agent]]
+name = "helper"
+scope = "rig"
+max_active_sessions = 3
+`)
+
+	cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	worker := findAgentByQualifiedName(t, cfg.Agents, "alpha/work.worker")
+	if worker.MaxActiveSessions == nil || *worker.MaxActiveSessions != 100 {
+		t.Errorf("worker max_active_sessions = %v, want 100", worker.MaxActiveSessions)
+	}
+	helper := findAgentByQualifiedName(t, cfg.Agents, "beta/other.helper")
+	if helper.MaxActiveSessions == nil || *helper.MaxActiveSessions != 3 {
+		t.Errorf("helper max_active_sessions = %v, want unchanged 3", helper.MaxActiveSessions)
+	}
+}
+
+func TestLoadWithIncludes_DefaultRigPatchRejectsDirOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "city.toml", `
+[workspace]
+name = "test"
+
+[[defaults.rig.patches]]
+agent = "worker"
+dir = "shared"
+`)
+	writeFile(t, dir, "pack.toml", `
+[pack]
+name = "test"
+schema = 2
+`)
+
+	_, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err == nil || !strings.Contains(err.Error(), "defaults.rig.patches[0]: dir cannot be set") {
+		t.Fatalf("LoadWithIncludes error = %v, want default rig dir rejection", err)
+	}
+}
+
+func TestLoadWithIncludes_DefaultRigPatchValuesAreIsolated(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "city.toml", `
+[workspace]
+name = "test"
+
+[imports.gs]
+source = "./packs/gastown"
+
+[[defaults.rig.patches]]
+agent = "worker"
+assigned_work_defer_limit = 4
+env = { SHARED = "default" }
+
+[defaults.rig.patches.pool]
+max = 100
+
+[[rigs]]
+name = "alpha"
+path = "/tmp/alpha"
+
+[[rigs]]
+name = "beta"
+path = "/tmp/beta"
+`)
+	writeFile(t, dir, "packs/gastown/pack.toml", `
+[pack]
+name = "gastown"
+schema = 2
+
+[[agent]]
+name = "worker"
+scope = "rig"
+env = { BASE = "pack" }
+`)
+
+	cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	alpha := findAgentByQualifiedName(t, cfg.Agents, "alpha/gs.worker")
+	beta := findAgentByQualifiedName(t, cfg.Agents, "beta/gs.worker")
+	*alpha.MaxActiveSessions = 1
+	*alpha.AssignedWorkDeferLimit = 1
+	alpha.Env["ALPHA_ONLY"] = "true"
+	if *beta.MaxActiveSessions != 100 || *beta.AssignedWorkDeferLimit != 4 {
+		t.Fatalf("mutating alpha changed beta: max=%d defer=%d", *beta.MaxActiveSessions, *beta.AssignedWorkDeferLimit)
+	}
+	if _, leaked := beta.Env["ALPHA_ONLY"]; leaked {
+		t.Fatal("mutating alpha env changed beta env")
+	}
+	defaults := cfg.Defaults.Rig.Patches[0]
+	if *defaults.Pool.Max != 100 || *defaults.AssignedWorkDeferLimit != 4 {
+		t.Fatalf("mutating alpha changed defaults: max=%d defer=%d", *defaults.Pool.Max, *defaults.AssignedWorkDeferLimit)
+	}
+}
+
 func TestLoadWithIncludes_ProvenanceUsesDeferredRigPatchFinalIdentity(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "city.toml", `
@@ -570,6 +1022,42 @@ scope = "rig"
 	}
 }
 
+func TestLoadWithIncludes_ProvenanceUsesCityImportedRigPatchFinalIdentity(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "city.toml", `
+[workspace]
+name = "test"
+
+[imports.gs]
+source = "./packs/gastown"
+
+[[rigs]]
+name = "proj"
+path = "/tmp/proj"
+
+[[rigs.patches]]
+agent = "gs.worker"
+dir = "ops"
+`)
+	writeFile(t, dir, "packs/gastown/pack.toml", `
+[pack]
+name = "gastown"
+schema = 2
+
+[[agent]]
+name = "worker"
+scope = "rig"
+`)
+
+	_, prov, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	if _, ok := prov.Agents["ops/gs.worker"]; !ok {
+		t.Fatalf("provenance agents = %#v, want final identity ops/gs.worker", prov.Agents)
+	}
+}
+
 func TestApplyDeferredRigPatchesRejectsShiftedAgentRange(t *testing.T) {
 	suspended := true
 	cfg := &City{
@@ -600,6 +1088,41 @@ func TestApplyDeferredRigPatchesRejectsShiftedAgentRange(t *testing.T) {
 	}
 	if cfg.Agents[0].Suspended {
 		t.Fatal("wrong agent was patched before shifted range was rejected")
+	}
+}
+
+func TestApplyDeferredRigPatchesPreservesOriginalRigOwnership(t *testing.T) {
+	newDir := "beta"
+	suspended := true
+	cfg := &City{Agents: []Agent{
+		{Dir: "alpha", Name: "worker"},
+		{Dir: "beta", Name: "helper"},
+	}}
+	deferred := []deferredRigPatches{
+		{
+			rigName:            "alpha",
+			agentStart:         0,
+			agentEnd:           1,
+			expectedAgentCount: 2,
+			expectedAgentNames: []string{"alpha/worker"},
+			overrides:          []AgentOverride{{Agent: "worker", Dir: &newDir}},
+		},
+		{
+			rigName:            "beta",
+			agentStart:         1,
+			agentEnd:           2,
+			expectedAgentCount: 2,
+			expectedAgentNames: []string{"beta/helper"},
+			overrides:          []AgentOverride{{Agent: "worker", Suspended: &suspended}},
+		},
+	}
+
+	err := applyDeferredRigPatches(cfg, deferred)
+	if err == nil || !strings.Contains(err.Error(), `agent "worker" not found in rig "beta"`) {
+		t.Fatalf("applyDeferredRigPatches error = %v, want beta missing-target error", err)
+	}
+	if cfg.Agents[0].Suspended {
+		t.Fatal("beta patch captured the agent relocated from alpha")
 	}
 }
 

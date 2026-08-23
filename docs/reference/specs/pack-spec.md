@@ -286,6 +286,18 @@ Default rig imports are a city deployment concern. The canonical surface is
 `city.toml` `[defaults.rig.imports.<binding>]`. `pack.toml` must not define
 `[defaults.rig.imports]`.
 
+Default rig agent patches are also a city deployment concern. Declare
+`[[defaults.rig.patches]]` in `city.toml` to configure every current and future
+rig that materializes the named agent. A rig without that agent is unaffected,
+and a default may wait for a future rig to introduce it. Defaults cannot set
+`dir`, because changing every matching agent to one shared identity would break
+rig isolation. Use a binding-qualified target such as `gastown.polecat` when
+multiple imports expose the same local name; a bare name is accepted only when
+it is unambiguous within each rig. These defaults apply before city-level
+`[[patches.agent]]` and
+each rig's explicit `[[rigs.patches]]`, so either narrower layer can override
+the city-wide value. `pack.toml` must not define `[[defaults.rig.patches]]`.
+
 Rig imports are written under the `[[rigs]]` table they apply to:
 
 ```toml
@@ -894,9 +906,8 @@ use `[[patches.agent]]`. In pack-level patches, `dir = ""` matches by local
 `name` only, because a reusable pack normally does not know which rig will
 consume it.
 
-City-level patches run after city-level pack expansion and before rig-level
-pack expansion. A city-level patch targets agents that already exist in the
-effective city config at that point.
+City-level patches run after city- and rig-level pack expansion. A city-level
+patch can therefore target any agent in the merged effective config.
 
 Rig overrides run after all packs for that rig have expanded and after their
 agents have been stamped with the rig name.
@@ -906,14 +917,17 @@ The patch/default order is:
 1. Recursive pack imports load.
 2. Pack-level patches apply inside each pack load.
 3. City-level packs expand.
-4. City-level patches apply.
-5. Rig-level packs expand.
-6. Rig overrides apply.
-7. Pack globals apply.
-8. Implicit agents are injected.
-9. Root city `[agent_defaults]` applies.
+4. Rig-level packs expand.
+5. Default rig patches apply to matching rig-scoped agents.
+6. City-level patches apply.
+7. Rig overrides apply.
+8. Pack globals apply.
+9. Implicit agents are injected.
+10. Root city `[agent_defaults]` applies.
 
-If a patch target does not exist when the patch runs, loading fails.
+If a city or explicit rig patch target does not exist when the patch runs,
+loading fails. A default rig patch may have no current match because it also
+configures rigs registered in the future.
 
 ### 2.7. Defaults
 

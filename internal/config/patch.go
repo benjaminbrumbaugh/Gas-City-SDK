@@ -504,6 +504,14 @@ func applyAgentPatchFields(a *Agent, p *AgentPatch) {
 	applyAgentMutation(a, p, SessionSleepSourceAgentPatch)
 }
 
+func clonePointer[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
 // applyAgentMutation applies the overridable fields of an AgentPatch to an
 // agent. Agent patches and rig-scoped agent overrides share this single merge
 // body: applyAgentOverride adapts an AgentOverride into an AgentPatch (via
@@ -568,7 +576,7 @@ func applyAgentMutation(a *Agent, p *AgentPatch, sleepSource string) {
 		a.MaxSessionAgeJitter = *p.MaxSessionAgeJitter
 	}
 	if p.AssignedWorkDeferLimit != nil {
-		a.AssignedWorkDeferLimit = p.AssignedWorkDeferLimit
+		a.AssignedWorkDeferLimit = clonePointer(p.AssignedWorkDeferLimit)
 	}
 	if p.SleepAfterIdle != nil {
 		a.SleepAfterIdle = NormalizeSleepAfterIdle(*p.SleepAfterIdle)
@@ -581,10 +589,10 @@ func applyAgentMutation(a *Agent, p *AgentPatch, sleepSource string) {
 		a.InstallAgentHooks = append(a.InstallAgentHooks, p.InstallAgentHooksAppend...)
 	}
 	if p.HooksInstalled != nil {
-		a.HooksInstalled = p.HooksInstalled
+		a.HooksInstalled = clonePointer(p.HooksInstalled)
 	}
 	if p.InjectAssignedSkills != nil {
-		a.InjectAssignedSkills = p.InjectAssignedSkills
+		a.InjectAssignedSkills = clonePointer(p.InjectAssignedSkills)
 	}
 	if len(p.SessionSetup) > 0 {
 		a.SessionSetup = append([]string(nil), p.SessionSetup...)
@@ -605,10 +613,10 @@ func applyAgentMutation(a *Agent, p *AgentPatch, sleepSource string) {
 		a.OverlayDir = *p.OverlayDir
 	}
 	if p.DefaultSlingFormula != nil {
-		a.DefaultSlingFormula = p.DefaultSlingFormula
+		a.DefaultSlingFormula = clonePointer(p.DefaultSlingFormula)
 	}
 	if p.Attach != nil {
-		a.Attach = p.Attach
+		a.Attach = clonePointer(p.Attach)
 	}
 	// TODO: depends_on = [] cannot clear inherited deps (len check skips
 	// empty lists). This matches the existing pattern for all list fields
@@ -662,10 +670,10 @@ func applyAgentMutation(a *Agent, p *AgentPatch, sleepSource string) {
 		delete(a.Env, k)
 	}
 	if p.MaxActiveSessions != nil {
-		a.MaxActiveSessions = p.MaxActiveSessions
+		a.MaxActiveSessions = clonePointer(p.MaxActiveSessions)
 	}
 	if p.MinActiveSessions != nil {
-		a.MinActiveSessions = p.MinActiveSessions
+		a.MinActiveSessions = clonePointer(p.MinActiveSessions)
 	}
 	if p.ScaleCheck != nil {
 		a.ScaleCheck = *p.ScaleCheck
@@ -688,10 +696,10 @@ func applyAgentMutation(a *Agent, p *AgentPatch, sleepSource string) {
 // applyPoolOverride maps legacy pool override fields to the new Agent fields.
 func applyPoolOverride(a *Agent, po *PoolOverride) {
 	if po.Min != nil {
-		a.MinActiveSessions = po.Min
+		a.MinActiveSessions = clonePointer(po.Min)
 	}
 	if po.Max != nil {
-		a.MaxActiveSessions = po.Max
+		a.MaxActiveSessions = clonePointer(po.Max)
 	}
 	if po.Check != nil {
 		a.ScaleCheck = *po.Check

@@ -160,7 +160,7 @@ AgentOverride modifies a pack-stamped agent for a specific rig.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `agent` | string | **yes** |  | Agent is the name of the pack agent to override (required). |
+| `agent` | string | **yes** |  | Agent is the pack agent to override (required). A binding-qualified name disambiguates imports that expose the same local agent name. |
 | `dir` | string |  |  | Dir overrides the stamped dir (default: rig name). |
 | `work_dir` | string |  |  | WorkDir overrides the agent's working directory without changing its qualified identity or rig association. |
 | `tmux_alias` | string |  |  | TmuxAlias overrides the tmux session name template (see Agent.TmuxAlias for semantics). |
@@ -649,6 +649,7 @@ PackRigDefaults holds the [defaults.rig] block — defaults applied to rigs crea
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `imports` | map[string]Import |  |  |  |
+| `patches` | []AgentOverride |  |  | Patches are inherited by every rig that materializes the named agent. Binding-qualified names select among duplicate local names. They cannot set Dir. City agent patches and explicit [[rigs.patches]] entries apply later and therefore take precedence. |
 
 ## Patches
 
