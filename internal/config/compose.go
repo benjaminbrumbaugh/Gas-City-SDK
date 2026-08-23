@@ -642,7 +642,7 @@ func LoadWithIncludesOptions(fs fsys.FS, path string, opts LoadOptions, extraInc
 	if err := applyDeferredRigPatches(root, deferredRigPatches); err != nil {
 		return nil, nil, fmt.Errorf("applying rig patches: %w", err)
 	}
-	if HasPackRigs(root.Rigs) {
+	if len(root.Rigs) > 0 {
 		// Track pack-expanded agents in provenance after deferred rig patches so
 		// Dir overrides are keyed by the agent's final qualified identity.
 		trackPackExpandedAgents(prov, root.Agents)

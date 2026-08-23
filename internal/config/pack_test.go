@@ -1022,6 +1022,42 @@ scope = "rig"
 	}
 }
 
+func TestLoadWithIncludes_ProvenanceUsesCityImportedRigPatchFinalIdentity(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "city.toml", `
+[workspace]
+name = "test"
+
+[imports.gs]
+source = "./packs/gastown"
+
+[[rigs]]
+name = "proj"
+path = "/tmp/proj"
+
+[[rigs.patches]]
+agent = "gs.worker"
+dir = "ops"
+`)
+	writeFile(t, dir, "packs/gastown/pack.toml", `
+[pack]
+name = "gastown"
+schema = 2
+
+[[agent]]
+name = "worker"
+scope = "rig"
+`)
+
+	_, prov, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(dir, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	if _, ok := prov.Agents["ops/gs.worker"]; !ok {
+		t.Fatalf("provenance agents = %#v, want final identity ops/gs.worker", prov.Agents)
+	}
+}
+
 func TestApplyDeferredRigPatchesRejectsShiftedAgentRange(t *testing.T) {
 	suspended := true
 	cfg := &City{
