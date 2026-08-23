@@ -2216,7 +2216,7 @@
             "$ref": "#/$defs/AgentOverride"
           },
           "type": "array",
-          "description": "Patches are agent overrides inherited by every rig. Explicit\n[[rigs.patches]] entries apply later and therefore take precedence."
+          "description": "Patches are inherited by every rig that materializes the named agent.\nThey cannot set Dir. City agent patches and explicit [[rigs.patches]]\nentries apply later and therefore take precedence."
         }
       },
       "additionalProperties": false,

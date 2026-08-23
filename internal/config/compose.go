@@ -572,6 +572,9 @@ func LoadWithIncludesOptions(fs fsys.FS, path string, opts LoadOptions, extraInc
 			prov.Warnings = appendUnique(prov.Warnings, root.LoadWarnings...)
 		}
 	}
+	if err := applyDefaultRigPatches(root); err != nil {
+		return nil, nil, fmt.Errorf("applying default rig patches: %w", err)
+	}
 
 	// Apply patches after all packs (city and rig) are expanded so that
 	// [[patches.agent]] blocks in city.toml can target pack-derived
