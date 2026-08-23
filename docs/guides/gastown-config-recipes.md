@@ -48,7 +48,8 @@ gc rig add /path/to/myproject --name myproject
 
 Default rig patches configure pack agents before any rig-specific patch. They
 are valid even when the city has no registered rigs yet, so one durable setting
-applies to current and future rigs:
+applies to the named agent in current and future rigs. Rigs that do not
+materialize that agent are unaffected, and defaults cannot override `dir`:
 
 ```toml
 # city.toml

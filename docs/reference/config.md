@@ -649,7 +649,7 @@ PackRigDefaults holds the [defaults.rig] block — defaults applied to rigs crea
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `imports` | map[string]Import |  |  |  |
-| `patches` | []AgentOverride |  |  | Patches are agent overrides inherited by every rig. Explicit [[rigs.patches]] entries apply later and therefore take precedence. |
+| `patches` | []AgentOverride |  |  | Patches are inherited by every rig that materializes the named agent. They cannot set Dir. City agent patches and explicit [[rigs.patches]] entries apply later and therefore take precedence. |
 
 ## Patches
 

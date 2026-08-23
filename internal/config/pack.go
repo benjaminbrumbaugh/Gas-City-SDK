@@ -84,8 +84,9 @@ type PackDefaults struct {
 // to rigs created from this pack.
 type PackRigDefaults struct {
 	Imports map[string]Import `toml:"imports,omitempty"`
-	// Patches are agent overrides inherited by every rig. Explicit
-	// [[rigs.patches]] entries apply later and therefore take precedence.
+	// Patches are inherited by every rig that materializes the named agent.
+	// They cannot set Dir. City agent patches and explicit [[rigs.patches]]
+	// entries apply later and therefore take precedence.
 	Patches []AgentOverride `toml:"patches,omitempty"`
 }
 
@@ -511,8 +512,7 @@ func expandPacks(cfg *City, fs fsys.FS, cityRoot string, rigFormulaDirs map[stri
 
 		// Apply or defer per-rig overrides/patches after all packs for this rig.
 		// V2 accepts both "overrides" (V1) and "patches" (V2) TOML keys.
-		allOverrides := append([]AgentOverride(nil), cfg.Defaults.Rig.Patches...)
-		allOverrides = append(allOverrides, rig.Overrides...)
+		allOverrides := append([]AgentOverride(nil), rig.Overrides...)
 		allOverrides = append(allOverrides, rig.RigPatches...)
 		if opts.deferRigPatches {
 			if opts.deferredRigPatches == nil {
@@ -2743,6 +2743,29 @@ func applyDeferredRigPatches(cfg *City, deferred []deferredRigPatches) error {
 		}
 		if err := applyOverrides(cfg.Agents[d.agentStart:d.agentEnd], d.overrides, d.rigName); err != nil {
 			return fmt.Errorf("rig %q: %w", d.rigName, err)
+		}
+	}
+	return nil
+}
+
+func applyDefaultRigPatches(cfg *City) error {
+	rigNames := make(map[string]bool, len(cfg.Rigs))
+	for i := range cfg.Rigs {
+		rigNames[cfg.Rigs[i].Name] = true
+	}
+	for i := range cfg.Defaults.Rig.Patches {
+		patch := &cfg.Defaults.Rig.Patches[i]
+		if patch.Agent == "" {
+			return fmt.Errorf("defaults.rig.patches[%d]: agent name is required", i)
+		}
+		if patch.Dir != nil {
+			return fmt.Errorf("defaults.rig.patches[%d]: dir cannot be set", i)
+		}
+		for j := range cfg.Agents {
+			agent := &cfg.Agents[j]
+			if rigNames[agent.Dir] && agent.Name == patch.Agent {
+				applyAgentOverride(agent, patch)
+			}
 		}
 	}
 	return nil
