@@ -16,7 +16,7 @@ func TestValidateOutcomeOpaqueRejectsAnySkPrefixedValue(t *testing.T) {
 		"SK-" + strings.Repeat("a", 48),
 	} {
 		t.Run(value, func(t *testing.T) {
-			if err := validateOutcomeOpaque("work_id", value, true); err == nil {
+			if err := validateOutcomeOpaque("work_id", value); err == nil {
 				t.Fatalf("sk-prefixed identifier %q accepted", value)
 			}
 		})

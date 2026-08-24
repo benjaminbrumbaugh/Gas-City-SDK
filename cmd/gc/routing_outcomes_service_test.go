@@ -44,8 +44,13 @@ func TestRoutingDecisionServiceProjectsClaimedAndTerminalWithoutLifecycleMutatio
 			for key, value := range work.Metadata {
 				metadata[key] = value
 			}
-			metadata[beadmeta.SessionIDMetadataKey] = "session-service"
 			return routingdecision.OutcomeWorkSnapshot{Found: true, WorkID: work.ID, Status: work.Status, Assignee: work.Assignee, ClaimFence: work.ClaimFence, Metadata: metadata}, nil
+		},
+		// The claimed decision carries no authoritative execution facts in this
+		// fixture, so identity stays unavailable (fail closed) — exactly what
+		// the causal boundary requires.
+		outcomeAuthority: func(_ context.Context, _ routingdecision.DecisionPayload) routingdecision.OutcomeAuthoritySnapshot {
+			return routingdecision.OutcomeAuthoritySnapshot{}
 		},
 	}
 	page, err := service.Outcomes(context.Background(), routingdecision.OutcomeListOptions{Limit: 10})
@@ -53,7 +58,7 @@ func TestRoutingDecisionServiceProjectsClaimedAndTerminalWithoutLifecycleMutatio
 		t.Fatalf("Outcomes = (%+v, %v)", page, err)
 	}
 	wantObserved := time.Date(2026, 8, 7, 23, 30, 0, 0, time.UTC).Unix()
-	if page.Items[0].Status != routingdecision.OutcomeStatusClaimed || page.Items[0].SessionID == nil || *page.Items[0].SessionID != "session-service" || page.Items[0].ObservedAtUnix != wantObserved {
+	if page.Items[0].Status != routingdecision.OutcomeStatusClaimed || page.Items[0].SessionID != nil || page.Items[0].ExecutionID != nil || page.Items[0].ObservedAtUnix != wantObserved {
 		t.Fatalf("item = %+v", page.Items[0])
 	}
 	after, err := fixture.ledger.Get(fixture.payload.DecisionID)

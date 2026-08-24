@@ -60,7 +60,7 @@ func TestProjectOutcomeAcceptsPortableOpaqueIDsFromSignedDecision(t *testing.T) 
 
 	record := ProjectOutcome(DecisionWithAudits{
 		Record: Record{Payload: payload, State: StateRefusedAfterRace},
-	}, OutcomeWorkSnapshot{}, time.Unix(1, 0).UTC())
+	}, OutcomeWorkSnapshot{}, OutcomeAuthoritySnapshot{}, time.Unix(1, 0).UTC())
 	if err := record.Validate(); err != nil {
 		t.Fatalf("accepted signed decision became unprojectable: %v", err)
 	}
@@ -68,6 +68,15 @@ func TestProjectOutcomeAcceptsPortableOpaqueIDsFromSignedDecision(t *testing.T) 
 
 func TestProjectOutcomeUsesOnlyExactCarrierMetadataAndRedactsRawFields(t *testing.T) {
 	observed := time.Date(2026, 8, 22, 12, 34, 56, 0, time.UTC)
+	gotAuthority := func() OutcomeAuthoritySnapshot {
+		return OutcomeAuthoritySnapshot{
+			Session:                  &OutcomeSessionRecord{SessionID: "session-1"},
+			Execution:                &OutcomeExecutionRecord{ExecutionID: "execution-1", SessionID: "session-1", Completed: true},
+			TerminalDispositionKnown: true,
+			Disposition:              OutcomeDispositionShipped,
+			FailureClass:             OutcomeFailureNone,
+		}
+	}
 	payload := testDecisionPayload(t)
 	payload.RecommendationID = "routing/v2:" + strings.Repeat("c", 64)
 	payload.BindingID = BindingID(payload)
@@ -93,14 +102,20 @@ func TestProjectOutcomeUsesOnlyExactCarrierMetadataAndRedactsRawFields(t *testin
 	payload.ClaimFence = 3
 	item.Record.Payload = payload
 
-	got := ProjectOutcome(item, work, observed)
+	got := ProjectOutcome(item, work, OutcomeAuthoritySnapshot{
+		Session:                  &OutcomeSessionRecord{SessionID: "session-1"},
+		Execution:                &OutcomeExecutionRecord{ExecutionID: "execution-1", SessionID: "session-1", Completed: true},
+		TerminalDispositionKnown: true,
+		Disposition:              OutcomeDispositionShipped,
+		FailureClass:             OutcomeFailureNone,
+	}, observed)
 	if err := got.Validate(); err != nil {
 		t.Fatalf("projected outcome is schema-invalid: %v: %+v", err, got)
 	}
 	if !strings.HasPrefix(got.OutcomeID, "outcome_") {
 		t.Fatalf("outcome id = %q", got.OutcomeID)
 	}
-	same := ProjectOutcome(item, work, observed.Add(time.Hour))
+	same := ProjectOutcome(item, work, gotAuthority(), observed.Add(time.Hour))
 	if same.OutcomeID != got.OutcomeID {
 		t.Fatalf("same immutable input changed outcome id: %q != %q", same.OutcomeID, got.OutcomeID)
 	}
@@ -110,9 +125,15 @@ func TestProjectOutcomeUsesOnlyExactCarrierMetadataAndRedactsRawFields(t *testin
 		changedWork.Metadata[key] = value
 	}
 	changedWork.Metadata["gc.work_outcome"] = "no-op"
-	changed := ProjectOutcome(item, changedWork, observed)
-	if changed.OutcomeID == got.OutcomeID {
-		t.Fatal("changed canonical outcome content retained outcome id")
+	// Work-outcome metadata no longer feeds the projection at all; changing it
+	// must not change the canonical bytes. Authority evidence does.
+	changed := ProjectOutcome(item, changedWork, gotAuthority(), observed)
+	if changed.OutcomeID != got.OutcomeID {
+		t.Fatal("work-outcome metadata change altered the immutable outcome id")
+	}
+	unchangedByMetadata := ProjectOutcome(item, changedWork, OutcomeAuthoritySnapshot{}, observed)
+	if unchangedByMetadata.OutcomeID == got.OutcomeID {
+		t.Fatal("authority evidence removal did not change the immutable outcome id")
 	}
 	if got.SchemaVersion != OutcomeSchemaVersion || got.CorrelationID != payload.WorkBeadID || got.RecommendationID != payload.RecommendationID {
 		t.Fatalf("identity = %+v", got)
@@ -181,7 +202,7 @@ func TestProjectOutcomeDoesNotClaimSuccessWithoutCompleteCausalExecutionIDs(t *t
 				delete(work.Metadata, beadmeta.CurrentRunIDMetadataKey)
 			}
 
-			got := ProjectOutcome(item, work, now)
+			got := ProjectOutcome(item, work, OutcomeAuthoritySnapshot{}, now)
 			if got.Status == OutcomeStatusSucceeded || got.Disposition != OutcomeDispositionUnknown || got.FailureClass != OutcomeFailureUnknown {
 				t.Fatalf("incomplete causal evidence invented success: %+v", got)
 			}
@@ -198,7 +219,7 @@ func TestProjectOutcomeClassifiesClaimedNotAdmittedAndUnknownCoverage(t *testing
 	payload.RecommendationID = "routing/v2:" + strings.Repeat("d", 64)
 	payload.BindingID = BindingID(payload)
 
-	claimed := ProjectOutcome(DecisionWithAudits{Record: Record{Payload: payload, State: StateClaimed}}, OutcomeWorkSnapshot{}, now)
+	claimed := ProjectOutcome(DecisionWithAudits{Record: Record{Payload: payload, State: StateClaimed}}, OutcomeWorkSnapshot{}, OutcomeAuthoritySnapshot{}, now)
 	if claimed.Status != OutcomeStatusClaimed || claimed.Disposition != OutcomeDispositionUnknown || claimed.Coverage != OutcomeCoverageUnknown || claimed.FailureClass != OutcomeFailureUnknown || claimed.ActualTargetID == nil || claimed.ActualConfigDigest == nil {
 		t.Fatalf("claimed = %+v", claimed)
 	}
@@ -209,18 +230,18 @@ func TestProjectOutcomeClassifiesClaimedNotAdmittedAndUnknownCoverage(t *testing
 			beadmeta.RunTargetMetadataKey:                 payload.Target,
 			beadmeta.SessionIDMetadataKey:                 "session-enriched",
 		},
-	}, now)
+	}, OutcomeAuthoritySnapshot{}, now)
 	if exactClaimed.OutcomeID == claimed.OutcomeID {
 		t.Fatal("outcome evidence enrichment retained the same immutable outcome_id")
 	}
 
-	refused := ProjectOutcome(DecisionWithAudits{Record: Record{Payload: payload, State: StateRefusedAfterRace}}, OutcomeWorkSnapshot{}, now)
+	refused := ProjectOutcome(DecisionWithAudits{Record: Record{Payload: payload, State: StateRefusedAfterRace}}, OutcomeWorkSnapshot{}, OutcomeAuthoritySnapshot{}, now)
 	if refused.Status != OutcomeStatusFailed || refused.Disposition != OutcomeDispositionNotAdmitted || refused.FailureClass != OutcomeFailureUnknown || refused.ActualTargetID != nil || refused.ActualConfigDigest != nil {
 		t.Fatalf("refused = %+v", refused)
 	}
 
 	mismatched := OutcomeWorkSnapshot{Found: true, WorkID: payload.WorkBeadID, Metadata: map[string]string{"gc.routing_decision_id": "another-decision"}}
-	partial := ProjectOutcome(DecisionWithAudits{Record: Record{Payload: payload, State: StateOutcomeRecorded}}, mismatched, now)
+	partial := ProjectOutcome(DecisionWithAudits{Record: Record{Payload: payload, State: StateOutcomeRecorded}}, mismatched, OutcomeAuthoritySnapshot{}, now)
 	if partial.Coverage != OutcomeCoveragePartial || partial.Disposition != OutcomeDispositionUnknown {
 		t.Fatalf("mismatched = %+v", partial)
 	}
@@ -284,10 +305,13 @@ func TestOutcomeRecordValidationRequiresCompleteCausalIDsForSuccess(t *testing.T
 			beadmeta.RoutingDecisionIDMetadataKey:         payload.DecisionID,
 			beadmeta.RoutingDecisionClaimFenceMetadataKey: strconv.FormatInt(payload.ClaimFence, 10),
 			beadmeta.RunTargetMetadataKey:                 payload.Target,
-			beadmeta.WorkOutcomeMetadataKey:               "no_op",
-			beadmeta.SessionIDMetadataKey:                 "session-1",
-			beadmeta.CurrentRunIDMetadataKey:              "execution-1",
 		},
+	}, OutcomeAuthoritySnapshot{
+		Session:                  &OutcomeSessionRecord{SessionID: "session-1"},
+		Execution:                &OutcomeExecutionRecord{ExecutionID: "execution-1", SessionID: "session-1", Completed: true},
+		TerminalDispositionKnown: true,
+		Disposition:              OutcomeDispositionNoOp,
+		FailureClass:             OutcomeFailureNone,
 	}, time.Unix(1, 0).UTC())
 	if record.Status != OutcomeStatusSucceeded {
 		t.Fatalf("complete causal record did not succeed: %+v", record)
@@ -323,7 +347,7 @@ func TestValidateOutcomeOpaqueAllowsOrdinarySecurityWordIdentifiers(t *testing.T
 		"xoxb-worker",
 	} {
 		t.Run(value, func(t *testing.T) {
-			if err := validateOutcomeOpaque("work_id", value, true); err != nil {
+			if err := validateOutcomeOpaque("work_id", value); err != nil {
 				t.Fatalf("ordinary identifier rejected: %v", err)
 			}
 		})
@@ -347,7 +371,7 @@ func TestValidateOutcomeOpaqueRejectsCredentialShapesWithoutEcho(t *testing.T) {
 		"basic auth credential": "basic-" + strings.Repeat("a", 32),
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := validateOutcomeOpaque("session_id", value, true)
+			err := validateOutcomeOpaque("session_id", value)
 			if err == nil {
 				t.Fatal("credential-shaped identifier accepted")
 			}

@@ -15,7 +15,9 @@ const (
 	// OutcomeSchemaVersion identifies the strict redacted recommendation-outcome wire contract.
 	OutcomeSchemaVersion = "routing/outcome/v2"
 
-	OutcomeProvenanceDecision  = "authoritative_routing_decision"
+	// OutcomeProvenanceDecision identifies a projection backed only by the signed decision.
+	OutcomeProvenanceDecision = "authoritative_routing_decision"
+	// OutcomeProvenanceExactWork identifies a projection also backed by an exact work carrier.
 	OutcomeProvenanceExactWork = "authoritative_routing_decision_exact_work"
 )
 
@@ -23,40 +25,56 @@ const (
 type OutcomeDisposition string
 
 const (
-	OutcomeDispositionShipped     OutcomeDisposition = "shipped"
-	OutcomeDispositionNoOp        OutcomeDisposition = "no_op"
-	OutcomeDispositionBlocked     OutcomeDisposition = "blocked"
-	OutcomeDispositionAbandoned   OutcomeDisposition = "abandoned"
+	// OutcomeDispositionShipped reports successful delivery by an authoritative terminal record.
+	OutcomeDispositionShipped OutcomeDisposition = "shipped"
+	// OutcomeDispositionNoOp reports an authoritative successful no-op.
+	OutcomeDispositionNoOp OutcomeDisposition = "no_op"
+	// OutcomeDispositionBlocked reports an authoritative blocked execution.
+	OutcomeDispositionBlocked OutcomeDisposition = "blocked"
+	// OutcomeDispositionAbandoned reports an authoritative abandoned execution.
+	OutcomeDispositionAbandoned OutcomeDisposition = "abandoned"
+	// OutcomeDispositionNotAdmitted reports that execution was never admitted.
 	OutcomeDispositionNotAdmitted OutcomeDisposition = "not_admitted"
-	OutcomeDispositionUnknown     OutcomeDisposition = "unknown"
+	// OutcomeDispositionUnknown reports unavailable terminal truth.
+	OutcomeDispositionUnknown OutcomeDisposition = "unknown"
 )
 
 // OutcomeFailureClass is the bounded public failure vocabulary.
 type OutcomeFailureClass string
 
 const (
-	OutcomeFailureNone      OutcomeFailureClass = "none"
+	// OutcomeFailureNone reports that an authoritative successful execution had no failure.
+	OutcomeFailureNone OutcomeFailureClass = "none"
+	// OutcomeFailureTransient reports an authoritative transient execution failure.
 	OutcomeFailureTransient OutcomeFailureClass = "transient"
-	OutcomeFailureHard      OutcomeFailureClass = "hard"
-	OutcomeFailureUnknown   OutcomeFailureClass = "unknown"
+	// OutcomeFailureHard reports an authoritative hard execution failure.
+	OutcomeFailureHard OutcomeFailureClass = "hard"
+	// OutcomeFailureUnknown reports unavailable or unclassified failure truth.
+	OutcomeFailureUnknown OutcomeFailureClass = "unknown"
 )
 
 // OutcomeCoverage reports whether the exact work-side carrier was available.
 type OutcomeCoverage string
 
 const (
+	// OutcomeCoverageAvailable reports that all required authority records were available.
 	OutcomeCoverageAvailable OutcomeCoverage = "available"
-	OutcomeCoveragePartial   OutcomeCoverage = "partial"
-	OutcomeCoverageUnknown   OutcomeCoverage = "unknown"
+	// OutcomeCoveragePartial reports that some required authority records were unavailable.
+	OutcomeCoveragePartial OutcomeCoverage = "partial"
+	// OutcomeCoverageUnknown reports that exact carrier evidence was unavailable.
+	OutcomeCoverageUnknown OutcomeCoverage = "unknown"
 )
 
 // OutcomeStatus is the portable execution result status.
 type OutcomeStatus string
 
 const (
-	OutcomeStatusClaimed   OutcomeStatus = "claimed"
+	// OutcomeStatusClaimed reports admitted work whose execution is not terminal.
+	OutcomeStatusClaimed OutcomeStatus = "claimed"
+	// OutcomeStatusSucceeded reports an authoritative successful terminal execution.
 	OutcomeStatusSucceeded OutcomeStatus = "succeeded"
-	OutcomeStatusFailed    OutcomeStatus = "failed"
+	// OutcomeStatusFailed reports non-admission, unknown terminal truth, or authoritative failure.
+	OutcomeStatusFailed OutcomeStatus = "failed"
 )
 
 // OutcomeRecord is a strict redacted projection. It intentionally has no fields
@@ -108,11 +126,19 @@ type OutcomeWorkSnapshot struct {
 	Metadata   map[string]string
 }
 
-// ProjectOutcome produces one redacted record from the durable decision and an
-// optional exact work carrier. No audit reason or open-world metadata value is
-// copied except the explicitly allowlisted opaque IDs, target, disposition,
-// failure class, and one-way digest fields.
-func ProjectOutcome(item DecisionWithAudits, work OutcomeWorkSnapshot, observedAt time.Time) (result OutcomeRecord) {
+// ProjectOutcome produces one redacted record from the durable decision, an
+// optional exact work carrier, and the typed causal-authority snapshot. No
+// audit reason or open-world metadata value is copied except the explicitly
+// allowlisted opaque IDs, target, and one-way digest fields.
+//
+// Causal-truth boundary (routing/outcome/v2): disposition, session identity,
+// execution identity, and failure class derive ONLY from the authority
+// snapshot — real session/execution records plus a demonstrated terminal
+// disposition record. Work-bead metadata proves exact carrier/closure only;
+// values like gc.work_outcome, gc.session_id, gc.current_run_id, and
+// gc.failure_class are caller-authored and never trusted for truth. Missing,
+// mismatched, or ambiguous authority fails closed to unknown.
+func ProjectOutcome(item DecisionWithAudits, work OutcomeWorkSnapshot, authority OutcomeAuthoritySnapshot, observedAt time.Time) (result OutcomeRecord) {
 	payload := item.Record.Payload
 	observedAt = latestOutcomeObservedAt(item, observedAt)
 	result = OutcomeRecord{
@@ -148,22 +174,30 @@ func ProjectOutcome(item DecisionWithAudits, work OutcomeWorkSnapshot, observedA
 	actualTarget := strings.TrimSpace(work.Metadata[beadmeta.RunTargetMetadataKey])
 	result.ActualTargetID = &actualTarget
 	result.AdmissionReceiptID = optionalOutcomeOpaque(item.AdmissionReceiptID)
-	result.SessionID = optionalString(firstNonEmpty(
-		work.Metadata[beadmeta.SessionIDMetadataKey],
-		work.Metadata[beadmeta.SessionIDCamelMetadataKey],
-	))
-	result.ExecutionID = optionalString(strings.TrimSpace(work.Metadata[beadmeta.CurrentRunIDMetadataKey]))
+	// Causal identity and terminal truth come exclusively from the typed
+	// authority records. Work metadata is never consulted here: a closed,
+	// exact-bound carrier with fabricated gc.work_outcome / gc.session_id /
+	// gc.current_run_id / gc.failure_class projects as available-coverage
+	// unknown, never succeeded or failed-known.
+	sessionID, executionID := authority.authoritativeCausalIdentity()
+	result.SessionID = sessionID
+	result.ExecutionID = executionID
 
 	if item.Record.State != StateOutcomeRecorded {
 		result.Coverage = OutcomeCoverageAvailable
 		return result
 	}
-	disposition, ok := publicOutcomeDisposition(work.Metadata[beadmeta.WorkOutcomeMetadataKey])
-	if !ok {
+	if !authority.TerminalDispositionKnown {
+		return result
+	}
+	disposition := authority.Disposition
+	if disposition != OutcomeDispositionShipped && disposition != OutcomeDispositionNoOp &&
+		disposition != OutcomeDispositionBlocked && disposition != OutcomeDispositionAbandoned {
 		return result
 	}
 	if disposition == OutcomeDispositionShipped || disposition == OutcomeDispositionNoOp {
-		if result.AdmissionReceiptID == nil || result.SessionID == nil || result.ExecutionID == nil {
+		if result.AdmissionReceiptID == nil || result.SessionID == nil || result.ExecutionID == nil ||
+			authority.Execution == nil || !authority.Execution.Completed {
 			result.Coverage = OutcomeCoveragePartial
 			return result
 		}
@@ -173,12 +207,18 @@ func ProjectOutcome(item DecisionWithAudits, work OutcomeWorkSnapshot, observedA
 		result.FailureClass = OutcomeFailureNone
 		return result
 	}
+	// Known failure dispositions require the demonstrated terminal execution
+	// record too; without it the failure truth is unavailable.
+	if authority.Execution == nil || !authority.Execution.Completed {
+		result.Coverage = OutcomeCoveragePartial
+		return result
+	}
 	result.Disposition = disposition
 	result.Coverage = OutcomeCoverageAvailable
-	switch strings.TrimSpace(work.Metadata[beadmeta.FailureClassMetadataKey]) {
-	case string(OutcomeFailureTransient):
+	switch authority.FailureClass {
+	case OutcomeFailureTransient:
 		result.FailureClass = OutcomeFailureTransient
-	case string(OutcomeFailureHard):
+	case OutcomeFailureHard:
 		result.FailureClass = OutcomeFailureHard
 	default:
 		result.FailureClass = OutcomeFailureUnknown
@@ -186,6 +226,7 @@ func ProjectOutcome(item DecisionWithAudits, work OutcomeWorkSnapshot, observedA
 	return result
 }
 
+// Validate enforces the strict routing/outcome/v2 wire and causal invariants.
 func (record OutcomeRecord) Validate() error {
 	if record.SchemaVersion != OutcomeSchemaVersion || record.ObservedAtUnix <= 0 {
 		return invalidf("outcome schema or observed time is invalid")
@@ -195,7 +236,7 @@ func (record OutcomeRecord) Validate() error {
 		"recommendation_id": record.RecommendationID, "work_id": record.WorkID,
 		"requested_target_id": record.RequestedTargetID,
 	} {
-		if err := validateOutcomeOpaque(name, value, true); err != nil {
+		if err := validateOutcomeOpaque(name, value); err != nil {
 			return err
 		}
 	}
@@ -206,7 +247,7 @@ func (record OutcomeRecord) Validate() error {
 		"execution_id":         record.ExecutionID,
 	} {
 		if value != nil {
-			if err := validateOutcomeOpaque(name, *value, true); err != nil {
+			if err := validateOutcomeOpaque(name, *value); err != nil {
 				return err
 			}
 		}
@@ -218,7 +259,7 @@ func (record OutcomeRecord) Validate() error {
 		return invalidf("actual target and config digest must be a nullable pair")
 	}
 	if record.ActualTargetID != nil {
-		if err := validateOutcomeOpaque("actual_target_id", *record.ActualTargetID, true); err != nil {
+		if err := validateOutcomeOpaque("actual_target_id", *record.ActualTargetID); err != nil {
 			return err
 		}
 		if !validPortableDigest(*record.ActualConfigDigest) {
@@ -291,43 +332,11 @@ func exactOutcomeCarrier(payload DecisionPayload, work OutcomeWorkSnapshot) bool
 	return err == nil && fence == payload.ClaimFence
 }
 
-func publicOutcomeDisposition(value string) (OutcomeDisposition, bool) {
-	switch strings.TrimSpace(value) {
-	case "shipped":
-		return OutcomeDispositionShipped, true
-	case "no-op", "no_op":
-		return OutcomeDispositionNoOp, true
-	case "blocked":
-		return OutcomeDispositionBlocked, true
-	case "abandoned":
-		return OutcomeDispositionAbandoned, true
-	default:
-		return OutcomeDispositionUnknown, false
-	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value = strings.TrimSpace(value); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func stringPointer(value string) *string { return &value }
-
-func optionalString(value string) *string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	return stringPointer(value)
-}
 
 func optionalOutcomeOpaque(value string) *string {
 	value = strings.TrimSpace(value)
-	if value == "" || validateOutcomeOpaque("optional outcome identity", value, true) != nil {
+	if value == "" || validateOutcomeOpaque("optional outcome identity", value) != nil {
 		return nil
 	}
 	return stringPointer(value)
@@ -354,8 +363,8 @@ func isHex(value string) bool {
 	return err == nil
 }
 
-func validateOutcomeOpaque(name, value string, required bool) error {
-	if err := validateText(name, value, required); err != nil || value == "" {
+func validateOutcomeOpaque(name, value string) error {
+	if err := validateText(name, value, true); err != nil || value == "" {
 		return err
 	}
 	if len(value) > 256 || !isOutcomeAlphaNumeric(value[0]) {
