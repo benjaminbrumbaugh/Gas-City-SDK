@@ -68,10 +68,12 @@ func TestRoutingClientUsesGeneratedRoutesAndFinalGrantBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.SetGrantSource(func(got GrantBinding) (string, error) {
+	if err := client.SetGrantSource(func(got GrantBinding) (string, error) {
 		binding = got
 		return "grant-token", nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	status, err := client.RoutingStatus()
 	if err != nil || status.Status != routingdecision.AvailabilityReady {
 		t.Fatalf("RoutingStatus = (%+v, %v)", status, err)

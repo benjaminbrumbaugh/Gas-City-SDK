@@ -256,11 +256,11 @@ func TestRoutingOutcomeOpenAPISchemaEnforcesPortableConstraints(t *testing.T) {
 		return result.Errors
 	}
 	clone := func(value map[string]any) map[string]any {
-		copy := make(map[string]any, len(value))
+		duplicate := make(map[string]any, len(value))
 		for key, item := range value {
-			copy[key] = item
+			duplicate[key] = item
 		}
-		return copy
+		return duplicate
 	}
 
 	if errors := validate(valid); len(errors) != 0 {
@@ -281,6 +281,29 @@ func TestRoutingOutcomeOpenAPISchemaEnforcesPortableConstraints(t *testing.T) {
 			candidate[field] = nil
 			if errors := validate(candidate); len(errors) == 0 {
 				t.Fatalf("succeeded OutcomeRecord accepted null %s", field)
+			}
+		})
+	}
+	for _, field := range []string{"correlation_id", "routing_decision_id", "work_id", "admission_receipt_id", "session_id", "execution_id", "requested_target_id", "actual_target_id"} {
+		t.Run("rejects sk- prefix "+field, func(t *testing.T) {
+			candidate := clone(valid)
+			candidate[field] = "sk-" + strings.Repeat("a", 48)
+			if errors := validate(candidate); len(errors) == 0 {
+				t.Fatalf("OutcomeRecord.%s accepted an sk- prefixed identifier", field)
+			}
+		})
+		t.Run("rejects short sk- "+field, func(t *testing.T) {
+			candidate := clone(valid)
+			candidate[field] = "sk-task"
+			if errors := validate(candidate); len(errors) == 0 {
+				t.Fatalf("OutcomeRecord.%s accepted a short sk- identifier", field)
+			}
+		})
+		t.Run("accepts ordinary tokenizer-task "+field, func(t *testing.T) {
+			candidate := clone(valid)
+			candidate[field] = "tokenizer-task"
+			if errors := validate(candidate); len(errors) != 0 {
+				t.Fatalf("OutcomeRecord.%s rejected an ordinary identifier: %v", field, errors)
 			}
 		})
 	}
@@ -405,7 +428,7 @@ func TestRoutingIngestPerimeterAcceptsSignedLoopbackWithoutGlobalWriteVerifier(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusForbidden {
 		got, _ := io.ReadAll(response.Body)
 		t.Fatalf("mutation through self-read transport = %d %s", response.StatusCode, got)
