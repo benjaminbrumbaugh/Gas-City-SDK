@@ -374,6 +374,11 @@ func validateOutcomeOpaque(name, value string, required bool) error {
 
 func resemblesOutcomeSecret(value string) bool {
 	lowered := strings.ToLower(value)
+	if strings.HasPrefix(lowered, "sk-") {
+		// Frozen Wayfinder safeString rule: every sk- prefixed value is
+		// rejected unconditionally, with no length-scoped exception.
+		return true
+	}
 	for _, shape := range []struct {
 		prefix                 string
 		minimum, maximumSuffix int

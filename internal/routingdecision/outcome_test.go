@@ -316,7 +316,6 @@ func TestValidateOutcomeOpaqueAllowsOrdinarySecurityWordIdentifiers(t *testing.T
 		"private_key_rotation",
 		"prompt-run",
 		"secretariat-task",
-		"sk-task",
 		"rk-job",
 		"bearer-worker",
 		"basic-session",
