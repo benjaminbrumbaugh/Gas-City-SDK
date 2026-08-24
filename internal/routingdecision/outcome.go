@@ -358,7 +358,7 @@ func validateOutcomeOpaque(name, value string, required bool) error {
 	if err := validateText(name, value, required); err != nil || value == "" {
 		return err
 	}
-	if len(value) > 256 || !isOutcomeOpaqueChar(value[0]) {
+	if len(value) > 256 || !isOutcomeAlphaNumeric(value[0]) {
 		return invalidf("%s is not a safe opaque identifier", name)
 	}
 	for index := 0; index < len(value); index++ {
@@ -421,7 +421,7 @@ func outcomeCredentialSuffix(value string, minimum, maximum int) bool {
 
 func outcomeUpperAlphaNumeric(value string) bool {
 	for index := 0; index < len(value); index++ {
-		if !(value[index] >= 'A' && value[index] <= 'Z' || value[index] >= '0' && value[index] <= '9') {
+		if (value[index] < 'A' || value[index] > 'Z') && (value[index] < '0' || value[index] > '9') {
 			return false
 		}
 	}
