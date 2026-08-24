@@ -71,6 +71,7 @@ type Alternative struct {
 type DecisionPayload struct {
 	Schema             int           `json:"schema"`
 	DecisionID         string        `json:"decision_id"`
+	RecommendationID   string        `json:"recommendation_id,omitempty"`
 	BindingID          string        `json:"binding_id"`
 	WorkBeadID         string        `json:"work_bead_id"`
 	WorkRevision       int64         `json:"work_revision"`
@@ -116,6 +117,7 @@ type Signature struct {
 type canonicalDecision struct {
 	Schema             int           `json:"schema"`
 	DecisionID         string        `json:"decision_id"`
+	RecommendationID   string        `json:"recommendation_id,omitempty"`
 	BindingID          string        `json:"binding_id"`
 	WorkBeadID         string        `json:"work_bead_id"`
 	WorkRevision       int64         `json:"work_revision"`
@@ -182,7 +184,7 @@ func normalizedDecision(payload DecisionPayload, includeBinding bool) canonicalD
 		bindingID = ""
 	}
 	return canonicalDecision{
-		Schema: payload.Schema, DecisionID: payload.DecisionID, BindingID: bindingID,
+		Schema: payload.Schema, DecisionID: payload.DecisionID, RecommendationID: payload.RecommendationID, BindingID: bindingID,
 		WorkBeadID: payload.WorkBeadID, WorkRevision: payload.WorkRevision, ClaimFence: payload.ClaimFence,
 		WorkStateDigest: payload.WorkStateDigest, City: payload.City, Rig: payload.Rig, Target: payload.Target,
 		TargetConfigDigest: payload.TargetConfigDigest, PolicyDigest: payload.PolicyDigest,
@@ -272,11 +274,14 @@ func (payload DecisionPayload) Validate() error {
 	}
 	for name, value := range map[string]string{
 		"rig": payload.Rig, "serve_as": payload.ServeAs, "provider": payload.Provider,
-		"endpoint": payload.Endpoint, "reason": payload.Reason,
+		"endpoint": payload.Endpoint, "reason": payload.Reason, "recommendation_id": payload.RecommendationID,
 	} {
 		if err := validateText(name, value, false); err != nil {
 			return err
 		}
+	}
+	if payload.RecommendationID != "" && !validRecommendationID(payload.RecommendationID) {
+		return invalidf("recommendation_id must be a routing/v2 decision identity")
 	}
 	for name, digest := range map[string]string{
 		"binding_id": payload.BindingID, "work_state_digest": payload.WorkStateDigest,

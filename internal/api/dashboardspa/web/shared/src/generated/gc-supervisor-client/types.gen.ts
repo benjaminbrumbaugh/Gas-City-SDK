@@ -832,6 +832,7 @@ export type DecisionPayload = {
     policy_digest: string;
     provider: string;
     reason: string;
+    recommendation_id?: string;
     rig: string;
     schema: number;
     serve_as: string;
@@ -2279,6 +2280,65 @@ export type OutboundResult = {
     Receipt: PublishReceipt;
     TranscriptEntry: ConversationTranscriptRecord;
 };
+
+export type OutcomePage = {
+    items: Array<OutcomeRecord> | null;
+    next_cursor?: string;
+    partial: boolean;
+    schema_version: 'routing/outcome/v2';
+};
+
+export type OutcomeRecord = {
+    actual_config_digest: string | null;
+    actual_target_id: ((string | null) & (string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null)) | null;
+    admission_receipt_id: ((string | null) & (string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null)) | null;
+    correlation_id: string & string & (string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string) & (string | string | string) & (string | string | string) & (string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string | string | string | string | string | string | string | string);
+    coverage: 'available' | 'partial' | 'unknown';
+    disposition: 'shipped' | 'no_op' | 'blocked' | 'abandoned' | 'not_admitted' | 'unknown';
+    execution_id: ((string | null) & (string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null)) | null;
+    failure_class: 'none' | 'transient' | 'hard' | 'unknown';
+    observed_at_unix: number;
+    outcome_id: string;
+    provenance: 'authoritative_routing_decision' | 'authoritative_routing_decision_exact_work';
+    recommendation_id: string;
+    requested_config_digest: string;
+    requested_target_id: string & string & (string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string) & (string | string | string) & (string | string | string) & (string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string | string | string | string | string | string | string | string);
+    routing_decision_id: ((string | null) & (string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null)) | null;
+    schema_version: 'routing/outcome/v2';
+    session_id: ((string | null) & (string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null)) | null;
+    status: 'claimed' | 'succeeded' | 'failed';
+    work_id: string & string & (string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string) & (string | string | string) & (string | string | string) & (string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string | string | string | string | string | string | string | string);
+} & ({
+    actual_config_digest: string;
+    actual_target_id: string;
+    disposition: 'unknown';
+    failure_class: 'unknown';
+    status: 'claimed';
+} | {
+    actual_config_digest: string;
+    actual_target_id: string;
+    admission_receipt_id: string;
+    disposition: 'shipped' | 'no_op';
+    execution_id: string;
+    failure_class: 'none';
+    session_id: string;
+    status: 'succeeded';
+} | {
+    actual_config_digest: string | null;
+    actual_target_id: string | null;
+    admission_receipt_id: string | null;
+    disposition: 'not_admitted';
+    execution_id: string | null;
+    failure_class: 'transient' | 'hard' | 'unknown';
+    session_id: string | null;
+    status: 'failed';
+} | {
+    actual_config_digest: string;
+    actual_target_id: string;
+    disposition: 'blocked' | 'abandoned' | 'unknown';
+    failure_class: 'transient' | 'hard' | 'unknown';
+    status: 'failed';
+});
 
 export type OutputTurn = {
     role: string;
@@ -17099,6 +17159,61 @@ export type GetRoutingEligibleResponses = {
 };
 
 export type GetRoutingEligibleResponse = GetRoutingEligibleResponses[keyof GetRoutingEligibleResponses];
+
+export type ListRoutingOutcomesData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: {
+        /**
+         * Maximum claimed or terminal outcome records to return.
+         */
+        limit?: number;
+        /**
+         * Opaque stable decision-ID keyset cursor.
+         */
+        cursor?: string;
+    };
+    url: '/v0/city/{cityName}/routing/outcomes';
+};
+
+export type ListRoutingOutcomesErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type ListRoutingOutcomesError = ListRoutingOutcomesErrors[keyof ListRoutingOutcomesErrors];
+
+export type ListRoutingOutcomesResponses = {
+    /**
+     * OK
+     */
+    200: OutcomePage;
+};
+
+export type ListRoutingOutcomesResponse = ListRoutingOutcomesResponses[keyof ListRoutingOutcomesResponses];
 
 export type GetRoutingStatusData = {
     body?: never;

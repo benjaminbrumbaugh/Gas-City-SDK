@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,28 +13,35 @@ import (
 	"github.com/gastownhall/gascity/internal/agentutil"
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/routingdecision"
 )
 
 type cityRoutingDecisionService struct {
-	mu              sync.RWMutex
-	store           *routingdecision.Store
-	verifier        *routingdecision.Verifier
-	status          string
-	reason          string
-	authorityReady  bool
-	closed          bool
-	purgeCursor     string
-	lifecycleCursor string
-	targets         func() ([]routingdecision.TargetSnapshot, error)
-	eligible        func() (routingdecision.SelectionSnapshot, error)
+	mu               sync.RWMutex
+	store            *routingdecision.Store
+	verifier         *routingdecision.Verifier
+	status           string
+	reason           string
+	authorityReady   bool
+	closed           bool
+	purgeCursor      string
+	lifecycleCursor  string
+	targets          func() ([]routingdecision.TargetSnapshot, error)
+	eligible         func() (routingdecision.SelectionSnapshot, error)
+	now              func() time.Time
+	outcomeWork      func(context.Context, routingdecision.DecisionPayload) (routingdecision.OutcomeWorkSnapshot, error)
+	outcomeAuthority func(context.Context, routingdecision.DecisionPayload) routingdecision.OutcomeAuthoritySnapshot
 }
 
 func initializeRoutingDecisionService(cr *CityRuntime) {
 	service := &cityRoutingDecisionService{
 		status: routingdecision.AvailabilityDenied, reason: routingdecision.ReasonAuthorityUnavailable,
 		targets: cr.routingDecisionTargetSnapshots, eligible: cr.routingDecisionEligibleSnapshot,
+		now: cr.routingDecisionNow, outcomeWork: cr.routingDecisionOutcomeWork,
+		outcomeAuthority: cr.routingDecisionOutcomeAuthority,
 	}
 	cr.routingDecisionService = service
 	verifier, err := routingdecision.LoadAuthorityFile(cr.cityPath)
@@ -140,6 +148,174 @@ func (service *cityRoutingDecisionService) List(ctx context.Context, opts routin
 		return routingdecision.DecisionPage{}, errors.New("routing decision service unavailable")
 	}
 	return service.store.ListDecisions(opts)
+}
+
+func (service *cityRoutingDecisionService) Outcomes(ctx context.Context, opts routingdecision.OutcomeListOptions) (routingdecision.OutcomePage, error) {
+	if err := ctx.Err(); err != nil {
+		return routingdecision.OutcomePage{}, err
+	}
+	service.mu.RLock()
+	defer service.mu.RUnlock()
+	if service.closed || service.status != routingdecision.AvailabilityReady || service.store == nil || service.outcomeWork == nil {
+		return routingdecision.OutcomePage{}, errors.New("routing decision service unavailable")
+	}
+	decisions, err := service.store.ListOutcomeDecisions(opts)
+	if err != nil {
+		return routingdecision.OutcomePage{}, err
+	}
+	observedAt := time.Now().UTC()
+	if service.now != nil {
+		observedAt = service.now().UTC()
+	}
+	page := routingdecision.OutcomePage{
+		SchemaVersion: routingdecision.OutcomeSchemaVersion,
+		Items:         make([]routingdecision.OutcomeRecord, 0, len(decisions.Items)),
+		NextCursor:    decisions.NextCursor,
+	}
+	for _, decision := range decisions.Items {
+		work, workErr := service.outcomeWork(ctx, decision.Record.Payload)
+		if workErr != nil {
+			work = routingdecision.OutcomeWorkSnapshot{}
+		}
+		var authority routingdecision.OutcomeAuthoritySnapshot
+		if service.outcomeAuthority != nil {
+			authority = service.outcomeAuthority(ctx, decision.Record.Payload)
+		}
+		outcome := routingdecision.ProjectOutcome(decision, work, authority, observedAt)
+		if err := outcome.Validate(); err != nil {
+			return routingdecision.OutcomePage{}, errors.New("routing outcome projection invalid")
+		}
+		if outcome.Coverage != routingdecision.OutcomeCoverageAvailable {
+			page.Partial = true
+		}
+		page.Items = append(page.Items, outcome)
+	}
+	return page, nil
+}
+
+func (cr *CityRuntime) routingDecisionOutcomeWork(ctx context.Context, payload routingdecision.DecisionPayload) (routingdecision.OutcomeWorkSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return routingdecision.OutcomeWorkSnapshot{}, err
+	}
+	var store beads.Store
+	for _, scope := range cr.routingDecisionScopes() {
+		if scope.rig == payload.Rig {
+			store = scope.store
+			break
+		}
+	}
+	if store == nil {
+		return routingdecision.OutcomeWorkSnapshot{}, errors.New("routing outcome work scope unavailable")
+	}
+	work, err := beads.HandlesFor(store).Live.Get(payload.WorkBeadID)
+	if err != nil {
+		return routingdecision.OutcomeWorkSnapshot{}, errors.New("routing outcome work unavailable")
+	}
+	// Carrier metadata is restricted to the binding allowlist. Causal keys
+	// (gc.work_outcome, gc.failure_class, gc.session_id, gc.current_run_id)
+	// are deliberately NOT collected: they are caller-authored open-world
+	// values that must never reach the projector as evidence.
+	metadata := make(map[string]string, 4)
+	for _, key := range []string{
+		beadmeta.RoutingDecisionIDMetadataKey, beadmeta.RoutingDecisionClaimFenceMetadataKey,
+		beadmeta.RunTargetMetadataKey, beadmeta.RoutedToMetadataKey,
+	} {
+		if value := work.Metadata[key]; value != "" {
+			metadata[key] = value
+		}
+	}
+	return routingdecision.OutcomeWorkSnapshot{
+		Found: true, WorkID: work.ID, Status: work.Status, Assignee: work.Assignee,
+		ClaimFence: work.ClaimFence, Metadata: metadata,
+	}, nil
+}
+
+// routingOutcomeAuthorityLimits bound every journal read in the causal-authority
+// resolver to a tail window. The event journal has no RunID index seam, so the
+// reads are exact-subject/type filtered and tail-capped instead of open-world
+// scans; evidence outside the window stays unavailable (fail closed), never
+// guessed.
+const (
+	routingOutcomeAssociationTailLimit = 16
+	routingOutcomeCompletedTailLimit   = 64
+	routingOutcomeMaxScanBytes         = 1 << 20
+)
+
+// routingDecisionOutcomeAuthority resolves the typed causal-authority snapshot
+// for one decision using ONLY real SDK-owned records:
+//
+//  1. Authoritative work→run association: execution.work_associated facts are
+//     minted solely by executionevent.EmitCurrent from the live convoy tracks
+//     graph; a fact whose Subject equals this decision's exact WorkBeadID names
+//     its workflow run in RunID.
+//  2. Terminal execution record: an execution.step_completed fact minted by
+//     executionevent.EmitLifecycle — which loads the workflow root from the
+//     graph store and rejects non-graph.v2 parents — carries RunID plus the
+//     SessionID it validated against the step bead.
+//  3. Session record: session.Store.Get over the session-class store proves the
+//     referenced id IS a session bead, so identity binds to a real record.
+//
+// Any missing layer leaves the corresponding snapshot fields nil; the
+// projector fails closed. No terminal-disposition authority exists yet
+// (gc.work_outcome is caller-authored), so TerminalDispositionKnown stays
+// false here by construction — succeeded/failed-known outcomes are
+// unreachable from production input until a real disposition record class
+// lands. That gap is recorded on OutcomeAuthoritySnapshot, not papered over.
+func (cr *CityRuntime) routingDecisionOutcomeAuthority(ctx context.Context, payload routingdecision.DecisionPayload) routingdecision.OutcomeAuthoritySnapshot {
+	if err := ctx.Err(); err != nil || strings.TrimSpace(cr.cityPath) == "" {
+		return routingdecision.OutcomeAuthoritySnapshot{}
+	}
+	eventsPath := filepath.Join(cr.cityPath, citylayout.RuntimeRoot, "events.jsonl")
+	associations, err := events.ReadFilteredTail(eventsPath, events.Filter{
+		Type: events.ExecutionWorkAssociated, Subject: payload.WorkBeadID,
+		MaxScanBytes: routingOutcomeMaxScanBytes,
+	}, routingOutcomeAssociationTailLimit)
+	if err != nil || len(associations) == 0 {
+		return routingdecision.OutcomeAuthoritySnapshot{}
+	}
+	runIDs := make(map[string]struct{}, len(associations))
+	for _, association := range associations {
+		if association.RunID != "" {
+			runIDs[association.RunID] = struct{}{}
+		}
+	}
+	completions, err := events.ReadFilteredTail(eventsPath, events.Filter{
+		Type: events.ExecutionStepCompleted, MaxScanBytes: routingOutcomeMaxScanBytes,
+	}, routingOutcomeCompletedTailLimit)
+	if err != nil {
+		return routingdecision.OutcomeAuthoritySnapshot{}
+	}
+	for _, completion := range completions {
+		if _, associated := runIDs[completion.RunID]; !associated {
+			continue
+		}
+		sessionID := strings.TrimSpace(completion.SessionID)
+		if sessionID == "" {
+			continue
+		}
+		var store beads.Store
+		for _, scope := range cr.routingDecisionScopes() {
+			if scope.rig == payload.Rig && scope.store != nil {
+				store = scope.store
+				break
+			}
+		}
+		if store == nil {
+			return routingdecision.OutcomeAuthoritySnapshot{}
+		}
+		if _, err := sessionFrontDoor(store).Get(sessionID); err != nil {
+			// The execution fact named a session record that does not exist:
+			// ambiguous evidence fails closed rather than partially reporting.
+			continue
+		}
+		executionID := strings.TrimSpace(completion.RunID)
+		return routingdecision.OutcomeAuthoritySnapshot{
+			Session:                  &routingdecision.OutcomeSessionRecord{SessionID: sessionID},
+			Execution:                &routingdecision.OutcomeExecutionRecord{ExecutionID: executionID, SessionID: sessionID, Completed: true},
+			TerminalDispositionKnown: false,
+		}
+	}
+	return routingdecision.OutcomeAuthoritySnapshot{}
 }
 
 func (service *cityRoutingDecisionService) Ingest(ctx context.Context, request routingdecision.IngestApprovedRequest) (routingdecision.IngestApprovedResult, error) {
@@ -262,7 +438,7 @@ func routingDecisionSelectionState(bead beads.Bead, now time.Time) (routingdecis
 	return state, true
 }
 
-func (cr *CityRuntime) reconcileRoutingDecisionLifecycle() (int, error) {
+func (cr *CityRuntime) reconcileRoutingDecisionLifecycle() (int, error) { //nolint:unparam // count is retained for focused lifecycle diagnostics.
 	if cr.routingDecisionStore == nil {
 		return 0, nil
 	}

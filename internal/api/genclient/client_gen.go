@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/routingdecision"
 	"github.com/oapi-codegen/runtime"
 )
 
@@ -111,6 +112,21 @@ func (e EventRotateArchiveCompressionStatus) Valid() bool {
 	case EventRotateArchiveCompressionStatusComplete:
 		return true
 	case EventRotateArchiveCompressionStatusPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OutcomePageSchemaVersion.
+const (
+	Routingoutcomev2 OutcomePageSchemaVersion = "routing/outcome/v2"
+)
+
+// Valid indicates whether the value is a known member of the OutcomePageSchemaVersion enum.
+func (e OutcomePageSchemaVersion) Valid() bool {
+	switch e {
+	case Routingoutcomev2:
 		return true
 	default:
 		return false
@@ -1707,6 +1723,7 @@ type DecisionPayload struct {
 	PolicyDigest       string         `json:"policy_digest"`
 	Provider           string         `json:"provider"`
 	Reason             string         `json:"reason"`
+	RecommendationId   *string        `json:"recommendation_id,omitempty"`
 	Rig                string         `json:"rig"`
 	Schema             int64          `json:"schema"`
 	ServeAs            string         `json:"serve_as"`
@@ -2950,6 +2967,20 @@ type OutboundResult struct {
 	Receipt         PublishReceipt               `json:"Receipt"`
 	TranscriptEntry ConversationTranscriptRecord `json:"TranscriptEntry"`
 }
+
+// OutcomePage defines model for OutcomePage.
+type OutcomePage struct {
+	Items         *[]OutcomeRecord         `json:"items"`
+	NextCursor    *string                  `json:"next_cursor,omitempty"`
+	Partial       bool                     `json:"partial"`
+	SchemaVersion OutcomePageSchemaVersion `json:"schema_version"`
+}
+
+// OutcomePageSchemaVersion defines model for OutcomePage.SchemaVersion.
+type OutcomePageSchemaVersion string
+
+// OutcomeRecord defines model for OutcomeRecord.
+type OutcomeRecord = routingdecision.OutcomeRecord
 
 // OutputTurn defines model for OutputTurn.
 type OutputTurn struct {
@@ -9870,6 +9901,15 @@ type IngestRoutingDecisionParams struct {
 
 	// IdempotencyKey Required stable key for exact signed-envelope retries.
 	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// ListRoutingOutcomesParams defines parameters for ListRoutingOutcomes.
+type ListRoutingOutcomesParams struct {
+	// Limit Maximum claimed or terminal outcome records to return.
+	Limit *int64 `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor Opaque stable decision-ID keyset cursor.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
 // GetV0CityByCityNameRunsParams defines parameters for GetV0CityByCityNameRuns.
@@ -19398,6 +19438,9 @@ type ClientInterface interface {
 	// GetRoutingEligible request
 	GetRoutingEligible(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListRoutingOutcomes request
+	ListRoutingOutcomes(ctx context.Context, cityName string, params *ListRoutingOutcomesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetRoutingStatus request
 	GetRoutingStatus(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -21568,6 +21611,18 @@ func (c *Client) IngestRoutingDecision(ctx context.Context, cityName string, par
 
 func (c *Client) GetRoutingEligible(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetRoutingEligibleRequest(c.Server, cityName)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListRoutingOutcomes(ctx context.Context, cityName string, params *ListRoutingOutcomesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListRoutingOutcomesRequest(c.Server, cityName, params)
 	if err != nil {
 		return nil, err
 	}
@@ -30500,6 +30555,78 @@ func NewGetRoutingEligibleRequest(server string, cityName string) (*http.Request
 	return req, nil
 }
 
+// NewListRoutingOutcomesRequest generates requests for ListRoutingOutcomes
+func NewListRoutingOutcomesRequest(server string, cityName string, params *ListRoutingOutcomesParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/routing/outcomes", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: "int64"}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetRoutingStatusRequest generates requests for GetRoutingStatus
 func NewGetRoutingStatusRequest(server string, cityName string) (*http.Request, error) {
 	var err error
@@ -33599,6 +33726,9 @@ type ClientWithResponsesInterface interface {
 
 	// GetRoutingEligibleWithResponse request
 	GetRoutingEligibleWithResponse(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*GetRoutingEligibleResponse, error)
+
+	// ListRoutingOutcomesWithResponse request
+	ListRoutingOutcomesWithResponse(ctx context.Context, cityName string, params *ListRoutingOutcomesParams, reqEditors ...RequestEditorFn) (*ListRoutingOutcomesResponse, error)
 
 	// GetRoutingStatusWithResponse request
 	GetRoutingStatusWithResponse(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*GetRoutingStatusResponse, error)
@@ -37320,6 +37450,33 @@ func (r GetRoutingEligibleResponse) StatusCode() int {
 	return 0
 }
 
+type ListRoutingOutcomesResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *OutcomePage
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r ListRoutingOutcomesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListRoutingOutcomesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type GetRoutingStatusResponse struct {
 	Body                      []byte
 	HTTPResponse              *http.Response
@@ -39908,6 +40065,15 @@ func (c *ClientWithResponses) GetRoutingEligibleWithResponse(ctx context.Context
 		return nil, err
 	}
 	return ParseGetRoutingEligibleResponse(rsp)
+}
+
+// ListRoutingOutcomesWithResponse request returning *ListRoutingOutcomesResponse
+func (c *ClientWithResponses) ListRoutingOutcomesWithResponse(ctx context.Context, cityName string, params *ListRoutingOutcomesParams, reqEditors ...RequestEditorFn) (*ListRoutingOutcomesResponse, error) {
+	rsp, err := c.ListRoutingOutcomes(ctx, cityName, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListRoutingOutcomesResponse(rsp)
 }
 
 // GetRoutingStatusWithResponse request returning *GetRoutingStatusResponse
@@ -48473,6 +48639,67 @@ func ParseGetRoutingEligibleResponse(rsp *http.Response) (*GetRoutingEligibleRes
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListRoutingOutcomesResponse parses an HTTP response from a ListRoutingOutcomesWithResponse call
+func ParseListRoutingOutcomesResponse(rsp *http.Response) (*ListRoutingOutcomesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListRoutingOutcomesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest OutcomePage
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest ErrorModel

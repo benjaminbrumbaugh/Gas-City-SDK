@@ -222,7 +222,8 @@
               "hca-request",
               "hca-show",
               "session-close-stale",
-              "session-clear-city-stop"
+              "session-clear-city-stop",
+              "routing-outcomes"
             ]
           },
           "event_id": {

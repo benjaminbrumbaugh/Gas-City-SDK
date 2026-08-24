@@ -396,6 +396,7 @@ export const zDecisionPayload = z.object({
     policy_digest: z.string(),
     provider: z.string(),
     reason: z.string(),
+    recommendation_id: z.string().optional(),
     rig: z.string(),
     schema: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
     serve_as: z.string(),
@@ -1070,6 +1071,598 @@ export const zOutboundEventPayload = z.object({
     message_id: z.string(),
     provider: z.string(),
     session: z.string()
+});
+
+export const zOutcomeRecord = z.object({
+    actual_config_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/).nullable(),
+    actual_target_id: z.intersection(z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/), z.intersection(z.string().regex(/^(?:[^sS]|[sS][^kK]|[sS][kK][^-])/), z.intersection(z.union([
+        z.string().max(18),
+        z.string().regex(/^(?:[^rR]|[rR][^kK]|[rR][kK][^-])/),
+        z.string().regex(/^[rR][kK]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^pP]|[gG][hH][pP][^_])/),
+        z.string().regex(/^[gG][hH][pP]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^oO]|[gG][hH][oO][^_])/),
+        z.string().regex(/^[gG][hH][oO]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(92),
+        z.string().regex(/^(?:[^gG]|[gG][^iI]|[gG][iI][^tT]|[gG][iI][tT][^hH]|[gG][iI][tT][hH][^uU]|[gG][iI][tT][hH][uU][^bB]|[gG][iI][tT][hH][uU][bB][^_]|[gG][iI][tT][hH][uU][bB]_[^pP]|[gG][iI][tT][hH][uU][bB]_[pP][^aA]|[gG][iI][tT][hH][uU][bB]_[pP][aA][^tT]|[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][^_])/),
+        z.string().regex(/^[gG][iI][tT][hH][uU][bB]_[pP][aA][tT]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(94)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^bB]|[xX][oO][xX][bB][^-])/),
+        z.string().regex(/^[xX][oO][xX][bB]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^pP]|[xX][oO][xX][pP][^-])/),
+        z.string().regex(/^[xX][oO][xX][pP]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(22),
+        z.string().regex(/^(?:[^bB]|[bB][^eE]|[bB][eE][^aA]|[bB][eE][aA][^rR]|[bB][eE][aA][rR][^eE]|[bB][eE][aA][rR][eE][^rR]|[bB][eE][aA][rR][eE][rR][^-])/),
+        z.string().regex(/^[bB][eE][aA][rR][eE][rR]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(21),
+        z.string().regex(/^(?:[^bB]|[bB][^aA]|[bB][aA][^sS]|[bB][aA][sS][^iI]|[bB][aA][sS][iI][^cC]|[bB][aA][sS][iI][cC][^-])/),
+        z.string().regex(/^[bB][aA][sS][iI][cC]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^K]|AK[^I]|AKI[^A])/),
+        z.string().regex(/^AKIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^S]|AS[^I]|ASI[^A])/),
+        z.string().regex(/^ASIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(38),
+        z.string().regex(/^(?:[^A]|A[^I]|AI[^z]|AIz[^a])/),
+        z.string().regex(/^AIza[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(40)
+    ]), z.union([
+        z.string().regex(/^[^.]*$/),
+        z.string().regex(/^[^.]*\.[^.]*$/),
+        z.string().regex(/^(?:[^.]*\.){3}/),
+        z.string().regex(/^[^.]{0,7}\./),
+        z.string().regex(/^(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]{0,7}\./),
+        z.string().regex(/^[^.]*\.(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]{0,7}$/),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*$/)
+    ])))))))))))))).nullable(),
+    admission_receipt_id: z.intersection(z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/), z.intersection(z.string().regex(/^(?:[^sS]|[sS][^kK]|[sS][kK][^-])/), z.intersection(z.union([
+        z.string().max(18),
+        z.string().regex(/^(?:[^rR]|[rR][^kK]|[rR][kK][^-])/),
+        z.string().regex(/^[rR][kK]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^pP]|[gG][hH][pP][^_])/),
+        z.string().regex(/^[gG][hH][pP]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^oO]|[gG][hH][oO][^_])/),
+        z.string().regex(/^[gG][hH][oO]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(92),
+        z.string().regex(/^(?:[^gG]|[gG][^iI]|[gG][iI][^tT]|[gG][iI][tT][^hH]|[gG][iI][tT][hH][^uU]|[gG][iI][tT][hH][uU][^bB]|[gG][iI][tT][hH][uU][bB][^_]|[gG][iI][tT][hH][uU][bB]_[^pP]|[gG][iI][tT][hH][uU][bB]_[pP][^aA]|[gG][iI][tT][hH][uU][bB]_[pP][aA][^tT]|[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][^_])/),
+        z.string().regex(/^[gG][iI][tT][hH][uU][bB]_[pP][aA][tT]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(94)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^bB]|[xX][oO][xX][bB][^-])/),
+        z.string().regex(/^[xX][oO][xX][bB]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^pP]|[xX][oO][xX][pP][^-])/),
+        z.string().regex(/^[xX][oO][xX][pP]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(22),
+        z.string().regex(/^(?:[^bB]|[bB][^eE]|[bB][eE][^aA]|[bB][eE][aA][^rR]|[bB][eE][aA][rR][^eE]|[bB][eE][aA][rR][eE][^rR]|[bB][eE][aA][rR][eE][rR][^-])/),
+        z.string().regex(/^[bB][eE][aA][rR][eE][rR]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(21),
+        z.string().regex(/^(?:[^bB]|[bB][^aA]|[bB][aA][^sS]|[bB][aA][sS][^iI]|[bB][aA][sS][iI][^cC]|[bB][aA][sS][iI][cC][^-])/),
+        z.string().regex(/^[bB][aA][sS][iI][cC]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^K]|AK[^I]|AKI[^A])/),
+        z.string().regex(/^AKIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^S]|AS[^I]|ASI[^A])/),
+        z.string().regex(/^ASIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(38),
+        z.string().regex(/^(?:[^A]|A[^I]|AI[^z]|AIz[^a])/),
+        z.string().regex(/^AIza[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(40)
+    ]), z.union([
+        z.string().regex(/^[^.]*$/),
+        z.string().regex(/^[^.]*\.[^.]*$/),
+        z.string().regex(/^(?:[^.]*\.){3}/),
+        z.string().regex(/^[^.]{0,7}\./),
+        z.string().regex(/^(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]{0,7}\./),
+        z.string().regex(/^[^.]*\.(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]{0,7}$/),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*$/)
+    ])))))))))))))).nullable(),
+    correlation_id: z.intersection(z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/), z.intersection(z.string().regex(/^(?:[^sS]|[sS][^kK]|[sS][kK][^-])/), z.intersection(z.union([
+        z.string().max(18),
+        z.string().regex(/^(?:[^rR]|[rR][^kK]|[rR][kK][^-])/),
+        z.string().regex(/^[rR][kK]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^pP]|[gG][hH][pP][^_])/),
+        z.string().regex(/^[gG][hH][pP]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^oO]|[gG][hH][oO][^_])/),
+        z.string().regex(/^[gG][hH][oO]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(92),
+        z.string().regex(/^(?:[^gG]|[gG][^iI]|[gG][iI][^tT]|[gG][iI][tT][^hH]|[gG][iI][tT][hH][^uU]|[gG][iI][tT][hH][uU][^bB]|[gG][iI][tT][hH][uU][bB][^_]|[gG][iI][tT][hH][uU][bB]_[^pP]|[gG][iI][tT][hH][uU][bB]_[pP][^aA]|[gG][iI][tT][hH][uU][bB]_[pP][aA][^tT]|[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][^_])/),
+        z.string().regex(/^[gG][iI][tT][hH][uU][bB]_[pP][aA][tT]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(94)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^bB]|[xX][oO][xX][bB][^-])/),
+        z.string().regex(/^[xX][oO][xX][bB]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^pP]|[xX][oO][xX][pP][^-])/),
+        z.string().regex(/^[xX][oO][xX][pP]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(22),
+        z.string().regex(/^(?:[^bB]|[bB][^eE]|[bB][eE][^aA]|[bB][eE][aA][^rR]|[bB][eE][aA][rR][^eE]|[bB][eE][aA][rR][eE][^rR]|[bB][eE][aA][rR][eE][rR][^-])/),
+        z.string().regex(/^[bB][eE][aA][rR][eE][rR]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(21),
+        z.string().regex(/^(?:[^bB]|[bB][^aA]|[bB][aA][^sS]|[bB][aA][sS][^iI]|[bB][aA][sS][iI][^cC]|[bB][aA][sS][iI][cC][^-])/),
+        z.string().regex(/^[bB][aA][sS][iI][cC]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^K]|AK[^I]|AKI[^A])/),
+        z.string().regex(/^AKIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^S]|AS[^I]|ASI[^A])/),
+        z.string().regex(/^ASIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(38),
+        z.string().regex(/^(?:[^A]|A[^I]|AI[^z]|AIz[^a])/),
+        z.string().regex(/^AIza[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(40)
+    ]), z.union([
+        z.string().regex(/^[^.]*$/),
+        z.string().regex(/^[^.]*\.[^.]*$/),
+        z.string().regex(/^(?:[^.]*\.){3}/),
+        z.string().regex(/^[^.]{0,7}\./),
+        z.string().regex(/^(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]{0,7}\./),
+        z.string().regex(/^[^.]*\.(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]{0,7}$/),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*$/)
+    ])))))))))))))),
+    coverage: z.enum([
+        'available',
+        'partial',
+        'unknown'
+    ]),
+    disposition: z.enum([
+        'shipped',
+        'no_op',
+        'blocked',
+        'abandoned',
+        'not_admitted',
+        'unknown'
+    ]),
+    execution_id: z.intersection(z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/), z.intersection(z.string().regex(/^(?:[^sS]|[sS][^kK]|[sS][kK][^-])/), z.intersection(z.union([
+        z.string().max(18),
+        z.string().regex(/^(?:[^rR]|[rR][^kK]|[rR][kK][^-])/),
+        z.string().regex(/^[rR][kK]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^pP]|[gG][hH][pP][^_])/),
+        z.string().regex(/^[gG][hH][pP]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^oO]|[gG][hH][oO][^_])/),
+        z.string().regex(/^[gG][hH][oO]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(92),
+        z.string().regex(/^(?:[^gG]|[gG][^iI]|[gG][iI][^tT]|[gG][iI][tT][^hH]|[gG][iI][tT][hH][^uU]|[gG][iI][tT][hH][uU][^bB]|[gG][iI][tT][hH][uU][bB][^_]|[gG][iI][tT][hH][uU][bB]_[^pP]|[gG][iI][tT][hH][uU][bB]_[pP][^aA]|[gG][iI][tT][hH][uU][bB]_[pP][aA][^tT]|[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][^_])/),
+        z.string().regex(/^[gG][iI][tT][hH][uU][bB]_[pP][aA][tT]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(94)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^bB]|[xX][oO][xX][bB][^-])/),
+        z.string().regex(/^[xX][oO][xX][bB]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^pP]|[xX][oO][xX][pP][^-])/),
+        z.string().regex(/^[xX][oO][xX][pP]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(22),
+        z.string().regex(/^(?:[^bB]|[bB][^eE]|[bB][eE][^aA]|[bB][eE][aA][^rR]|[bB][eE][aA][rR][^eE]|[bB][eE][aA][rR][eE][^rR]|[bB][eE][aA][rR][eE][rR][^-])/),
+        z.string().regex(/^[bB][eE][aA][rR][eE][rR]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(21),
+        z.string().regex(/^(?:[^bB]|[bB][^aA]|[bB][aA][^sS]|[bB][aA][sS][^iI]|[bB][aA][sS][iI][^cC]|[bB][aA][sS][iI][cC][^-])/),
+        z.string().regex(/^[bB][aA][sS][iI][cC]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^K]|AK[^I]|AKI[^A])/),
+        z.string().regex(/^AKIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^S]|AS[^I]|ASI[^A])/),
+        z.string().regex(/^ASIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(38),
+        z.string().regex(/^(?:[^A]|A[^I]|AI[^z]|AIz[^a])/),
+        z.string().regex(/^AIza[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(40)
+    ]), z.union([
+        z.string().regex(/^[^.]*$/),
+        z.string().regex(/^[^.]*\.[^.]*$/),
+        z.string().regex(/^(?:[^.]*\.){3}/),
+        z.string().regex(/^[^.]{0,7}\./),
+        z.string().regex(/^(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]{0,7}\./),
+        z.string().regex(/^[^.]*\.(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]{0,7}$/),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*$/)
+    ])))))))))))))).nullable(),
+    failure_class: z.enum([
+        'none',
+        'transient',
+        'hard',
+        'unknown'
+    ]),
+    observed_at_unix: z.coerce.bigint().gte(BigInt(1)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    outcome_id: z.string().regex(/^outcome_[0-9a-f]{64}$/),
+    provenance: z.enum(['authoritative_routing_decision', 'authoritative_routing_decision_exact_work']),
+    recommendation_id: z.string().regex(/^routing\/v2:[0-9a-f]{64}$/),
+    requested_config_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+    requested_target_id: z.intersection(z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/), z.intersection(z.string().regex(/^(?:[^sS]|[sS][^kK]|[sS][kK][^-])/), z.intersection(z.union([
+        z.string().max(18),
+        z.string().regex(/^(?:[^rR]|[rR][^kK]|[rR][kK][^-])/),
+        z.string().regex(/^[rR][kK]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^pP]|[gG][hH][pP][^_])/),
+        z.string().regex(/^[gG][hH][pP]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^oO]|[gG][hH][oO][^_])/),
+        z.string().regex(/^[gG][hH][oO]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(92),
+        z.string().regex(/^(?:[^gG]|[gG][^iI]|[gG][iI][^tT]|[gG][iI][tT][^hH]|[gG][iI][tT][hH][^uU]|[gG][iI][tT][hH][uU][^bB]|[gG][iI][tT][hH][uU][bB][^_]|[gG][iI][tT][hH][uU][bB]_[^pP]|[gG][iI][tT][hH][uU][bB]_[pP][^aA]|[gG][iI][tT][hH][uU][bB]_[pP][aA][^tT]|[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][^_])/),
+        z.string().regex(/^[gG][iI][tT][hH][uU][bB]_[pP][aA][tT]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(94)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^bB]|[xX][oO][xX][bB][^-])/),
+        z.string().regex(/^[xX][oO][xX][bB]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^pP]|[xX][oO][xX][pP][^-])/),
+        z.string().regex(/^[xX][oO][xX][pP]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(22),
+        z.string().regex(/^(?:[^bB]|[bB][^eE]|[bB][eE][^aA]|[bB][eE][aA][^rR]|[bB][eE][aA][rR][^eE]|[bB][eE][aA][rR][eE][^rR]|[bB][eE][aA][rR][eE][rR][^-])/),
+        z.string().regex(/^[bB][eE][aA][rR][eE][rR]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(21),
+        z.string().regex(/^(?:[^bB]|[bB][^aA]|[bB][aA][^sS]|[bB][aA][sS][^iI]|[bB][aA][sS][iI][^cC]|[bB][aA][sS][iI][cC][^-])/),
+        z.string().regex(/^[bB][aA][sS][iI][cC]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^K]|AK[^I]|AKI[^A])/),
+        z.string().regex(/^AKIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^S]|AS[^I]|ASI[^A])/),
+        z.string().regex(/^ASIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(38),
+        z.string().regex(/^(?:[^A]|A[^I]|AI[^z]|AIz[^a])/),
+        z.string().regex(/^AIza[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(40)
+    ]), z.union([
+        z.string().regex(/^[^.]*$/),
+        z.string().regex(/^[^.]*\.[^.]*$/),
+        z.string().regex(/^(?:[^.]*\.){3}/),
+        z.string().regex(/^[^.]{0,7}\./),
+        z.string().regex(/^(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]{0,7}\./),
+        z.string().regex(/^[^.]*\.(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]{0,7}$/),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*$/)
+    ])))))))))))))),
+    routing_decision_id: z.intersection(z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/), z.intersection(z.string().regex(/^(?:[^sS]|[sS][^kK]|[sS][kK][^-])/), z.intersection(z.union([
+        z.string().max(18),
+        z.string().regex(/^(?:[^rR]|[rR][^kK]|[rR][kK][^-])/),
+        z.string().regex(/^[rR][kK]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^pP]|[gG][hH][pP][^_])/),
+        z.string().regex(/^[gG][hH][pP]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^oO]|[gG][hH][oO][^_])/),
+        z.string().regex(/^[gG][hH][oO]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(92),
+        z.string().regex(/^(?:[^gG]|[gG][^iI]|[gG][iI][^tT]|[gG][iI][tT][^hH]|[gG][iI][tT][hH][^uU]|[gG][iI][tT][hH][uU][^bB]|[gG][iI][tT][hH][uU][bB][^_]|[gG][iI][tT][hH][uU][bB]_[^pP]|[gG][iI][tT][hH][uU][bB]_[pP][^aA]|[gG][iI][tT][hH][uU][bB]_[pP][aA][^tT]|[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][^_])/),
+        z.string().regex(/^[gG][iI][tT][hH][uU][bB]_[pP][aA][tT]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(94)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^bB]|[xX][oO][xX][bB][^-])/),
+        z.string().regex(/^[xX][oO][xX][bB]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^pP]|[xX][oO][xX][pP][^-])/),
+        z.string().regex(/^[xX][oO][xX][pP]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(22),
+        z.string().regex(/^(?:[^bB]|[bB][^eE]|[bB][eE][^aA]|[bB][eE][aA][^rR]|[bB][eE][aA][rR][^eE]|[bB][eE][aA][rR][eE][^rR]|[bB][eE][aA][rR][eE][rR][^-])/),
+        z.string().regex(/^[bB][eE][aA][rR][eE][rR]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(21),
+        z.string().regex(/^(?:[^bB]|[bB][^aA]|[bB][aA][^sS]|[bB][aA][sS][^iI]|[bB][aA][sS][iI][^cC]|[bB][aA][sS][iI][cC][^-])/),
+        z.string().regex(/^[bB][aA][sS][iI][cC]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^K]|AK[^I]|AKI[^A])/),
+        z.string().regex(/^AKIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^S]|AS[^I]|ASI[^A])/),
+        z.string().regex(/^ASIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(38),
+        z.string().regex(/^(?:[^A]|A[^I]|AI[^z]|AIz[^a])/),
+        z.string().regex(/^AIza[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(40)
+    ]), z.union([
+        z.string().regex(/^[^.]*$/),
+        z.string().regex(/^[^.]*\.[^.]*$/),
+        z.string().regex(/^(?:[^.]*\.){3}/),
+        z.string().regex(/^[^.]{0,7}\./),
+        z.string().regex(/^(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]{0,7}\./),
+        z.string().regex(/^[^.]*\.(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]{0,7}$/),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*$/)
+    ])))))))))))))).nullable(),
+    schema_version: z.enum(['routing/outcome/v2']),
+    session_id: z.intersection(z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/), z.intersection(z.string().regex(/^(?:[^sS]|[sS][^kK]|[sS][kK][^-])/), z.intersection(z.union([
+        z.string().max(18),
+        z.string().regex(/^(?:[^rR]|[rR][^kK]|[rR][kK][^-])/),
+        z.string().regex(/^[rR][kK]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^pP]|[gG][hH][pP][^_])/),
+        z.string().regex(/^[gG][hH][pP]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^oO]|[gG][hH][oO][^_])/),
+        z.string().regex(/^[gG][hH][oO]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(92),
+        z.string().regex(/^(?:[^gG]|[gG][^iI]|[gG][iI][^tT]|[gG][iI][tT][^hH]|[gG][iI][tT][hH][^uU]|[gG][iI][tT][hH][uU][^bB]|[gG][iI][tT][hH][uU][bB][^_]|[gG][iI][tT][hH][uU][bB]_[^pP]|[gG][iI][tT][hH][uU][bB]_[pP][^aA]|[gG][iI][tT][hH][uU][bB]_[pP][aA][^tT]|[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][^_])/),
+        z.string().regex(/^[gG][iI][tT][hH][uU][bB]_[pP][aA][tT]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(94)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^bB]|[xX][oO][xX][bB][^-])/),
+        z.string().regex(/^[xX][oO][xX][bB]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^pP]|[xX][oO][xX][pP][^-])/),
+        z.string().regex(/^[xX][oO][xX][pP]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(22),
+        z.string().regex(/^(?:[^bB]|[bB][^eE]|[bB][eE][^aA]|[bB][eE][aA][^rR]|[bB][eE][aA][rR][^eE]|[bB][eE][aA][rR][eE][^rR]|[bB][eE][aA][rR][eE][rR][^-])/),
+        z.string().regex(/^[bB][eE][aA][rR][eE][rR]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(21),
+        z.string().regex(/^(?:[^bB]|[bB][^aA]|[bB][aA][^sS]|[bB][aA][sS][^iI]|[bB][aA][sS][iI][^cC]|[bB][aA][sS][iI][cC][^-])/),
+        z.string().regex(/^[bB][aA][sS][iI][cC]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^K]|AK[^I]|AKI[^A])/),
+        z.string().regex(/^AKIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^S]|AS[^I]|ASI[^A])/),
+        z.string().regex(/^ASIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(38),
+        z.string().regex(/^(?:[^A]|A[^I]|AI[^z]|AIz[^a])/),
+        z.string().regex(/^AIza[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(40)
+    ]), z.union([
+        z.string().regex(/^[^.]*$/),
+        z.string().regex(/^[^.]*\.[^.]*$/),
+        z.string().regex(/^(?:[^.]*\.){3}/),
+        z.string().regex(/^[^.]{0,7}\./),
+        z.string().regex(/^(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]{0,7}\./),
+        z.string().regex(/^[^.]*\.(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]{0,7}$/),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*$/)
+    ])))))))))))))).nullable(),
+    status: z.enum([
+        'claimed',
+        'succeeded',
+        'failed'
+    ]),
+    work_id: z.intersection(z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*(?::(?:\/?[A-Za-z0-9._-][A-Za-z0-9._\/-]*|\/?))*$/), z.intersection(z.string().regex(/^(?:[^sS]|[sS][^kK]|[sS][kK][^-])/), z.intersection(z.union([
+        z.string().max(18),
+        z.string().regex(/^(?:[^rR]|[rR][^kK]|[rR][kK][^-])/),
+        z.string().regex(/^[rR][kK]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^pP]|[gG][hH][pP][^_])/),
+        z.string().regex(/^[gG][hH][pP]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(39),
+        z.string().regex(/^(?:[^gG]|[gG][^hH]|[gG][hH][^oO]|[gG][hH][oO][^_])/),
+        z.string().regex(/^[gG][hH][oO]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(41)
+    ]), z.intersection(z.union([
+        z.string().max(92),
+        z.string().regex(/^(?:[^gG]|[gG][^iI]|[gG][iI][^tT]|[gG][iI][tT][^hH]|[gG][iI][tT][hH][^uU]|[gG][iI][tT][hH][uU][^bB]|[gG][iI][tT][hH][uU][bB][^_]|[gG][iI][tT][hH][uU][bB]_[^pP]|[gG][iI][tT][hH][uU][bB]_[pP][^aA]|[gG][iI][tT][hH][uU][bB]_[pP][aA][^tT]|[gG][iI][tT][hH][uU][bB]_[pP][aA][tT][^_])/),
+        z.string().regex(/^[gG][iI][tT][hH][uU][bB]_[pP][aA][tT]_[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(94)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^bB]|[xX][oO][xX][bB][^-])/),
+        z.string().regex(/^[xX][oO][xX][bB]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(24),
+        z.string().regex(/^(?:[^xX]|[xX][^oO]|[xX][oO][^xX]|[xX][oO][xX][^pP]|[xX][oO][xX][pP][^-])/),
+        z.string().regex(/^[xX][oO][xX][pP]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(22),
+        z.string().regex(/^(?:[^bB]|[bB][^eE]|[bB][eE][^aA]|[bB][eE][aA][^rR]|[bB][eE][aA][rR][^eE]|[bB][eE][aA][rR][eE][^rR]|[bB][eE][aA][rR][eE][rR][^-])/),
+        z.string().regex(/^[bB][eE][aA][rR][eE][rR]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(21),
+        z.string().regex(/^(?:[^bB]|[bB][^aA]|[bB][aA][^sS]|[bB][aA][sS][^iI]|[bB][aA][sS][iI][^cC]|[bB][aA][sS][iI][cC][^-])/),
+        z.string().regex(/^[bB][aA][sS][iI][cC]-[A-Za-z0-9_-]*[^A-Za-z0-9_-]/)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^K]|AK[^I]|AKI[^A])/),
+        z.string().regex(/^AKIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(19),
+        z.string().regex(/^(?:[^A]|A[^S]|AS[^I]|ASI[^A])/),
+        z.string().regex(/^ASIA[A-Z0-9]*[^A-Z0-9]/),
+        z.string().min(21)
+    ]), z.intersection(z.union([
+        z.string().max(38),
+        z.string().regex(/^(?:[^A]|A[^I]|AI[^z]|AIz[^a])/),
+        z.string().regex(/^AIza[A-Za-z0-9_-]*[^A-Za-z0-9_-]/),
+        z.string().min(40)
+    ]), z.union([
+        z.string().regex(/^[^.]*$/),
+        z.string().regex(/^[^.]*\.[^.]*$/),
+        z.string().regex(/^(?:[^.]*\.){3}/),
+        z.string().regex(/^[^.]{0,7}\./),
+        z.string().regex(/^(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]{0,7}\./),
+        z.string().regex(/^[^.]*\.(?:[^e]|e[^y]|ey[^J])[^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*\./),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]{0,7}$/),
+        z.string().regex(/^[^.]*\.[^.]*\.[^.]*[^A-Za-z0-9_.-][^.]*$/)
+    ]))))))))))))))
+}).and(z.union([
+    z.object({
+        actual_config_digest: z.string(),
+        actual_target_id: z.string(),
+        disposition: z.enum(['unknown']),
+        failure_class: z.enum(['unknown']),
+        status: z.enum(['claimed'])
+    }),
+    z.object({
+        actual_config_digest: z.string(),
+        actual_target_id: z.string(),
+        admission_receipt_id: z.string(),
+        disposition: z.enum(['shipped', 'no_op']),
+        execution_id: z.string(),
+        failure_class: z.enum(['none']),
+        session_id: z.string(),
+        status: z.enum(['succeeded'])
+    }),
+    z.object({
+        actual_config_digest: z.string().regex(/a^/).nullable(),
+        actual_target_id: z.string().regex(/a^/).nullable(),
+        admission_receipt_id: z.string().regex(/a^/).nullable(),
+        disposition: z.enum(['not_admitted']),
+        execution_id: z.string().regex(/a^/).nullable(),
+        failure_class: z.enum([
+            'transient',
+            'hard',
+            'unknown'
+        ]),
+        session_id: z.string().regex(/a^/).nullable(),
+        status: z.enum(['failed'])
+    }),
+    z.object({
+        actual_config_digest: z.string(),
+        actual_target_id: z.string(),
+        disposition: z.enum([
+            'blocked',
+            'abandoned',
+            'unknown'
+        ]),
+        failure_class: z.enum([
+            'transient',
+            'hard',
+            'unknown'
+        ]),
+        status: z.enum(['failed'])
+    })
+]));
+
+export const zOutcomePage = z.object({
+    items: z.array(zOutcomeRecord).nullable(),
+    next_cursor: z.string().optional(),
+    partial: z.boolean(),
+    schema_version: z.enum(['routing/outcome/v2'])
 });
 
 export const zOutputTurn = z.object({
@@ -9187,6 +9780,20 @@ export const zGetRoutingEligiblePath = z.object({
  * OK
  */
 export const zGetRoutingEligibleResponse = zSelectionSnapshot;
+
+export const zListRoutingOutcomesPath = z.object({
+    cityName: z.string().min(1).regex(/\S/)
+});
+
+export const zListRoutingOutcomesQuery = z.object({
+    limit: z.coerce.bigint().gte(BigInt(1)).lte(BigInt(100)).optional().default(BigInt(100)),
+    cursor: z.string().optional()
+});
+
+/**
+ * OK
+ */
+export const zListRoutingOutcomesResponse = zOutcomePage;
 
 export const zGetRoutingStatusPath = z.object({
     cityName: z.string().min(1).regex(/\S/)

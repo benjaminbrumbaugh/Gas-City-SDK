@@ -76,6 +76,24 @@ func (s *Server) humaHandleRoutingDecisionList(ctx context.Context, input *Routi
 	}}, nil
 }
 
+func (s *Server) humaHandleRoutingOutcomeList(ctx context.Context, input *RoutingOutcomeListInput) (*RoutingOutcomeListOutput, error) {
+	provider, err := s.routingDecisionProvider()
+	if err != nil {
+		return nil, err
+	}
+	page, err := provider.RoutingDecisionOutcomes(ctx, routingdecision.OutcomeListOptions{Limit: input.Limit, Cursor: input.Cursor})
+	if err != nil {
+		if input.Cursor != "" && errors.Is(err, routingdecision.ErrInvalidDecision) {
+			return nil, apierr.InvalidCursor.Msg("cursor is not a valid routing-outcome pagination token; re-fetch the first page")
+		}
+		if errors.Is(err, routingdecision.ErrInvalidDecision) {
+			return nil, apierr.RoutingDecisionInvalid.Msg("routing outcome list request is invalid")
+		}
+		return nil, apierr.RoutingUnavailable.Msg("routing outcome projection unavailable")
+	}
+	return &RoutingOutcomeListOutput{Body: page}, nil
+}
+
 func (s *Server) humaHandleRoutingDecisionIngest(ctx context.Context, input *RoutingDecisionIngestInput) (*RoutingDecisionIngestOutput, error) {
 	provider, err := s.routingDecisionProvider()
 	if err != nil {
