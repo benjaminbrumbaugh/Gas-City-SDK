@@ -38,11 +38,11 @@ mode = "always"
 	}
 	c := NewRigPackCoverageCheck(cfg, dir)
 	r := c.Run(&CheckContext{})
-	if r.Status != StatusWarning {
-		t.Errorf("status = %d, want Warning; msg = %s", r.Status, r.Message)
+	if r.Status != StatusOK {
+		t.Errorf("status = %d, want OK when there are no active rig targets; msg = %s", r.Status, r.Message)
 	}
-	if len(r.Details) == 0 {
-		t.Error("expected details about orphaned rig-scoped named_sessions")
+	if len(r.Details) != 0 {
+		t.Errorf("details = %v, want none when there are no active rig targets", r.Details)
 	}
 }
 
@@ -77,7 +77,7 @@ mode = "always"
 	}
 }
 
-func TestRigPackCoverageCheck_SuspendedRigIgnored(t *testing.T) {
+func TestRigPackCoverageCheck_AllRigsSuspendedIsQuiet(t *testing.T) {
 	dir := t.TempDir()
 	packDir := filepath.Join(dir, "packs", "workflow")
 	writeTestPack(t, packDir, `
@@ -103,8 +103,8 @@ mode = "always"
 	}
 	c := NewRigPackCoverageCheck(cfg, dir)
 	r := c.Run(&CheckContext{})
-	if r.Status != StatusWarning {
-		t.Errorf("status = %d, want Warning (suspended rig should not count); msg = %s", r.Status, r.Message)
+	if r.Status != StatusOK {
+		t.Errorf("status = %d, want OK when every rig is intentionally suspended; msg = %s", r.Status, r.Message)
 	}
 }
 
