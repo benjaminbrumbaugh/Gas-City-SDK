@@ -282,6 +282,7 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 		register(doctor.NewBeadsStoreCheck(cityPath, openStoreResultForCity(cityPath)))
 		register(newV2RoutedToNamespaceCheck(cfg, cityPath, storeFactory))
 		register(newCensusOwnerLivenessCheck(cfg, cityPath, storeFactory))
+		register(newSessionHoldStallCheck(cfg, cityPath, storeFactory))
 		register(newRunTargetRoutedToBackfillCheck(cfg, cityPath, storeFactory))
 		register(newRouteRecoveryQuarantineCheck(cfg, cityPath, storeFactory))
 		register(newHoldLabelRoutedToCheck(cfg, cityPath, storeFactory))

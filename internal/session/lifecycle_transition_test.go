@@ -194,7 +194,7 @@ func TestLifecycleTransitionPatchesSetCompleteMetadata(t *testing.T) {
 		},
 		{
 			name:  "complete drain fresh mode",
-			patch: CompleteDrainPatch(now, "idle", true),
+			patch: CompleteDrainPatch(now, "idle", true, ""),
 			want: MetadataPatch{
 				"state":                      string(StateAsleep),
 				"state_reason":               "",
@@ -683,7 +683,7 @@ func TestDrainCompletionPatchesClearStopPendingReason(t *testing.T) {
 		patch MetadataPatch
 	}{
 		{name: "acknowledge", patch: AcknowledgeDrainPatch(false)},
-		{name: "complete", patch: CompleteDrainPatch(now, "idle", false)},
+		{name: "complete", patch: CompleteDrainPatch(now, "idle", false, "")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -691,6 +691,31 @@ func TestDrainCompletionPatchesClearStopPendingReason(t *testing.T) {
 				t.Fatalf("state_reason = %q, present=%v; want explicit clear", got, ok)
 			}
 		})
+	}
+}
+
+func TestDrainCompletionPatchesPreserveOperatorHoldProvenance(t *testing.T) {
+	now := time.Date(2026, 8, 25, 11, 10, 51, 0, time.UTC)
+
+	ack := AcknowledgeDrainPatch(false)
+	if _, ok := ack["sleep_intent"]; ok {
+		t.Fatalf("AcknowledgeDrainPatch sleep_intent present: %#v; operator hold provenance must survive", ack)
+	}
+	if _, ok := ack["held_until"]; ok {
+		t.Fatalf("AcknowledgeDrainPatch held_until present: %#v; operator hold deadline must survive", ack)
+	}
+
+	completeHeld := CompleteDrainPatch(now, "drained", false, "user-hold")
+	if _, ok := completeHeld["sleep_intent"]; ok {
+		t.Fatalf("CompleteDrainPatch(user-hold) sleep_intent present: %#v; operator hold provenance must survive", completeHeld)
+	}
+	if _, ok := completeHeld["held_until"]; ok {
+		t.Fatalf("CompleteDrainPatch(user-hold) held_until present: %#v; operator hold deadline must survive", completeHeld)
+	}
+
+	completeIdle := CompleteDrainPatch(now, "idle", false, "idle-stop-pending")
+	if got, ok := completeIdle["sleep_intent"]; !ok || got != "" {
+		t.Fatalf("CompleteDrainPatch(idle-stop-pending) sleep_intent = %q, present=%v; want explicit clear", got, ok)
 	}
 }
 
