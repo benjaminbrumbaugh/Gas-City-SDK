@@ -214,14 +214,61 @@ func TestRoutingDecisionServiceIngestReconcilesApprovedImmediately(t *testing.T)
 		store: ledger, verifier: &verifier, status: routingdecision.AvailabilityReady,
 		reconcile: fixture.cr.reconcileRoutingDecisionsAndLog,
 	}
-	if _, err := service.Ingest(context.Background(), routingdecision.IngestApprovedRequest{
+	result, err := service.Ingest(context.Background(), routingdecision.IngestApprovedRequest{
 		Payload: payload, Approval: approval, Signature: signature, IdempotencyToken: "ingest-" + payload.DecisionID,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if result.Record.State != routingdecision.StateAdmitted || result.Receipt.State != routingdecision.StateAdmitted || result.Record.RecordRevision != result.Receipt.RecordRevision {
+		t.Fatalf("ingest response = %+v, want current admitted record and receipt", result)
 	}
 	record, err := ledger.Get(payload.DecisionID)
 	if err != nil || record.State != routingdecision.StateAdmitted {
 		t.Fatalf("post-ingest lifecycle = (%+v, %v), want admitted", record, err)
+	}
+
+	payload2 := payload
+	payload2.DecisionID = "decision-ingest-close-race"
+	payload2.BindingID = routingdecision.BindingID(payload2)
+	approval2 := approval
+	approval2.DecisionID = payload2.DecisionID
+	approval2.BindingID = payload2.BindingID
+	signing2, err := routingdecision.SigningBytes(payload2, approval2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature2 := signature
+	signature2.Value = ed25519.Sign(privateKey, signing2)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	raceService := &cityRoutingDecisionService{
+		store: ledger, verifier: &verifier, status: routingdecision.AvailabilityReady,
+		reconcile: func() { close(entered); <-release },
+	}
+	ingestDone := make(chan error, 1)
+	go func() {
+		_, ingestErr := raceService.Ingest(context.Background(), routingdecision.IngestApprovedRequest{
+			Payload: payload2, Approval: approval2, Signature: signature2, IdempotencyToken: "ingest-" + payload2.DecisionID,
+		})
+		ingestDone <- ingestErr
+	}()
+	<-entered
+	closeDone := make(chan struct{})
+	go func() { raceService.Close(); close(closeDone) }()
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned while accepted ingest reconciliation was in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-ingestDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not complete after ingest reconciliation returned")
 	}
 }
 
