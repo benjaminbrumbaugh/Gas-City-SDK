@@ -182,6 +182,49 @@ func TestCityRuntimeRepairsUncompensatedApprovedStamp(t *testing.T) {
 	}
 }
 
+func TestRoutingDecisionServiceIngestReconcilesApprovedImmediately(t *testing.T) {
+	fixture := newApprovedRoutingDecisionFixture(t, "decision-ingest-template")
+	ledger, err := routingdecision.OpenStore(t.TempDir(), routingdecision.StoreOptions{Now: fixture.cr.routingDecisionNow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ledger.Close() })
+	payload := fixture.payload
+	payload.DecisionID = "decision-ingest-reconcile"
+	payload.BindingID = routingdecision.BindingID(payload)
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := routingdecision.NewVerifier(map[string]ed25519.PublicKey{"board": publicKey})
+	approval := routingdecision.ApprovalPayload{
+		Schema: routingdecision.SchemaVersion, DecisionID: payload.DecisionID, BindingID: payload.BindingID,
+		AuthorityID: "board", ApprovedAt: fixture.cr.routingDecisionNow(),
+	}
+	signing, err := routingdecision.SigningBytes(payload, approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := routingdecision.Signature{
+		Algorithm: routingdecision.SignatureAlgorithmEd25519, AuthorityID: "board", Value: ed25519.Sign(privateKey, signing),
+	}
+	fixture.cr.routingDecisionStore = ledger
+	fixture.cr.routingDecisionVerifier = &verifier
+	service := &cityRoutingDecisionService{
+		store: ledger, verifier: &verifier, status: routingdecision.AvailabilityReady,
+		reconcile: fixture.cr.reconcileRoutingDecisionsAndLog,
+	}
+	if _, err := service.Ingest(context.Background(), routingdecision.IngestApprovedRequest{
+		Payload: payload, Approval: approval, Signature: signature, IdempotencyToken: "ingest-" + payload.DecisionID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	record, err := ledger.Get(payload.DecisionID)
+	if err != nil || record.State != routingdecision.StateAdmitted {
+		t.Fatalf("post-ingest lifecycle = (%+v, %v), want admitted", record, err)
+	}
+}
+
 func TestCityRuntimeAppliesApprovedRoutingDecisionMetadataOnly(t *testing.T) {
 	fixture := newApprovedRoutingDecisionFixture(t, "decision-ready")
 
