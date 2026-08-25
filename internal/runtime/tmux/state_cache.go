@@ -174,7 +174,8 @@ func (c *StateCache) EvictSession(name string) {
 }
 
 // refresh executes a single coalesced fetch. If the fetch fails, the
-// last-known-good cache is preserved and the error is logged.
+// last-known-good cache is preserved. Genuine failures are logged; an
+// unprimed no-server result is an expected idle state and primes empty silently.
 func (c *StateCache) refresh() {
 	_, _, _ = c.sf.Do("refresh", func() (interface{}, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
@@ -189,8 +190,11 @@ func (c *StateCache) refresh() {
 		elapsed := time.Since(start)
 
 		if err != nil {
-			log.Printf("tmux state cache: refresh failed in %v: %v", elapsed, err)
 			c.mu.Lock()
+			unprimedNoServer := c.fetchedAt.IsZero() && isNoServerError(err)
+			if !unprimedNoServer {
+				log.Printf("tmux state cache: refresh failed in %v: %v", elapsed, err)
+			}
 			c.lastError = err
 			// Two distinct failure regimes, keyed on whether the cache was ever
 			// primed (fetchedAt set by a prior success):
@@ -209,7 +213,7 @@ func (c *StateCache) refresh() {
 			//   that was up then briefly vanished (supervisor restart, socket
 			//   stall) must not wipe a good snapshot and drain healthy pool slots
 			//   — that is #4082's intent.
-			if c.fetchedAt.IsZero() && isNoServerError(err) {
+			if unprimedNoServer {
 				c.state = runtimeStateSnapshot{Sessions: make(map[string]sessionRuntimeState)}
 				c.fetchedAt = time.Now()
 				c.dirty = false
