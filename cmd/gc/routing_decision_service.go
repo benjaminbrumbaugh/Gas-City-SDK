@@ -325,19 +325,27 @@ func (service *cityRoutingDecisionService) Ingest(ctx context.Context, request r
 		return routingdecision.IngestApprovedResult{}, err
 	}
 	service.mu.RLock()
+	defer service.mu.RUnlock()
 	if service.closed || service.status != routingdecision.AvailabilityReady || service.store == nil || service.verifier == nil {
-		service.mu.RUnlock()
 		return routingdecision.IngestApprovedResult{}, errors.New("routing decision service unavailable")
 	}
-	store := service.store
-	verifier := *service.verifier
-	reconcile := service.reconcile
-	service.mu.RUnlock()
-	result, err := store.IngestApproved(request, verifier)
-	if err == nil && reconcile != nil {
-		reconcile()
+	result, err := service.store.IngestApproved(request, *service.verifier)
+	if err != nil {
+		return routingdecision.IngestApprovedResult{}, err
 	}
-	return result, err
+	if service.reconcile != nil {
+		service.reconcile()
+		current, getErr := service.store.Get(request.Payload.DecisionID)
+		if getErr != nil {
+			return routingdecision.IngestApprovedResult{}, getErr
+		}
+		result.Record = current
+		result.Receipt = routingdecision.TransitionReceipt{
+			DecisionID: current.Payload.DecisionID, State: current.State,
+			RecordRevision: current.RecordRevision, StoreRevision: current.StoreRevision,
+		}
+	}
+	return result, nil
 }
 
 func (cr *CityRuntime) routingDecisionTargetSnapshots() ([]routingdecision.TargetSnapshot, error) {
