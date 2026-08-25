@@ -60,6 +60,7 @@ BACKUP_SIZE_HIGH_BYTES="${GC_BACKUP_SIZE_HIGH_BYTES:-2147483648}"
 BACKUP_SIZE_RECOVERY_BYTES="${GC_BACKUP_SIZE_RECOVERY_BYTES:-943718400}"
 BACKUP_SIZE_ALERT_RECIPIENT="${GC_BACKUP_SIZE_ALERT_RECIPIENT:-mayor}"
 BACKUP_SIZE_ALERT_STATE_FILE="${GC_BACKUP_SIZE_ALERT_STATE_FILE:-$PACK_STATE_DIR/backup-size-alert-state.json}"
+BACKUP_SYNC_STATE_FILE="${GC_BACKUP_SYNC_STATE_FILE:-$GC_CITY_PATH/.beads/dolt-backup-state.json}"
 
 dolt_sql() {
     DOLT_CLI_PASSWORD="${GC_DOLT_PASSWORD:-}" \
@@ -405,6 +406,45 @@ acquire_backup_lock() {
     fi
 }
 
+# stamp_backup_sync_state records a completed Dolt backup sync where the
+# consumers of backup freshness actually look. Three readers share this file
+# and all three agree on the format written here:
+#
+#   1. reaper.sh step 6 gates its closed-session-bead bulk prune on it. A scope
+#      with a registered destination (.beads/dolt-backup.json) is judged on
+#      dolt-backup-state.json, and this script is the live backup mechanism but
+#      never wrote that file — so the gate latched closed permanently and
+#      session beads accumulated forever. Only `bd backup sync` wrote it, and
+#      that path is inoperative when backup.enabled=false, the documented
+#      default for shared-server mode.
+#   2. `gc doctor` bd-backup-freshness (scanDoltBackupFreshness) reads
+#      last_sync as RFC3339.
+#   3. `bd backup status` unmarshals beads' doltBackupState — last_sync into a
+#      time.Time (RFC3339), duration as a free-form string.
+#
+# Format constraints, tightest first: the reaper parses last_sync with a
+# single-line sed and a %Y-%m-%dT%H:%M:%SZ strptime, so last_sync is emitted on
+# its own line as whole-second UTC with no fractional part. That is also valid
+# RFC3339 for the two Go readers.
+stamp_backup_sync_state() {
+    local elapsed="$1"
+    local tmp
+    local synced_at
+
+    synced_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    tmp=$(mktemp "$BACKUP_SYNC_STATE_FILE.tmp.XXXXXX" 2>/dev/null) || return 1
+    if ! ( umask 077; printf '{\n  "last_sync": "%s",\n  "duration": "%ss"\n}\n' \
+        "$synced_at" "$elapsed" > "$tmp" ); then
+        rm -f "$tmp" 2>/dev/null || true
+        return 1
+    fi
+    if ! mv -f "$tmp" "$BACKUP_SYNC_STATE_FILE" 2>/dev/null; then
+        rm -f "$tmp" 2>/dev/null || true
+        return 1
+    fi
+    return 0
+}
+
 # --- Step 1: Preflight Dolt version before backup sync ---
 
 DOLT_VERSION="$(dolt version 2>/dev/null | awk 'NR == 1 {print $NF}' || true)"
@@ -496,6 +536,7 @@ PRUNE_FAILED=0
 PRUNE_VERIFIED=0
 PRUNE_UNVERIFIED=0
 PRUNE_FAILED_DBS=""
+SYNC_STARTED_EPOCH=$(date -u '+%s')
 
 for db in $DATABASES; do
     if ! ensure_backup_remote "$db"; then
@@ -531,6 +572,26 @@ done
 
 FAILED_COUNT=$FAILED
 OFFSITE_STATUS="skipped"
+
+# Stamp only a clean sweep. A partial sync must leave the timestamp stale: the
+# reaper gate exists to withhold bulk deletion while backup coverage is
+# incomplete, and refreshing it here on partial success would defeat exactly
+# that. Offsite rsync is deliberately not a precondition — it runs after this
+# and is non-fatal, so the databases are already backed up either way.
+STATE_STAMP="skipped"
+if [ "$FAILED_COUNT" -eq 0 ] && [ "$SYNCED" -gt 0 ]; then
+    if [ ! -d "$(dirname "$BACKUP_SYNC_STATE_FILE")" ]; then
+        # Not a beads workspace. Creating the directory here would fabricate one
+        # that beads.FindBeadsDir() would then resolve, so report and move on.
+        STATE_STAMP="no-workspace"
+    elif stamp_backup_sync_state "$(( $(date -u '+%s') - SYNC_STARTED_EPOCH ))"; then
+        STATE_STAMP="ok"
+    else
+        STATE_STAMP="failed (non-fatal)"
+        echo "backup: warning: could not stamp $BACKUP_SYNC_STATE_FILE;" \
+            "reaper bulk prune will keep reading a stale backup timestamp" >&2
+    fi
+fi
 
 # --- Step 3: Rsync backup artifacts to offsite storage ---
 
@@ -569,6 +630,6 @@ else
     backup_alert_recovery
 fi
 
-SUMMARY="backup — synced: $SYNCED/$TOTAL, offsite: $OFFSITE_STATUS"
+SUMMARY="backup — synced: $SYNCED/$TOTAL, offsite: $OFFSITE_STATUS, state: $STATE_STAMP"
 dolt_notify_done "$SUMMARY"
 echo "backup: $SUMMARY"
