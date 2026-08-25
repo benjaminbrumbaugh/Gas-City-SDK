@@ -1,10 +1,12 @@
 package dolt_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -5306,6 +5308,177 @@ func TestBackupScriptCountsFailedRemoteAutoConfiguration(t *testing.T) {
 	}
 	if !strings.Contains(string(gcLog), "archive(backup add failed)") {
 		t.Fatalf("failure mail should name the failed auto-configuration, log:\n%s", gcLog)
+	}
+}
+
+// reaperBackupGateEpoch replays reaper.sh step 6's freshness parse against a
+// state file and returns the epoch seconds it derives, failing the test if that
+// parse cannot read the file.
+//
+// The gate does not decode JSON. It greps last_sync off a single line with sed,
+// truncates any fractional part, and feeds the result to a
+// %Y-%m-%dT%H:%M:%SZ strptime. A stamp that Go round-trips but that sed and
+// date cannot read is still a latched gate, so the format contract is asserted
+// through the consumer's own parser rather than restated in Go.
+func reaperBackupGateEpoch(t *testing.T, stateFile string) string {
+	t.Helper()
+	const gate = `
+set -u
+_BACKUP_TS=$(sed -n "s/.*\"last_sync\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1)
+[ -n "$_BACKUP_TS" ] || { echo "gate found no last_sync" >&2; exit 1; }
+case "$_BACKUP_TS" in *.*) _BACKUP_TS="${_BACKUP_TS%%.*}Z" ;; esac
+date -u -d "$_BACKUP_TS" '+%s' 2>/dev/null \
+	|| date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$_BACKUP_TS" '+%s' 2>/dev/null \
+	|| { echo "gate could not parse timestamp $_BACKUP_TS" >&2; exit 1; }
+`
+	out, err := exec.Command("bash", "-c", gate, "reaper-gate", stateFile).CombinedOutput()
+	if err != nil {
+		t.Fatalf("reaper gate rejected %s: %v\n%s", stateFile, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestBackupScriptStampsDoltBackupStateAfterCleanSync is the regression for a
+// permanently latched reaper bulk-prune gate (gc-3x5).
+//
+// reaper.sh judges a scope that has a registered Dolt destination on
+// .beads/dolt-backup-state.json, but the only writer of that file was
+// `bd backup sync` — which is inoperative when backup.enabled=false, the
+// documented default for shared-server mode. This script was the mechanism
+// actually keeping backups current and never touched the file, so the freshness
+// signal froze at whatever `bd` last wrote while real backups stayed healthy.
+// The gate therefore never reopened and closed session beads accumulated
+// forever, with no backup action available to clear it.
+func TestBackupScriptStampsDoltBackupStateAfterCleanSync(t *testing.T) {
+	cityPath := t.TempDir()
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	beadsDir := filepath.Join(cityPath, ".beads")
+	for _, path := range []string{filepath.Join(dataDir, "prod", ".dolt"), beadsDir} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	// The registered destination is what makes the gate read
+	// dolt-backup-state.json instead of the legacy embedded-store file.
+	if err := os.WriteFile(filepath.Join(beadsDir, "dolt-backup.json"),
+		[]byte(`{"backup_url":"file:///backups","backup_name":"default","created_at":"2026-08-17T02:15:02Z"}`),
+		0o600); err != nil {
+		t.Fatalf("write dolt-backup.json: %v", err)
+	}
+	binDir := t.TempDir()
+	_ = writeDogFakeGC(t, binDir)
+	_ = writeBackupFakeDolt(t, binDir, "2.3.1", 0, "prod")
+
+	started := time.Now().UTC()
+	out := runDogScript(t, "mol-dog-backup.sh", binDir, cityPath, dataDir)
+	if !strings.Contains(out, "synced: 1/1") || !strings.Contains(out, "state: ok") {
+		t.Fatalf("a clean sync should stamp the backup state:\n%s", out)
+	}
+
+	statePath := filepath.Join(beadsDir, "dolt-backup-state.json")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("clean sync must stamp %s: %v", statePath, err)
+	}
+	// Mirrors beads' doltBackupState: last_sync into a time.Time (so the value
+	// has to be RFC3339), duration as a free-form string. `bd backup status`
+	// and gc doctor's bd-backup-freshness both decode it this way.
+	var state struct {
+		LastSync time.Time `json:"last_sync"`
+		Duration string    `json:"duration"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("stamp must satisfy beads doltBackupState: %v\n%s", err, data)
+	}
+	if state.Duration == "" {
+		t.Fatalf("stamp should record the sync duration:\n%s", data)
+	}
+	// A wide window on purpose: this asserts the stamp is of THIS run rather
+	// than a copied-forward value, and must not race process startup the way
+	// doctorBackupStaleEnv documents.
+	if state.LastSync.Before(started.Add(-time.Minute)) || state.LastSync.After(time.Now().UTC().Add(time.Minute)) {
+		t.Fatalf("last_sync %s is not this run (started %s):\n%s", state.LastSync, started, data)
+	}
+
+	epoch := reaperBackupGateEpoch(t, statePath)
+	secs, err := strconv.ParseInt(epoch, 10, 64)
+	if err != nil {
+		t.Fatalf("reaper gate produced a non-numeric epoch %q: %v", epoch, err)
+	}
+	// 86400s is the gate's own default GC_REAPER_BACKUP_MAX_AGE.
+	if age := time.Since(time.Unix(secs, 0)); age > 24*time.Hour {
+		t.Fatalf("reaper gate would still skip bulk prune: backup age %s", age)
+	}
+	info, err := os.Stat(statePath)
+	if err != nil {
+		t.Fatalf("stat stamp: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("stamp should stay owner-only like bd's atomic write, got %o", perm)
+	}
+}
+
+// TestBackupScriptLeavesDoltBackupStateStaleWhenADatabaseFails guards the
+// reason the gate exists. Bulk deletion is withheld while backup coverage is
+// incomplete, so a partial sync must NOT refresh the freshness signal —
+// stamping on partial success would defeat exactly the protection the gate
+// provides.
+func TestBackupScriptLeavesDoltBackupStateStaleWhenADatabaseFails(t *testing.T) {
+	cityPath := t.TempDir()
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	beadsDir := filepath.Join(cityPath, ".beads")
+	for _, path := range []string{
+		filepath.Join(dataDir, "prod", ".dolt"),
+		filepath.Join(dataDir, "archive", ".dolt"),
+		beadsDir,
+	} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	statePath := filepath.Join(beadsDir, "dolt-backup-state.json")
+	stale := "{\n  \"last_sync\": \"2026-08-17T02:15:02.444816Z\",\n  \"duration\": \"340.104542ms\"\n}\n"
+	if err := os.WriteFile(statePath, []byte(stale), 0o600); err != nil {
+		t.Fatalf("write stale state: %v", err)
+	}
+	binDir := t.TempDir()
+	_ = writeDogFakeGC(t, binDir)
+	// archive's backup remote cannot be configured, so it never syncs.
+	_ = writeAutoConfigureFakeDolt(t, binDir, 1)
+
+	out := runDogScript(t, "mol-dog-backup.sh", binDir, cityPath, dataDir)
+	if !strings.Contains(out, "synced: 1/2") || !strings.Contains(out, "state: skipped") {
+		t.Fatalf("a partial sync must not stamp the backup state:\n%s", out)
+	}
+	got, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if string(got) != stale {
+		t.Fatalf("partial sync rewrote the freshness signal:\nwant %q\ngot  %q", stale, got)
+	}
+}
+
+// TestBackupScriptDoesNotCreateBeadsWorkspaceForStamp keeps the stamp from
+// fabricating a workspace. Creating .beads here would make
+// beads.FindBeadsDir() resolve a directory no one initialized, so a city
+// without one is reported rather than invented.
+func TestBackupScriptDoesNotCreateBeadsWorkspaceForStamp(t *testing.T) {
+	cityPath := t.TempDir()
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	if err := os.MkdirAll(filepath.Join(dataDir, "prod", ".dolt"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	binDir := t.TempDir()
+	_ = writeDogFakeGC(t, binDir)
+	_ = writeBackupFakeDolt(t, binDir, "2.3.1", 0, "prod")
+
+	out := runDogScript(t, "mol-dog-backup.sh", binDir, cityPath, dataDir)
+	if !strings.Contains(out, "synced: 1/1") || !strings.Contains(out, "state: no-workspace") {
+		t.Fatalf("a city without .beads should report no-workspace:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(cityPath, ".beads")); !os.IsNotExist(err) {
+		t.Fatalf("backup must not fabricate a beads workspace (stat err: %v)", err)
 	}
 }
 

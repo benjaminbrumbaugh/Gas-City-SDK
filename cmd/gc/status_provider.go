@@ -12,7 +12,10 @@ import (
 )
 
 var (
-	statusProviderCallTimeout    = 50 * time.Millisecond
+	// Runtime status probes fan out concurrently, so this budget bounds the
+	// observation wave rather than multiplying by configured agent count. Keep
+	// enough margin for ordinary local tmux/process queries under host load.
+	statusProviderCallTimeout    = 500 * time.Millisecond
 	statusProviderTimeoutWarning = func() {
 		fmt.Fprintln(os.Stderr, "gc status: runtime status probe timed out; using partial status")
 	}

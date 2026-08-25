@@ -441,8 +441,15 @@ func AcknowledgeDrainPatch(freshWake bool) MetadataPatch {
 }
 
 // CompleteDrainPatch records a completed controller drain as ordinary asleep.
-func CompleteDrainPatch(now time.Time, reason string, freshWake bool) MetadataPatch {
+// sleepIntent is the pre-drain provenance marker. An explicit operator suspend
+// writes user-hold alongside held_until; preserve that pair so the drained
+// session cannot be mistaken for a bounded heartbeat hold. Transient intents
+// still clear through SleepPatch.
+func CompleteDrainPatch(now time.Time, reason string, freshWake bool, sleepIntent string) MetadataPatch {
 	patch := SleepPatch(now, reason)
+	if sleepIntent == "user-hold" {
+		delete(patch, "sleep_intent")
+	}
 	patch["state_reason"] = ""
 	if freshWake {
 		patch["session_key"] = ""
