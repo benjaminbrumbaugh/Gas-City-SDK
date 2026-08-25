@@ -5,7 +5,10 @@ set -euo pipefail
 # store raised the verified graph from 727 to 741 modules. Category-specific
 # and binary-size caps below remain independent backstops.
 max_modules="${GC_NATIVE_DEP_MAX_MODULES:-741}"
-max_binary_bytes="${GC_NATIVE_DEP_MAX_BINARY_BYTES:-270000000}"
+# The pinned Linux Go 1.26.6 build is 273,268,976 bytes after the same runtime
+# updates; Darwin remains smaller. Keep a narrow cross-platform ceiling while
+# symbol and literal guards below continue to catch testhook leakage.
+max_binary_bytes="${GC_NATIVE_DEP_MAX_BINARY_BYTES:-275000000}"
 max_aws_modules="${GC_NATIVE_DEP_MAX_AWS_MODULES:-25}"
 max_azure_modules="${GC_NATIVE_DEP_MAX_AZURE_MODULES:-9}"
 max_dolthub_modules="${GC_NATIVE_DEP_MAX_DOLTHUB_MODULES:-15}"
