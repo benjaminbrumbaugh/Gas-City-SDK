@@ -38,6 +38,7 @@ func currentTestDecision(t *testing.T, id string, now time.Time) (DecisionPayloa
 	t.Helper()
 	payload := testDecisionPayload(t)
 	payload.DecisionID = id
+	payload.WorkRevision = -7
 	payload.CreatedAt = now.Add(-time.Minute)
 	payload.ExpiresAt = now.Add(time.Hour)
 	payload.BindingID = BindingID(payload)
@@ -59,6 +60,9 @@ func TestIngestApprovedValidatesCurrentSignedEnvelopeAtomically(t *testing.T) {
 	}
 	if got.Record.State != StateApproved || got.Record.RecordRevision != 2 || got.Receipt.State != StateApproved {
 		t.Fatalf("ingest result = %+v", got)
+	}
+	if got.Record.Payload.WorkRevision != -7 {
+		t.Fatalf("ingest normalized signed work revision to %d", got.Record.Payload.WorkRevision)
 	}
 	replay, err := store.IngestApproved(IngestApprovedRequest{
 		Payload: payload, Approval: approval, Signature: signature,
@@ -384,10 +388,10 @@ func TestPurgedDecisionTombstonePreventsStillCurrentReingest(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	payload, approval, signature, verifier := currentTestDecision(t, "decision-long-valid", current)
+	payload, _, _, _ := currentTestDecision(t, "decision-long-valid", current)
 	payload.ExpiresAt = current.AddDate(1, 0, 0)
 	payload.BindingID = BindingID(payload)
-	approval, signature, verifier = signedDecision(t, payload, current.Add(-time.Second))
+	approval, signature, verifier := signedDecision(t, payload, current.Add(-time.Second))
 	request := IngestApprovedRequest{
 		Payload: payload, Approval: approval, Signature: signature,
 		Now: current, IdempotencyToken: "ingest-long-valid",

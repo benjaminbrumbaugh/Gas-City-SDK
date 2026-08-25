@@ -158,6 +158,18 @@ func TestDecisionValidationRejectsBindingAndTemporalDrift(t *testing.T) {
 	if err := payload.Validate(); err != nil {
 		t.Fatalf("valid payload: %v", err)
 	}
+	negativeRevision := payload
+	negativeRevision.WorkRevision = -7
+	negativeRevision.BindingID = BindingID(negativeRevision)
+	if err := negativeRevision.Validate(); err != nil {
+		t.Fatalf("Validate rejected opaque signed work revision: %v", err)
+	}
+	negativeFence := payload
+	negativeFence.ClaimFence = -1
+	negativeFence.BindingID = BindingID(negativeFence)
+	if err := negativeFence.Validate(); err == nil {
+		t.Fatal("Validate accepted a negative claim fence")
+	}
 
 	wrongBinding := payload
 	wrongBinding.BindingID = strings.Repeat("f", sha256.Size*2)
