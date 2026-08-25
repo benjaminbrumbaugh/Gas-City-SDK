@@ -463,7 +463,10 @@ func cityStatusJSONFromSnapshot(snapshot cityStatusSnapshot, summary StatusSumma
 	if snapshot.Partial {
 		signals = append(signals, "runtime_status_partial")
 	}
-	if snapshot.Summary.TotalAgents > 0 && snapshot.Summary.RunningAgents == 0 {
+	// Configured agents may all be on-demand, so zero running processes is a
+	// healthy quiescent state unless bead-backed session state still claims an
+	// active runtime. The latter is the actionable mismatch this signal names.
+	if summary.TotalAgents > 0 && summary.RunningAgents == 0 && summary.ActiveSessions > 0 {
 		signals = append(signals, "no_agents_running")
 	}
 	degraded := len(signals) > 0
