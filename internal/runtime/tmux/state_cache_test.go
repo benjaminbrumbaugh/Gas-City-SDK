@@ -276,6 +276,44 @@ func TestStateCache_DirtyReadersCoalesceWithinGeneration(t *testing.T) {
 	}
 }
 
+func TestStateCache_DelayedDirtyGenerationReaderCannotRefetchRetiredGeneration(t *testing.T) {
+	f := &mockFetcher{sessions: map[string]bool{"agent-2": true}}
+	cache := NewStateCache(f, time.Hour)
+	cache.state = runtimeStateSnapshot{Sessions: map[string]sessionRuntimeState{"agent-1": {Running: true}}}
+	cache.fetchedAt = time.Now()
+	cache.Invalidate()
+
+	// Reader A snapshots dirty generation G, then pauses before entering
+	// singleflight. This ordering is the regression: B must fully complete and
+	// retire G before A is released, otherwise a max-concurrency assertion can
+	// miss A's second, sequential FetchState call.
+	snapshotted := make(chan uint64, 1)
+	releaseA := make(chan struct{})
+	doneA := make(chan struct{})
+	go func() {
+		cache.mu.RLock()
+		generation := cache.generation
+		dirty := cache.dirty
+		cache.mu.RUnlock()
+		if !dirty {
+			panic("reader A did not snapshot a dirty generation")
+		}
+		snapshotted <- generation
+		<-releaseA
+		cache.refresh(generation)
+		close(doneA)
+	}()
+
+	generation := <-snapshotted
+	cache.refresh(generation) // reader B completes G while A remains paused
+	close(releaseA)
+	<-doneA
+
+	if got := f.getCalls(); got != 1 {
+		t.Fatalf("FetchState calls for retired generation %d = %d, want exactly 1", generation, got)
+	}
+}
+
 func TestStateCache_NewerGenerationFetchDoesNotWaitForStaleGeneration(t *testing.T) {
 	f := &concurrentBlockingFetcher{
 		started: make(chan struct{}, 2),
@@ -676,6 +714,52 @@ func TestStateCache_StaleNoServerCompletionCannotUndoEviction(t *testing.T) {
 	}
 	if cache.lastError != nil {
 		t.Fatalf("stale no-server completion replaced lastError: %v", cache.lastError)
+	}
+}
+
+func TestStateCache_StaleSuccessfulEmptyCompletionCannotUndoEviction(t *testing.T) {
+	f := &controlledRefreshFetcher{
+		state:     runtimeStateSnapshot{Sessions: map[string]sessionRuntimeState{}},
+		blockCall: 1,
+		entered:   make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	cache := NewStateCache(f, 0)
+	originalFetchedAt := time.Now().Add(-time.Second)
+	originalError := errors.New("newer generation marker")
+	cache.state = runtimeStateSnapshot{Sessions: map[string]sessionRuntimeState{
+		"agent-1":  {Running: true},
+		"survivor": {Running: true},
+	}}
+	cache.fetchedAt = originalFetchedAt
+	cache.lastError = originalError
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = cache.IsRunning("agent-1")
+	}()
+	<-f.entered
+	cache.EvictSession("agent-1")
+	close(f.release)
+	<-done
+
+	cache.mu.RLock()
+	defer cache.mu.RUnlock()
+	if _, ok := cache.state.Sessions["agent-1"]; ok {
+		t.Fatal("stale successful empty completion restored evicted session")
+	}
+	if !cache.state.Sessions["survivor"].Running || len(cache.state.Sessions) != 1 {
+		t.Fatalf("stale successful empty completion replaced newer state: %+v", cache.state.Sessions)
+	}
+	if !cache.fetchedAt.Equal(originalFetchedAt) {
+		t.Fatalf("stale successful empty completion changed fetchedAt from %v to %v", originalFetchedAt, cache.fetchedAt)
+	}
+	if !errors.Is(cache.lastError, originalError) {
+		t.Fatalf("stale successful empty completion changed lastError from %v to %v", originalError, cache.lastError)
+	}
+	if !cache.dirty {
+		t.Fatal("stale successful empty completion cleared newer dirty generation")
 	}
 }
 
