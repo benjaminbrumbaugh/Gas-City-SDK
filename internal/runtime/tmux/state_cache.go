@@ -122,6 +122,11 @@ func (c *StateCache) currentState() runtimeStateSnapshot {
 	state := c.state
 	fetchedAt := c.fetchedAt
 	dirty := c.dirty
+	// Stale, empty, or dirty — trigger a generation-scoped refresh. Readers
+	// that observed the same generation share one singleflight key. Invalidation
+	// advances the generation, so a newer refresh does not wait for an obsolete
+	// fetch; completion validation below prevents that obsolete fetch publishing.
+	generation := c.generation
 	c.mu.RUnlock()
 
 	// Cache hit: fresh data, not invalidated.
@@ -129,13 +134,7 @@ func (c *StateCache) currentState() runtimeStateSnapshot {
 		return state
 	}
 
-	// Stale, empty, or dirty — trigger refresh.
-	// When dirty, forget any in-flight singleflight so we get a fresh fetch
-	// instead of coalescing with a pre-invalidation call.
-	if dirty {
-		c.sf.Forget("refresh")
-	}
-	c.refresh()
+	c.refresh(generation)
 
 	// Read the (potentially updated) cache.
 	c.mu.RLock()
@@ -185,74 +184,77 @@ func (c *StateCache) EvictSession(name string) {
 	c.mu.Unlock()
 }
 
-// refresh executes a single coalesced fetch. If the fetch fails, the
-// last-known-good cache is preserved. Genuine failures are logged; an
-// unprimed no-server result is an expected idle state and primes empty silently.
-func (c *StateCache) refresh() {
-	_, _, _ = c.sf.Do("refresh", func() (interface{}, error) {
+// refresh executes a fetch coalesced by cache generation. Readers that observed
+// one generation use one key; invalidation advances the key so the new generation
+// may fetch without waiting for an obsolete generation. Every completion is
+// validated before publication, so an obsolete fetch can never mutate cache state.
+func (c *StateCache) refresh(generation uint64) {
+	key := "refresh:" + strconv.FormatUint(generation, 10)
+	_, _, _ = c.sf.Do(key, func() (interface{}, error) {
+		// Avoid starting work for a generation invalidated after currentState
+		// released the cache lock but before this singleflight callback began.
+		c.mu.RLock()
+		current := c.generation == generation
+		c.mu.RUnlock()
+		if !current {
+			return nil, nil
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
 		defer cancel()
-
-		c.mu.RLock()
-		startGeneration := c.generation
-		c.mu.RUnlock()
 
 		start := time.Now()
 		state, err := c.fetcher.FetchState(ctx)
 		elapsed := time.Since(start)
+		verbose := os.Getenv("GC_LOG_TMUX_CACHE") == "true"
+		completionTime := time.Now()
+		sessionCount := len(state.Sessions)
+		noServerError := err != nil && isNoServerError(err)
+		emptyState := runtimeStateSnapshot{Sessions: make(map[string]sessionRuntimeState)}
+
+		c.mu.Lock()
+		if c.generation != generation {
+			c.mu.Unlock()
+			if verbose {
+				log.Printf("tmux state cache: discarded refresh from generation %d after %v", generation, elapsed)
+			}
+			return nil, nil
+		}
 
 		if err != nil {
-			c.mu.Lock()
-			unprimedNoServer := c.fetchedAt.IsZero() && isNoServerError(err)
-			if !unprimedNoServer {
-				log.Printf("tmux state cache: refresh failed in %v: %v", elapsed, err)
-			}
+			unprimedNoServer := c.fetchedAt.IsZero() && noServerError
 			c.lastError = err
 			// Two distinct failure regimes, keyed on whether the cache was ever
 			// primed (fetchedAt set by a prior success):
 			//
-			//   UNPRIMED + genuine no-server (a fresh city with no tmux server
-			//   yet): initialize to an EMPTY snapshot so the cache is primed.
-			//   Without this, currentState() sees a nil Sessions map and forces
-			//   a fresh list-panes spawn plus a failure log on EVERY IsRunning()
-			//   call — a re-spawn/log storm in the exact steady state (no server)
-			//   where nothing will change until one is started. An empty primed
-			//   snapshot correctly reports all sessions not-running and holds as
-			//   a cache hit until the TTL lapses.
+			//   UNPRIMED + genuine no-server: initialize to an EMPTY snapshot so
+			//   subsequent reads within the TTL do not re-spawn or re-log.
 			//
-			//   PRIMED then now-unreachable: preserve last-known-good (do NOT
-			//   touch fetchedAt or sessions) until the staleTTL cliff. A server
-			//   that was up then briefly vanished (supervisor restart, socket
-			//   stall) must not wipe a good snapshot and drain healthy pool slots
-			//   — that is #4082's intent.
+			//   PRIMED then now-unreachable: preserve last-known-good (including
+			//   fetchedAt) until the staleTTL cliff.
 			if unprimedNoServer {
-				c.state = runtimeStateSnapshot{Sessions: make(map[string]sessionRuntimeState)}
-				c.fetchedAt = time.Now()
+				c.state = emptyState
+				c.fetchedAt = completionTime
 				c.dirty = false
 			}
 			c.mu.Unlock()
+			if !unprimedNoServer {
+				log.Printf("tmux state cache: refresh failed in %v: %v", elapsed, err)
+			}
 			return nil, err
 		}
 
-		c.mu.Lock()
-		if c.generation != startGeneration {
-			c.mu.Unlock()
-			if os.Getenv("GC_LOG_TMUX_CACHE") == "true" {
-				log.Printf("tmux state cache: discarded refresh from generation %d after %v", startGeneration, elapsed)
-			}
-			return nil, nil
-		}
-		// Successful refresh is noisy on the session loop; opt-in via env var
-		// keeps it available for diagnostics without polluting normal CLI use.
-		if os.Getenv("GC_LOG_TMUX_CACHE") == "true" {
-			log.Printf("tmux state cache: refreshed %d sessions in %v", len(state.Sessions), elapsed)
-		}
-
 		c.state = state
-		c.fetchedAt = time.Now()
+		c.fetchedAt = completionTime
 		c.lastError = nil
 		c.dirty = false
 		c.mu.Unlock()
+
+		// Successful refresh is noisy on the session loop; opt-in via env var
+		// keeps it available for diagnostics without polluting normal CLI use.
+		if verbose {
+			log.Printf("tmux state cache: refreshed %d sessions in %v", sessionCount, elapsed)
+		}
 		return nil, nil
 	})
 }
