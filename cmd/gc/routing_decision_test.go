@@ -271,6 +271,22 @@ func TestCityRuntimeRecordsRefusalAfterWorkRevisionDrift(t *testing.T) {
 	}
 }
 
+func TestRoutingDecisionEligibleWorkMatchesNegativeRevisionExactly(t *testing.T) {
+	now := time.Date(2026, 8, 7, 23, 30, 0, 0, time.UTC)
+	work := beads.Bead{ID: "GC-NEGATIVE", Status: "open", Revision: -7, ClaimFence: 3}
+	payload := routingdecision.DecisionPayload{
+		WorkBeadID: work.ID, WorkRevision: work.Revision, ClaimFence: work.ClaimFence,
+		WorkStateDigest: routingdecision.WorkStateDigest(routingdecision.WorkStateFrom(work.ID, work.Status, work.Assignee, work.Metadata, work.ClaimFence)),
+	}
+	if !routingDecisionEligibleWork(work, payload, now) {
+		t.Fatal("exact negative work revision did not match controller admission seam")
+	}
+	payload.WorkRevision--
+	if routingDecisionEligibleWork(work, payload, now) {
+		t.Fatal("mismatched negative work revision matched controller admission seam")
+	}
+}
+
 func TestCityRuntimeExpiresDueApprovedDecisionBeforeQuery(t *testing.T) {
 	fixture := newApprovedRoutingDecisionFixture(t, "decision-expired")
 	fixture.cr.routingDecisionNowFn = func() time.Time { return fixture.payload.ExpiresAt.Add(time.Nanosecond) }
