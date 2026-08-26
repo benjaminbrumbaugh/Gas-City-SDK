@@ -81,7 +81,7 @@ type StateCache struct {
 	fetchedAt  time.Time
 	lastError  error
 	dirty      bool   // set by Invalidate(); cleared on successful refresh
-	generation uint64 // advanced by invalidation/eviction to reject stale refreshes
+	generation uint64 // advanced by invalidation, eviction, and accepted refresh retirement
 	ttl        time.Duration
 	staleTTL   time.Duration
 	sf         singleflight.Group
@@ -220,6 +220,12 @@ func (c *StateCache) refresh(generation uint64) {
 			}
 			return nil, nil
 		}
+		// Retire every accepted generation while holding the completion fence.
+		// A reader that already snapshotted generation G but reaches singleflight
+		// after this callback is removed must fail the generation check instead of
+		// starting a second, sequential FetchState for G. Retryable failures keep
+		// dirty set, but their next legitimate retry uses this newer generation.
+		c.generation++
 
 		if err != nil {
 			unprimedNoServer := c.fetchedAt.IsZero() && noServerError
