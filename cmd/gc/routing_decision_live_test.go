@@ -112,8 +112,8 @@ func TestRoutingDecisionSnapshotsAreDeterministicAndSelectionSafe(t *testing.T) 
 			{Name: "disabled", Dir: "a-rig", Suspended: true, MaxActiveSessions: &max, MinActiveSessions: &min},
 		},
 	}
-	cityStore := beads.NewMemStoreFrom(0, []beads.Bead{{ID: "CITY-READY", Status: "open"}, {ID: "CITY-ROUTED", Status: "open", Metadata: map[string]string{beadmeta.RoutedToMetadataKey: "a-rig/alpha"}}}, nil)
-	rigStore := beads.NewMemStoreFrom(0, []beads.Bead{{ID: "RIG-READY", Status: "open"}, {ID: "RIG-ASSIGNED", Status: "in_progress", Assignee: "worker-1"}}, nil)
+	cityStore := beads.NewMemStoreFrom(0, []beads.Bead{{ID: "CITY-READY", Status: "open", Revision: -7}, {ID: "CITY-ROUTED", Status: "open", Metadata: map[string]string{beadmeta.RoutedToMetadataKey: "a-rig/alpha"}}}, nil)
+	rigStore := beads.NewMemStoreFrom(0, []beads.Bead{{ID: "RIG-READY", Status: "open", Revision: -1 << 63}, {ID: "RIG-ASSIGNED", Status: "in_progress", Assignee: "worker-1"}}, nil)
 	cr := &CityRuntime{
 		cityName: "test-city", cfg: cfg, standaloneCityStore: cityStore,
 		standaloneRigStores: map[string]beads.Store{"a-rig": rigStore}, routingDecisionNowFn: func() time.Time { return now },
@@ -139,8 +139,8 @@ func TestRoutingDecisionSnapshotsAreDeterministicAndSelectionSafe(t *testing.T) 
 		t.Fatal(err)
 	}
 	wantWork := []routingdecision.EligibleWorkSnapshot{
-		{Rig: "", Scope: "city", WorkBeadID: "CITY-READY", WorkRevision: 0, ClaimFence: 0, WorkStateDigest: routingdecision.WorkStateDigest(routingdecision.WorkStateFrom("CITY-READY", "open", "", map[string]string(nil), 0))},
-		{Rig: "a-rig", Scope: "rig", WorkBeadID: "RIG-READY", WorkRevision: 0, ClaimFence: 0, WorkStateDigest: routingdecision.WorkStateDigest(routingdecision.WorkStateFrom("RIG-READY", "open", "", map[string]string(nil), 0))},
+		{Rig: "", Scope: "city", WorkBeadID: "CITY-READY", WorkRevision: -7, ClaimFence: 0, WorkStateDigest: routingdecision.WorkStateDigest(routingdecision.WorkStateFrom("CITY-READY", "open", "", map[string]string(nil), 0))},
+		{Rig: "a-rig", Scope: "rig", WorkBeadID: "RIG-READY", WorkRevision: -1 << 63, ClaimFence: 0, WorkStateDigest: routingdecision.WorkStateDigest(routingdecision.WorkStateFrom("RIG-READY", "open", "", map[string]string(nil), 0))},
 	}
 	if !snapshot.ObservedAt.Equal(now) || !reflect.DeepEqual(snapshot.Work, wantWork) || !reflect.DeepEqual(snapshot.Targets, targets) {
 		t.Fatalf("eligible snapshot = %+v, want work=%+v targets=%+v", snapshot, wantWork, targets)
