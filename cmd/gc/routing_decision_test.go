@@ -214,6 +214,7 @@ func TestRoutingDecisionServiceIngestReconcilesApprovedImmediately(t *testing.T)
 		store: ledger, verifier: &verifier, status: routingdecision.AvailabilityReady,
 		reconcile: fixture.cr.reconcileRoutingDecisionsAndLog,
 	}
+	fixture.cr.routingDecisionService = service
 	result, err := service.Ingest(context.Background(), routingdecision.IngestApprovedRequest{
 		Payload: payload, Approval: approval, Signature: signature, IdempotencyToken: "ingest-" + payload.DecisionID,
 	})

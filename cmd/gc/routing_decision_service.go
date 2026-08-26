@@ -21,6 +21,7 @@ import (
 
 type cityRoutingDecisionService struct {
 	mu               sync.RWMutex
+	ingestWG         sync.WaitGroup
 	store            *routingdecision.Store
 	verifier         *routingdecision.Verifier
 	status           string
@@ -111,6 +112,7 @@ func (service *cityRoutingDecisionService) Close() {
 	service.store = nil
 	service.verifier = nil
 	service.mu.Unlock()
+	service.ingestWG.Wait()
 	if store != nil {
 		_ = store.Close()
 	}
@@ -325,17 +327,23 @@ func (service *cityRoutingDecisionService) Ingest(ctx context.Context, request r
 		return routingdecision.IngestApprovedResult{}, err
 	}
 	service.mu.RLock()
-	defer service.mu.RUnlock()
 	if service.closed || service.status != routingdecision.AvailabilityReady || service.store == nil || service.verifier == nil {
+		service.mu.RUnlock()
 		return routingdecision.IngestApprovedResult{}, errors.New("routing decision service unavailable")
 	}
-	result, err := service.store.IngestApproved(request, *service.verifier)
+	store := service.store
+	verifier := *service.verifier
+	reconcile := service.reconcile
+	service.ingestWG.Add(1)
+	service.mu.RUnlock()
+	defer service.ingestWG.Done()
+	result, err := store.IngestApproved(request, verifier)
 	if err != nil {
 		return routingdecision.IngestApprovedResult{}, err
 	}
-	if service.reconcile != nil {
-		service.reconcile()
-		current, getErr := service.store.Get(request.Payload.DecisionID)
+	if reconcile != nil {
+		reconcile()
+		current, getErr := store.Get(request.Payload.DecisionID)
 		if getErr != nil {
 			return routingdecision.IngestApprovedResult{}, getErr
 		}
