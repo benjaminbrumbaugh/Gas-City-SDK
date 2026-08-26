@@ -167,7 +167,19 @@ func (c *StateCache) Invalidate() {
 // the next refresh cycle (which may race with singleflight coalescing).
 func (c *StateCache) EvictSession(name string) {
 	c.mu.Lock()
-	delete(c.state.Sessions, name)
+	// Snapshots returned by currentState are read after the cache lock is
+	// released. Keep published snapshots immutable by replacing the sessions
+	// map instead of deleting from the map those readers may still hold.
+	var sessions map[string]sessionRuntimeState
+	if c.state.Sessions != nil {
+		sessions = make(map[string]sessionRuntimeState, len(c.state.Sessions))
+		for sessionName, state := range c.state.Sessions {
+			if sessionName != name {
+				sessions[sessionName] = state
+			}
+		}
+	}
+	c.state.Sessions = sessions
 	c.dirty = true
 	c.generation++
 	c.mu.Unlock()
