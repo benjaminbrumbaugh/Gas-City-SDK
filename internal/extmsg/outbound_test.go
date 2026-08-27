@@ -79,6 +79,26 @@ func newOutboundTestRig(t *testing.T) (Services, *stubAdapter, *[]capturedEvent,
 	return fabric, adapter, &captured, deps
 }
 
+func TestAdapterRegistryCredentialIsBoundToCurrentGenerationAndInstance(t *testing.T) {
+	registry := NewAdapterRegistry()
+	key := AdapterKey{Provider: "hermes", AccountID: "desktop"}
+	adapter := newStubAdapter("hermes", ConversationRef{})
+	first := registry.Register(key, adapter)
+	if first.Credential == "" || first.Instance == "" || first.Generation == 0 {
+		t.Fatalf("registration = %+v, want credential, instance, and generation", first)
+	}
+	if _, ok := registry.Authenticate(key, "hermes", first.Generation, first.Instance, "Bearer "+first.Credential); !ok {
+		t.Fatal("Authenticate current registration = false, want true")
+	}
+	second := registry.Register(key, adapter)
+	if second.Generation <= first.Generation {
+		t.Fatalf("replacement generation = %d, want greater than %d", second.Generation, first.Generation)
+	}
+	if _, ok := registry.Authenticate(key, "hermes", first.Generation, first.Instance, "Bearer "+first.Credential); ok {
+		t.Fatal("Authenticate stale registration = true, want false")
+	}
+}
+
 func TestHandleOutbound_BindingPathUnchanged(t *testing.T) {
 	freezeTestClock(t)
 	fabric, adapter, captured, deps := newOutboundTestRig(t)

@@ -36,6 +36,7 @@ func TestTransportAdapterPublishesCausallyLinkedRequest(t *testing.T) {
 	adapter := NewTransportAdapter(transport, "city-a")
 	request := Request{
 		RequestID:      "request-1",
+		Attempt:        1,
 		SourceAgent:    "mayor",
 		Target:         Target{Provider: "hermes", AccountID: "desktop", ConversationID: "conversation-1"},
 		Reason:         ReasonEscalation,
@@ -50,6 +51,9 @@ func TestTransportAdapterPublishesCausallyLinkedRequest(t *testing.T) {
 	}
 	if !receipt.Accepted || receipt.State != StateRunning {
 		t.Fatalf("receipt = %+v", receipt)
+	}
+	if receipt.Attempt != request.Attempt || receipt.CorrelationID != request.CorrelationID {
+		t.Fatalf("receipt causal fence = %+v", receipt)
 	}
 	if transport.published.Conversation.Provider != "hermes" || transport.published.Conversation.AccountID != "desktop" || transport.published.Conversation.ConversationID != "conversation-1" {
 		t.Fatalf("conversation = %+v", transport.published.Conversation)
@@ -67,6 +71,7 @@ func TestDispatcherDeliversRegisteredTransportAndLeavesCompletionOpen(t *testing
 		Target:         Target{Provider: "hermes", AccountID: "desktop", ConversationID: "conversation-1"},
 		Reason:         ReasonLargeSummary,
 		Prompt:         "Summary.",
+		CorrelationID:  "corr-dispatch",
 		IdempotencyKey: "idem-dispatch",
 		Now:            now,
 	})
@@ -99,6 +104,7 @@ func TestEphemeralContentIsScrubbedAfterDelivery(t *testing.T) {
 		Reason:           ReasonDirectRequest,
 		Prompt:           "One-off question that need not become durable knowledge.",
 		ContentRetention: RetentionEphemeral,
+		CorrelationID:    "corr-ephemeral",
 		Now:              time.Now().UTC(),
 	})
 	if err != nil {

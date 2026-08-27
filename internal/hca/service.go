@@ -177,12 +177,18 @@ func (s *Service) Claim(ctx context.Context, id, worker string, now time.Time) (
 		return RequestRecord{}, ErrExpired
 	}
 	record.Attempt++
+	record.Request.Attempt = record.Attempt
 	record.State = StateRunning
 	record.ClaimedBy = worker
 	record.ClaimedAt = now
+	payload, err := json.Marshal(record.Request)
+	if err != nil {
+		return RequestRecord{}, fmt.Errorf("encode claimed hca request %s: %w", record.ID, err)
+	}
 	if err := s.store.Update(record.ID, beads.UpdateOpts{
 		Status: strPtr("in_progress"),
 		Metadata: map[string]string{
+			metadataRequest:   string(payload),
 			metadataState:     string(StateRunning),
 			metadataAttempt:   fmt.Sprintf("%d", record.Attempt),
 			metadataClaimedBy: worker,
@@ -210,26 +216,29 @@ func (s *Service) Complete(ctx context.Context, id string, receipt DeliveryRecei
 	if record.State != StateRunning {
 		return fmt.Errorf("%w: %s is %s", ErrNotQueued, id, record.State)
 	}
-	if receipt.RequestID != "" && receipt.RequestID != id && receipt.RequestID != record.Request.RequestID {
-		return fmt.Errorf("%w: receipt request id %q does not match %q", ErrInvalidInput, receipt.RequestID, id)
+	if receipt.RequestID == "" || (receipt.RequestID != id && receipt.RequestID != record.Request.RequestID) {
+		return fmt.Errorf("%w: receipt request id does not match %q", ErrInvalidInput, id)
+	}
+	if receipt.Attempt <= 0 || receipt.Attempt != record.Attempt {
+		return fmt.Errorf("%w: receipt attempt does not match current claim", ErrInvalidInput)
+	}
+	if receipt.CorrelationID == "" || receipt.CorrelationID != record.Request.CorrelationID {
+		return fmt.Errorf("%w: receipt correlation_id does not match request", ErrInvalidInput)
 	}
 	now = zeroTime(now)
 	state := receipt.State
 	if state == "" {
 		state = StateQueued
 	}
-	if state != StateQueued && state != StateRunning && state != StateCompleted {
+	if state == StateCompleted {
+		return ErrPrematureCompletion
+	}
+	if state != StateQueued && state != StateRunning {
 		return fmt.Errorf("%w: invalid delivery state %q", ErrInvalidInput, state)
 	}
-	status := "open"
-	if state == StateRunning {
-		status = "in_progress"
-	}
-	if state == StateCompleted {
-		status = "closed"
-	}
+	status := "in_progress"
 	meta := map[string]string{
-		metadataState:     string(state),
+		metadataState:     string(StateRunning),
 		metadataDelivered: now.UTC().Format(time.RFC3339Nano),
 	}
 	if receipt.Error != "" {
@@ -238,7 +247,7 @@ func (s *Service) Complete(ctx context.Context, id string, receipt DeliveryRecei
 	if err := s.store.Update(id, beads.UpdateOpts{Status: &status, Metadata: meta}); err != nil {
 		return fmt.Errorf("record hca delivery %s: %w", id, err)
 	}
-	if record.Request.ContentRetention == RetentionEphemeral && state != StateFailed {
+	if record.Request.ContentRetention == RetentionEphemeral {
 		return s.scrubContent(id, now)
 	}
 	return nil
@@ -258,8 +267,14 @@ func (s *Service) RecordResponse(ctx context.Context, response Response) error {
 	if err != nil {
 		return err
 	}
-	if record.State != StateQueued && record.State != StateRunning {
+	if record.State != StateRunning {
 		return fmt.Errorf("%w: cannot record response for state %s", ErrNotQueued, record.State)
+	}
+	if response.Attempt <= 0 || response.Attempt != record.Attempt {
+		return fmt.Errorf("%w: response attempt does not match current claim", ErrInvalidInput)
+	}
+	if response.CorrelationID == "" || response.CorrelationID != record.Request.CorrelationID {
+		return fmt.Errorf("%w: response correlation_id does not match request", ErrInvalidInput)
 	}
 	status := "closed"
 	metadata := map[string]string{
@@ -398,6 +413,9 @@ func normalizeRequest(input RequestInput) (Request, error) {
 	}
 	if request.Target.LogicalRole == "" {
 		request.Target.LogicalRole = "human-coordinator"
+	}
+	if request.CorrelationID == "" {
+		return Request{}, fmt.Errorf("%w: correlation_id required", ErrInvalidInput)
 	}
 	if request.DeliveryMode == "" {
 		request.DeliveryMode = DeliveryQueued

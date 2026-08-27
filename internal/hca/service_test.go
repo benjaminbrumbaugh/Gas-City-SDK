@@ -3,6 +3,7 @@ package hca
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,6 +48,56 @@ func TestEnqueueDefaultsToQueuedAndResumeOrCreate(t *testing.T) {
 	}
 }
 
+func TestEnqueueRejectsBlankCorrelationID(t *testing.T) {
+	service := NewService(beads.NewMemStore())
+	input := testRequestInput(time.Now())
+	input.CorrelationID = " 	 "
+
+	if _, err := service.Enqueue(context.Background(), input); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("Enqueue blank correlation_id error = %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestClaimRequiresAttemptAndCorrelationFences(t *testing.T) {
+	now := time.Now()
+	service := NewService(beads.NewMemStore())
+	record, err := service.Enqueue(context.Background(), testRequestInput(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), record.ID, "dispatcher-a", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.Request.Attempt != 1 {
+		t.Fatalf("claimed request attempt = %d, want 1", claimed.Request.Attempt)
+	}
+	if err := service.Complete(context.Background(), record.ID, DeliveryReceipt{
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       2,
+		CorrelationID: claimed.Request.CorrelationID,
+		State:         StateRunning,
+	}, now.Add(2*time.Second)); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("Complete wrong attempt error = %v, want ErrInvalidInput", err)
+	}
+	if err := service.RecordResponse(context.Background(), Response{
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       claimed.Request.Attempt,
+		CorrelationID: "wrong-correlation",
+		ReceivedAt:    now.Add(2 * time.Second),
+	}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("RecordResponse wrong correlation error = %v, want ErrInvalidInput", err)
+	}
+	if err := service.RecordResponse(context.Background(), Response{
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       claimed.Request.Attempt,
+		CorrelationID: claimed.Request.CorrelationID,
+		ReceivedAt:    now.Add(3 * time.Second),
+	}); err != nil {
+		t.Fatalf("RecordResponse matching fence: %v", err)
+	}
+}
+
 func TestEnqueueIsIdempotentAndPreservesCausalEnvelope(t *testing.T) {
 	service := NewService(beads.NewMemStore())
 	first, err := service.Enqueue(context.Background(), testRequestInput(time.Now()))
@@ -71,7 +122,7 @@ func TestEnqueueIsIdempotentAndPreservesCausalEnvelope(t *testing.T) {
 }
 
 func TestClaimDeliveryAndResponseBoundaries(t *testing.T) {
-	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	service := NewService(beads.NewMemStore())
 	input := testRequestInput(now)
 	input.IdempotencyKey = "boundary-test"
@@ -87,9 +138,11 @@ func TestClaimDeliveryAndResponseBoundaries(t *testing.T) {
 		t.Fatalf("claimed = %+v, want running attempt 1", claimed)
 	}
 	if err := service.Complete(context.Background(), record.ID, DeliveryReceipt{
-		RequestID: record.Request.RequestID,
-		State:     StateQueued,
-		Accepted:  true,
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       claimed.Request.Attempt,
+		CorrelationID: claimed.Request.CorrelationID,
+		State:         StateQueued,
+		Accepted:      true,
 	}, now.Add(2*time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -97,15 +150,17 @@ func TestClaimDeliveryAndResponseBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.State != StateQueued {
-		t.Fatalf("after accepted delivery state = %q, want queued", stored.State)
+	if stored.State != StateRunning {
+		t.Fatalf("after accepted delivery state = %q, want running", stored.State)
 	}
 	if err := service.RecordResponse(context.Background(), Response{
-		RequestID:  record.Request.RequestID,
-		ResponseID: "response-1",
-		State:      "answered",
-		Summary:    "Proceed with the approved recovery path.",
-		ReceivedAt: now.Add(3 * time.Second),
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       claimed.Request.Attempt,
+		CorrelationID: claimed.Request.CorrelationID,
+		ResponseID:    "response-1",
+		State:         "answered",
+		Summary:       "Proceed with the approved recovery path.",
+		ReceivedAt:    now.Add(3 * time.Second),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +195,7 @@ func TestHTTPAdapterPreservesRequestIdentityAndRejectsPrematureCompletion(t *tes
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatal(err)
 		}
-		_ = json.NewEncoder(w).Encode(DeliveryReceipt{RequestID: got.RequestID, State: StateQueued, Accepted: true})
+		_ = json.NewEncoder(w).Encode(DeliveryReceipt{RequestID: got.RequestID, Attempt: got.Attempt, CorrelationID: got.CorrelationID, State: StateQueued, Accepted: true})
 	}))
 	defer server.Close()
 
@@ -160,12 +215,53 @@ func TestHTTPAdapterPreservesRequestIdentityAndRejectsPrematureCompletion(t *tes
 	}
 
 	premature := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(DeliveryReceipt{RequestID: record.Request.RequestID, State: StateCompleted})
+		_ = json.NewEncoder(w).Encode(DeliveryReceipt{RequestID: record.Request.RequestID, Attempt: record.Request.Attempt, CorrelationID: record.Request.CorrelationID, State: StateCompleted})
 	}))
 	defer premature.Close()
 	adapter = NewHTTPAdapter("bad", premature.URL, Capability{})
 	if _, err := adapter.Deliver(context.Background(), record.Request); err == nil {
 		t.Fatal("premature completion was accepted")
+	}
+}
+
+func TestHTTPAdapterRejectsOmittedOrMismatchedReceiptFence(t *testing.T) {
+	request := Request{RequestID: "request-1", Attempt: 7, CorrelationID: "corr-1"}
+
+	tests := []struct {
+		name    string
+		receipt string
+		wantErr bool
+	}{
+		{name: "matching", receipt: `{"request_id":"request-1","attempt":7,"correlation_id":"corr-1","state":"queued","accepted":true}`},
+		{name: "omitted request_id", receipt: `{"attempt":7,"correlation_id":"corr-1","state":"queued","accepted":true}`, wantErr: true},
+		{name: "mismatched request_id", receipt: `{"request_id":"other-request","attempt":7,"correlation_id":"corr-1","state":"queued","accepted":true}`, wantErr: true},
+		{name: "omitted attempt", receipt: `{"request_id":"request-1","correlation_id":"corr-1","state":"queued","accepted":true}`, wantErr: true},
+		{name: "mismatched attempt", receipt: `{"request_id":"request-1","attempt":8,"correlation_id":"corr-1","state":"queued","accepted":true}`, wantErr: true},
+		{name: "omitted correlation_id", receipt: `{"request_id":"request-1","attempt":7,"state":"queued","accepted":true}`, wantErr: true},
+		{name: "mismatched correlation_id", receipt: `{"request_id":"request-1","attempt":7,"correlation_id":"other-correlation","state":"queued","accepted":true}`, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tt.receipt))
+			}))
+			defer server.Close()
+
+			receipt, err := NewHTTPAdapter("hermes", server.URL, Capability{}).Deliver(context.Background(), request)
+			if tt.wantErr {
+				if err == nil || receipt.State != StateFailed {
+					t.Fatalf("Deliver() receipt=%+v err=%v, want failed receipt and error", receipt, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Deliver() error = %v", err)
+			}
+			if receipt.RequestID != request.RequestID || receipt.Attempt != request.Attempt || receipt.CorrelationID != request.CorrelationID {
+				t.Fatalf("Deliver() receipt fence = (%q, %d, %q), want (%q, %d, %q)", receipt.RequestID, receipt.Attempt, receipt.CorrelationID, request.RequestID, request.Attempt, request.CorrelationID)
+			}
+		})
 	}
 }
 

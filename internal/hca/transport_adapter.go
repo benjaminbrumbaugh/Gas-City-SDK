@@ -76,6 +76,8 @@ func (a *TransportAdapter) Deliver(ctx context.Context, request Request) (Delive
 	}
 	return DeliveryReceipt{
 		RequestID:       request.RequestID,
+		Attempt:         request.Attempt,
+		CorrelationID:   request.CorrelationID,
 		State:           StateRunning,
 		Accepted:        true,
 		TargetSessionID: request.Target.ConversationID,

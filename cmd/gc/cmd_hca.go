@@ -93,6 +93,9 @@ func newHCARequestCmd(stdout, _ io.Writer) *cobra.Command {
 			if strings.TrimSpace(flags.idempotencyKey) == "" {
 				return fmt.Errorf("--idempotency-key is required for safe retries")
 			}
+			if strings.TrimSpace(flags.correlationID) == "" {
+				return fmt.Errorf("--correlation-id is required for causal response fencing")
+			}
 			cityPath, err := resolveCity()
 			if err != nil {
 				return err
@@ -106,12 +109,12 @@ func newHCARequestCmd(stdout, _ io.Writer) *cobra.Command {
 				Prompt:           flags.prompt,
 				Reason:           flags.reason,
 				ContentRetention: stringPtr(flags.contentRetention),
+				CorrelationId:    flags.correlationID,
 				IdempotencyKey:   stringPtr(flags.idempotencyKey),
 			}
 			setOptionalString(&body.WorkRef, flags.workRef)
 			setOptionalString(&body.Repository, flags.repository)
 			setOptionalString(&body.Rig, rigFlag)
-			setOptionalString(&body.CorrelationId, flags.correlationID)
 			setOptionalString(&body.ResultDestination, flags.resultDestination)
 			if len(flags.allowedTools) > 0 {
 				body.AllowedTools = &flags.allowedTools

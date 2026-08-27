@@ -542,6 +542,9 @@ export const zExtMsgAdapterRegisterInputBody = z.object({
 
 export const zExtMsgAdapterRegisterOutputBody = z.object({
     account_id: z.string(),
+    credential: z.string(),
+    generation: z.coerce.bigint().gte(BigInt(0)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    instance: z.string(),
     name: z.string(),
     provider: z.string(),
     status: z.string()
@@ -2010,7 +2013,9 @@ export const zRequestFailedPayload = z.object({
 });
 
 export const zResponse = z.object({
+    attempt: z.coerce.bigint().gte(BigInt(1)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
     content_retention: z.string().optional(),
+    correlation_id: z.string().min(1),
     follow_up_required: z.boolean(),
     received_at: z.iso.datetime(),
     request_id: z.string(),
@@ -3828,7 +3833,7 @@ export const zHcaRequestBody = z.object({
     allowed_tools: z.array(z.string()).nullish(),
     city: z.string().optional(),
     content_retention: z.string().optional(),
-    correlation_id: z.string().optional(),
+    correlation_id: z.string().min(1),
     delivery_mode: z.string().optional(),
     expires_at: z.iso.datetime().optional(),
     idempotency_key: z.string().optional(),
@@ -3846,6 +3851,7 @@ export const zHcaRequestBody = z.object({
 
 export const zRequest = z.object({
     allowed_tools: z.array(z.string()).nullish(),
+    attempt: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
     city: z.string().optional(),
     content_retention: z.string(),
     correlation_id: z.string(),
@@ -8981,7 +8987,11 @@ export const zPostV0CityByCityNameHcaResponsesBody = zResponse;
 
 export const zPostV0CityByCityNameHcaResponsesHeaders = z.object({
     'X-GC-Request': z.string().min(1),
-    'Idempotency-Key': z.string().optional()
+    'Idempotency-Key': z.string().optional(),
+    Authorization: z.string(),
+    'X-HCA-Adapter': z.string(),
+    'X-HCA-Adapter-Generation': z.coerce.bigint().gte(BigInt(0)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    'X-HCA-Adapter-Instance': z.string()
 });
 
 export const zPostV0CityByCityNameHcaResponsesPath = z.object({

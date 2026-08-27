@@ -1921,6 +1921,15 @@ type ExtMsgAdapterRegisterOutputBody struct {
 	// AccountId Account ID.
 	AccountId string `json:"account_id"`
 
+	// Credential Ephemeral bearer credential issued only by this successful registration response; never returned by adapter-list operations.
+	Credential string `json:"credential"`
+
+	// Generation Current callback credential generation; a replacement registration revokes prior generations.
+	Generation int64 `json:"generation"`
+
+	// Instance Opaque callback registration instance; required with the credential for HCA responses.
+	Instance string `json:"instance"`
+
 	// Name Adapter name.
 	Name string `json:"name"`
 
@@ -2260,7 +2269,7 @@ type HCARequestBody struct {
 	AllowedTools      *[]string          `json:"allowed_tools,omitempty"`
 	City              *string            `json:"city,omitempty"`
 	ContentRetention  *string            `json:"content_retention,omitempty"`
-	CorrelationId     *string            `json:"correlation_id,omitempty"`
+	CorrelationId     string             `json:"correlation_id"`
 	DeliveryMode      *string            `json:"delivery_mode,omitempty"`
 	ExpiresAt         *time.Time         `json:"expires_at,omitempty"`
 	IdempotencyKey    *string            `json:"idempotency_key,omitempty"`
@@ -3364,6 +3373,7 @@ type Record struct {
 // Request defines model for Request.
 type Request struct {
 	AllowedTools      *[]string          `json:"allowed_tools,omitempty"`
+	Attempt           int64              `json:"attempt"`
 	City              *string            `json:"city,omitempty"`
 	ContentRetention  string             `json:"content_retention"`
 	CorrelationId     string             `json:"correlation_id"`
@@ -3416,7 +3426,9 @@ type RequestRecord struct {
 
 // Response defines model for Response.
 type Response struct {
+	Attempt          int64     `json:"attempt"`
 	ContentRetention *string   `json:"content_retention,omitempty"`
+	CorrelationId    string    `json:"correlation_id"`
 	FollowUpRequired bool      `json:"follow_up_required"`
 	ReceivedAt       time.Time `json:"received_at"`
 	RequestId        string    `json:"request_id"`
@@ -9568,6 +9580,18 @@ type PostV0CityByCityNameHcaResponsesParams struct {
 
 	// IdempotencyKey Idempotency key for safe retries.
 	IdempotencyKey *string `json:"Idempotency-Key,omitempty"`
+
+	// Authorization Bearer credential issued to the registered HCA adapter.
+	Authorization string `json:"Authorization"`
+
+	// XHCAAdapter Registered HCA adapter name.
+	XHCAAdapter string `json:"X-HCA-Adapter"`
+
+	// XHCAAdapterGeneration Current adapter registration generation.
+	XHCAAdapterGeneration int64 `json:"X-HCA-Adapter-Generation"`
+
+	// XHCAAdapterInstance Current adapter registration instance.
+	XHCAAdapterInstance string `json:"X-HCA-Adapter-Instance"`
 }
 
 // GetV0CityByCityNameMailParams defines parameters for GetV0CityByCityNameMail.
@@ -27138,6 +27162,42 @@ func NewPostV0CityByCityNameHcaResponsesRequestWithBody(server string, cityName 
 			req.Header.Set("Idempotency-Key", headerParam1)
 		}
 
+		var headerParam2 string
+
+		headerParam2, err = runtime.StyleParamWithOptions("simple", false, "Authorization", params.Authorization, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("Authorization", headerParam2)
+
+		var headerParam3 string
+
+		headerParam3, err = runtime.StyleParamWithOptions("simple", false, "X-HCA-Adapter", params.XHCAAdapter, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-HCA-Adapter", headerParam3)
+
+		var headerParam4 string
+
+		headerParam4, err = runtime.StyleParamWithOptions("simple", false, "X-HCA-Adapter-Generation", params.XHCAAdapterGeneration, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "integer", Format: "int64"})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-HCA-Adapter-Generation", headerParam4)
+
+		var headerParam5 string
+
+		headerParam5, err = runtime.StyleParamWithOptions("simple", false, "X-HCA-Adapter-Instance", params.XHCAAdapterInstance, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-HCA-Adapter-Instance", headerParam5)
+
 	}
 
 	return req, nil
@@ -35190,10 +35250,10 @@ type RegisterExtmsgAdapterResponse struct {
 	Body                      []byte
 	HTTPResponse              *http.Response
 	JSON201                   *ExtMsgAdapterRegisterOutputBody
+	ApplicationproblemJSON400 *ErrorModel
 	ApplicationproblemJSON401 *ErrorModel
 	ApplicationproblemJSON403 *ErrorModel
 	ApplicationproblemJSON404 *ErrorModel
-	ApplicationproblemJSON409 *ErrorModel
 	ApplicationproblemJSON422 *ErrorModel
 	ApplicationproblemJSON500 *ErrorModel
 	ApplicationproblemJSON503 *ErrorModel
@@ -35885,6 +35945,7 @@ type PostV0CityByCityNameHcaResponsesResponse struct {
 	HTTPResponse              *http.Response
 	JSON200                   *HCAResponseOutputBody
 	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON403 *ErrorModel
 	ApplicationproblemJSON404 *ErrorModel
 	ApplicationproblemJSON422 *ErrorModel
 	ApplicationproblemJSON500 *ErrorModel
@@ -43470,6 +43531,13 @@ func ParseRegisterExtmsgAdapterResponse(rsp *http.Response) (*RegisterExtmsgAdap
 		}
 		response.JSON201 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest ErrorModel
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -43490,13 +43558,6 @@ func ParseRegisterExtmsgAdapterResponse(rsp *http.Response) (*RegisterExtmsgAdap
 			return nil, err
 		}
 		response.ApplicationproblemJSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest ErrorModel
@@ -45134,6 +45195,13 @@ func ParsePostV0CityByCityNameHcaResponsesResponse(rsp *http.Response) (*PostV0C
 			return nil, err
 		}
 		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest ErrorModel

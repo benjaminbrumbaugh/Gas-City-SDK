@@ -201,10 +201,13 @@ type ExtMsgAdapterRegisterInput struct {
 // ExtMsgAdapterRegisterOutput is the Huma output for POST /v0/extmsg/adapters.
 type ExtMsgAdapterRegisterOutput struct {
 	Body struct {
-		Status    string `json:"status" doc:"Operation result." example:"registered"`
-		Provider  string `json:"provider" doc:"Provider name."`
-		AccountID string `json:"account_id" doc:"Account ID."`
-		Name      string `json:"name" doc:"Adapter name."`
+		Status     string `json:"status" doc:"Operation result." example:"registered"`
+		Provider   string `json:"provider" doc:"Provider name."`
+		AccountID  string `json:"account_id" doc:"Account ID."`
+		Name       string `json:"name" doc:"Adapter name."`
+		Credential string `json:"credential" doc:"Ephemeral bearer credential issued only by this successful registration response; never returned by adapter-list operations."`
+		Generation uint64 `json:"generation" doc:"Current callback credential generation; a replacement registration revokes prior generations."`
+		Instance   string `json:"instance" doc:"Opaque callback registration instance; required with the credential for HCA responses."`
 	}
 }
 

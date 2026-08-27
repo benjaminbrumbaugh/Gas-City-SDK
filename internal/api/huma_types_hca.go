@@ -42,7 +42,7 @@ type HCARequestBody struct {
 	Prompt            string               `json:"prompt" minLength:"1"`
 	ContentRetention  hca.ContentRetention `json:"content_retention,omitempty"`
 	AllowedTools      []string             `json:"allowed_tools,omitempty"`
-	CorrelationID     string               `json:"correlation_id,omitempty"`
+	CorrelationID     string               `json:"correlation_id" required:"true" minLength:"1"`
 	IdempotencyKey    string               `json:"idempotency_key,omitempty"`
 	ExpiresAt         time.Time            `json:"expires_at,omitempty"`
 	ResultDestination string               `json:"result_destination,omitempty"`
@@ -71,8 +71,12 @@ type HCARequestListOutput struct {
 // HCAResponseInput accepts an execution outcome from the configured adapter.
 type HCAResponseInput struct {
 	CityScope
-	IdempotencyKey string `header:"Idempotency-Key" required:"false" doc:"Idempotency key for safe retries."`
-	Body           hca.Response
+	IdempotencyKey    string `header:"Idempotency-Key" required:"false" doc:"Idempotency key for safe retries."`
+	Authorization     string `header:"Authorization" required:"true" doc:"Bearer credential issued to the registered HCA adapter."`
+	Adapter           string `header:"X-HCA-Adapter" required:"true" doc:"Registered HCA adapter name."`
+	AdapterGeneration uint64 `header:"X-HCA-Adapter-Generation" required:"true" doc:"Current adapter registration generation."`
+	AdapterInstance   string `header:"X-HCA-Adapter-Instance" required:"true" doc:"Current adapter registration instance."`
+	Body              hca.Response
 }
 
 // HCAResponseOutput acknowledges a recorded response.

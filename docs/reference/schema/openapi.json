@@ -3110,6 +3110,20 @@
             "description": "Account ID.",
             "type": "string"
           },
+          "credential": {
+            "description": "Ephemeral bearer credential issued only by this successful registration response; never returned by adapter-list operations.",
+            "type": "string"
+          },
+          "generation": {
+            "description": "Current callback credential generation; a replacement registration revokes prior generations.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "instance": {
+            "description": "Opaque callback registration instance; required with the credential for HCA responses.",
+            "type": "string"
+          },
           "name": {
             "description": "Adapter name.",
             "type": "string"
@@ -3130,7 +3144,10 @@
           "status",
           "provider",
           "account_id",
-          "name"
+          "name",
+          "credential",
+          "generation",
+          "instance"
         ],
         "type": "object"
       },
@@ -4040,6 +4057,7 @@
             "type": "string"
           },
           "correlation_id": {
+            "minLength": 1,
             "type": "string"
           },
           "delivery_mode": {
@@ -4091,7 +4109,8 @@
         "required": [
           "source_agent",
           "reason",
-          "prompt"
+          "prompt",
+          "correlation_id"
         ],
         "type": "object"
       },
@@ -10594,6 +10613,10 @@
               "null"
             ]
           },
+          "attempt": {
+            "format": "int64",
+            "type": "integer"
+          },
           "city": {
             "type": "string"
           },
@@ -10656,6 +10679,7 @@
         },
         "required": [
           "request_id",
+          "attempt",
           "source_agent",
           "target",
           "reason",
@@ -10748,7 +10772,16 @@
       "Response": {
         "additionalProperties": false,
         "properties": {
+          "attempt": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
           "content_retention": {
+            "type": "string"
+          },
+          "correlation_id": {
+            "minLength": 1,
             "type": "string"
           },
           "follow_up_required": {
@@ -10773,6 +10806,8 @@
         },
         "required": [
           "request_id",
+          "attempt",
+          "correlation_id",
           "response_id",
           "state",
           "follow_up_required",
@@ -36576,6 +36611,21 @@
               }
             }
           },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
           "401": {
             "content": {
               "application/problem+json": {
@@ -36615,21 +36665,6 @@
               }
             },
             "description": "Not Found",
-            "headers": {
-              "X-GC-Request-Id": {
-                "$ref": "#/components/headers/X-GC-Request-Id"
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorModel"
-                }
-              }
-            },
-            "description": "Conflict",
             "headers": {
               "X-GC-Request-Id": {
                 "$ref": "#/components/headers/X-GC-Request-Id"
@@ -40361,6 +40396,48 @@
               "description": "Idempotency key for safe retries.",
               "type": "string"
             }
+          },
+          {
+            "description": "Bearer credential issued to the registered HCA adapter.",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "description": "Bearer credential issued to the registered HCA adapter.",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Registered HCA adapter name.",
+            "in": "header",
+            "name": "X-HCA-Adapter",
+            "required": true,
+            "schema": {
+              "description": "Registered HCA adapter name.",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Current adapter registration generation.",
+            "in": "header",
+            "name": "X-HCA-Adapter-Generation",
+            "required": true,
+            "schema": {
+              "description": "Current adapter registration generation.",
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Current adapter registration instance.",
+            "in": "header",
+            "name": "X-HCA-Adapter-Instance",
+            "required": true,
+            "schema": {
+              "description": "Current adapter registration instance.",
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -40398,6 +40475,21 @@
               }
             },
             "description": "Bad Request",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Forbidden",
             "headers": {
               "X-GC-Request-Id": {
                 "$ref": "#/components/headers/X-GC-Request-Id"

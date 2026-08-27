@@ -101,11 +101,11 @@ func (a *HTTPAdapter) Deliver(ctx context.Context, request Request) (DeliveryRec
 	if err := json.Unmarshal(responseBody, &receipt); err != nil {
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("decode hca receipt: %w", err)
 	}
-	if receipt.RequestID == "" {
-		receipt.RequestID = request.RequestID
-	}
 	if receipt.RequestID != request.RequestID {
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("hca receipt request_id %q does not match %q", receipt.RequestID, request.RequestID)
+	}
+	if receipt.Attempt != request.Attempt || receipt.CorrelationID != request.CorrelationID {
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("hca receipt causal fence does not match request")
 	}
 	if receipt.State == StateCompleted {
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: "adapter reported completion at delivery boundary"}, ErrPrematureCompletion

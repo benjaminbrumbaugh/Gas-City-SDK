@@ -1057,6 +1057,18 @@ export type ExtMsgAdapterRegisterOutputBody = {
      */
     account_id: string;
     /**
+     * Ephemeral bearer credential issued only by this successful registration response; never returned by adapter-list operations.
+     */
+    credential: string;
+    /**
+     * Current callback credential generation; a replacement registration revokes prior generations.
+     */
+    generation: number;
+    /**
+     * Opaque callback registration instance; required with the credential for HCA responses.
+     */
+    instance: string;
+    /**
      * Adapter name.
      */
     name: string;
@@ -1449,7 +1461,7 @@ export type HcaRequestBody = {
     allowed_tools?: Array<string> | null;
     city?: string;
     content_retention?: string;
-    correlation_id?: string;
+    correlation_id: string;
     delivery_mode?: string;
     expires_at?: string;
     idempotency_key?: string;
@@ -2791,6 +2803,7 @@ export type Record = {
 
 export type Request = {
     allowed_tools?: Array<string> | null;
+    attempt: number;
     city?: string;
     content_retention: string;
     correlation_id: string;
@@ -2844,7 +2857,9 @@ export type RequestRecord = {
 };
 
 export type Response = {
+    attempt: number;
     content_retention?: string;
+    correlation_id: string;
     follow_up_required: boolean;
     received_at: string;
     request_id: string;
@@ -12538,6 +12553,10 @@ export type RegisterExtmsgAdapterData = {
 
 export type RegisterExtmsgAdapterErrors = {
     /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
      * Unauthorized
      */
     401: ErrorModel;
@@ -12549,10 +12568,6 @@ export type RegisterExtmsgAdapterErrors = {
      * Not Found
      */
     404: ErrorModel;
-    /**
-     * Conflict
-     */
-    409: ErrorModel;
     /**
      * Unprocessable Entity
      */
@@ -14004,6 +14019,22 @@ export type PostV0CityByCityNameHcaResponsesData = {
          * Idempotency key for safe retries.
          */
         'Idempotency-Key'?: string;
+        /**
+         * Bearer credential issued to the registered HCA adapter.
+         */
+        Authorization: string;
+        /**
+         * Registered HCA adapter name.
+         */
+        'X-HCA-Adapter': string;
+        /**
+         * Current adapter registration generation.
+         */
+        'X-HCA-Adapter-Generation': number;
+        /**
+         * Current adapter registration instance.
+         */
+        'X-HCA-Adapter-Instance': string;
     };
     path: {
         /**
@@ -14020,6 +14051,10 @@ export type PostV0CityByCityNameHcaResponsesErrors = {
      * Bad Request
      */
     400: ErrorModel;
+    /**
+     * Forbidden
+     */
+    403: ErrorModel;
     /**
      * Not Found
      */

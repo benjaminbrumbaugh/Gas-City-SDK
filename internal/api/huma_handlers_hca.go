@@ -68,41 +68,8 @@ func (s *Server) humaHandleHCARequest(ctx context.Context, input *HCARequestInpu
 		ResultDestination: input.Body.ResultDestination,
 		RouteIdentity:     input.Body.RouteIdentity,
 	}
-	if request.Target.TargetID == "" {
-		request.Target.TargetID = cfg.Target
-	}
-	if request.Target.Adapter == "" {
-		request.Target.Adapter = cfg.Adapter
-	}
-	if request.Target.Provider == "" {
-		request.Target.Provider = cfg.Provider
-	}
-	if request.Target.AccountID == "" {
-		request.Target.AccountID = cfg.AccountID
-	}
-	if request.Target.ConversationID == "" {
-		request.Target.ConversationID = cfg.ConversationID
-	}
-	if request.Target.DeliveryMode == "" {
-		request.Target.DeliveryMode = hca.DeliveryMode(cfg.EffectiveDelivery())
-	}
-	if request.Target.SessionMode == "" {
-		request.Target.SessionMode = hca.SessionMode(cfg.EffectiveSessionPolicy())
-	}
-	if request.DeliveryMode == "" {
-		request.DeliveryMode = hca.DeliveryMode(cfg.EffectiveDelivery())
-	}
-	if request.SessionMode == "" {
-		request.SessionMode = hca.SessionMode(cfg.EffectiveSessionPolicy())
-	}
-	if request.Target.ConfigRevision == 0 {
-		request.Target.ConfigRevision = cfg.ConfigRevision
-	}
-	if !request.Target.InterruptAllowed {
-		request.Target.InterruptAllowed = cfg.EffectiveInterruptPolicy() == "emergency_only"
-	}
-	if request.City == "" {
-		request.City = s.state.CityName()
+	if err := normalizeHCATarget(&request, cfg, s.state.CityName()); err != nil {
+		return nil, apierr.InvalidRequest.Msg(err.Error())
 	}
 	if request.Now.IsZero() {
 		request.Now = time.Now()
@@ -129,6 +96,48 @@ func (s *Server) humaHandleHCARequest(ctx context.Context, input *HCARequestInpu
 		s.dispatchHCARequest(ctx, queued)
 	})
 	return &HCARequestOutput{Body: record}, nil
+}
+
+func normalizeHCATarget(request *hca.RequestInput, cfg *config.HumanCoordinatorConfig, city string) error {
+	expected := hca.Target{
+		LogicalRole:      "human-coordinator",
+		TargetID:         cfg.Target,
+		Adapter:          cfg.Adapter,
+		Provider:         cfg.Provider,
+		AccountID:        cfg.AccountID,
+		ConversationID:   cfg.ConversationID,
+		DeliveryMode:     hca.DeliveryMode(cfg.EffectiveDelivery()),
+		SessionMode:      hca.SessionMode(cfg.EffectiveSessionPolicy()),
+		InterruptAllowed: cfg.EffectiveInterruptPolicy() == "emergency_only",
+		ConfigRevision:   cfg.ConfigRevision,
+	}
+	got := request.Target
+	if (got.LogicalRole != "" && got.LogicalRole != expected.LogicalRole) ||
+		(got.TargetID != "" && got.TargetID != expected.TargetID) ||
+		(got.Adapter != "" && got.Adapter != expected.Adapter) ||
+		(got.Provider != "" && got.Provider != expected.Provider) ||
+		(got.AccountID != "" && got.AccountID != expected.AccountID) ||
+		(got.ConversationID != "" && got.ConversationID != expected.ConversationID) ||
+		(got.DeliveryMode != "" && got.DeliveryMode != expected.DeliveryMode) ||
+		(got.SessionMode != "" && got.SessionMode != expected.SessionMode) ||
+		(got.InterruptAllowed && !expected.InterruptAllowed) ||
+		(got.ConfigRevision != 0 && got.ConfigRevision != expected.ConfigRevision) {
+		return fmt.Errorf("hca target must match configured human coordinator")
+	}
+	if request.City != "" && request.City != city {
+		return fmt.Errorf("hca city must match request city scope")
+	}
+	if request.DeliveryMode != "" && request.DeliveryMode != expected.DeliveryMode {
+		return fmt.Errorf("hca delivery_mode must match configured human coordinator")
+	}
+	if request.SessionMode != "" && request.SessionMode != expected.SessionMode {
+		return fmt.Errorf("hca session_mode must match configured human coordinator")
+	}
+	request.Target = expected
+	request.City = city
+	request.DeliveryMode = expected.DeliveryMode
+	request.SessionMode = expected.SessionMode
+	return nil
 }
 
 // dispatchHCARequest is best-effort at the API boundary. If the configured
@@ -180,6 +189,14 @@ func (s *Server) humaHandleHCAResponse(ctx context.Context, input *HCAResponseIn
 	service, err := s.humaHCAService()
 	if err != nil {
 		return nil, err
+	}
+	cfg := s.state.Config().HumanCoordinator
+	registry := s.state.AdapterRegistry()
+	if registry == nil || input.Adapter != cfg.Adapter {
+		return nil, apierr.Forbidden.Msg("hca response adapter is not the configured adapter")
+	}
+	if _, ok := registry.Authenticate(extmsg.AdapterKey{Provider: cfg.Provider, AccountID: cfg.AccountID}, input.Adapter, input.AdapterGeneration, input.AdapterInstance, input.Authorization); !ok {
+		return nil, apierr.Forbidden.Msg("hca response adapter credential is invalid or stale")
 	}
 	_, err = withIdempotency(s.idem, "/v0/hca/responses", input.IdempotencyKey, input.Body,
 		func() (string, error) {

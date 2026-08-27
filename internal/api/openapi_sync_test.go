@@ -66,6 +66,35 @@ func TestOpenAPISpecInSync(t *testing.T) {
 	}
 }
 
+func TestHCAResponseRouteDeclaresForbiddenInOpenAPI(t *testing.T) {
+	sm := api.NewSupervisorMux(emptyTestResolver{}, nil, false, "", "", time.Time{})
+	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
+	rec := httptest.NewRecorder()
+	sm.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /openapi.json returned %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var spec map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &spec); err != nil {
+		t.Fatalf("parse live spec: %v", err)
+	}
+	paths, _ := spec["paths"].(map[string]any)
+	path, _ := paths["/v0/city/{cityName}/hca/responses"].(map[string]any)
+	post, _ := path["post"].(map[string]any)
+	responses, _ := post["responses"].(map[string]any)
+	forbidden, ok := responses["403"].(map[string]any)
+	if !ok {
+		t.Fatalf("POST /v0/city/{cityName}/hca/responses does not declare 403: responses=%v", responses)
+	}
+	content, _ := forbidden["content"].(map[string]any)
+	problem, _ := content["application/problem+json"].(map[string]any)
+	schema, _ := problem["schema"].(map[string]any)
+	if got, _ := schema["$ref"].(string); got != "#/components/schemas/ErrorModel" {
+		t.Fatalf("403 response schema ref = %q, want ErrorModel", got)
+	}
+}
+
 func TestEventsSchemaPublished(t *testing.T) {
 	root := filepath.Join("..", "..")
 	jsonPath := filepath.Join(root, "docs", "reference", "schema", "events.json")

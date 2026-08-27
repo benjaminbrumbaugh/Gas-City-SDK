@@ -118,6 +118,7 @@ type Target struct {
 // Request is the authenticated, causally-linked envelope delivered to an HCA.
 type Request struct {
 	RequestID         string            `json:"request_id"`
+	Attempt           int               `json:"attempt"`
 	SourceAgent       string            `json:"source_agent"`
 	Target            Target            `json:"target"`
 	City              string            `json:"city,omitempty"`
@@ -176,6 +177,8 @@ type RequestRecord struct {
 // DeliveryReceipt reports adapter acceptance, not HCA execution completion.
 type DeliveryReceipt struct {
 	RequestID       string        `json:"request_id"`
+	Attempt         int           `json:"attempt" minimum:"1"`
+	CorrelationID   string        `json:"correlation_id" minLength:"1"`
 	State           DeliveryState `json:"state"`
 	Accepted        bool          `json:"accepted"`
 	TargetSessionID string        `json:"target_session_id,omitempty"`
@@ -187,6 +190,8 @@ type DeliveryReceipt struct {
 // Response records a result returned by the external coordinator.
 type Response struct {
 	RequestID        string           `json:"request_id"`
+	Attempt          int              `json:"attempt" minimum:"1"`
+	CorrelationID    string           `json:"correlation_id" minLength:"1"`
 	ResponseID       string           `json:"response_id"`
 	State            string           `json:"state"`
 	Summary          string           `json:"summary,omitempty"`
