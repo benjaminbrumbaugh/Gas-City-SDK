@@ -78,8 +78,11 @@ func newApprovedRoutingDecisionFixtureForRecommendation(t *testing.T, decisionID
 		workID = "GC-READY"
 	)
 	now := time.Date(2026, 8, 7, 23, 30, 0, 0, time.UTC)
-	max, min := 2, 1
-	cfg := &config.City{Agents: []config.Agent{{Name: "reviewer", Dir: rig, StartCommand: "review", MaxActiveSessions: &max, MinActiveSessions: &min}}}
+	maxActive, minActive := 2, 1
+	cfg := &config.City{
+		Rigs:   []config.Rig{{Name: rig, Path: rig}},
+		Agents: []config.Agent{{Name: "reviewer", Dir: rig, StartCommand: "review", MaxActiveSessions: &maxActive, MinActiveSessions: &minActive}},
+	}
 	base := beads.NewMemStoreFrom(0, []beads.Bead{{ID: workID, Status: "open"}}, nil)
 	seed, err := base.Get(workID)
 	if err != nil {
