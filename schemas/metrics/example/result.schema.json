@@ -223,7 +223,10 @@
               "hca-show",
               "session-close-stale",
               "session-clear-city-stop",
-              "routing-outcomes"
+              "routing-outcomes",
+              "coordination-list",
+              "coordination-request",
+              "coordination-show"
             ]
           },
           "event_id": {

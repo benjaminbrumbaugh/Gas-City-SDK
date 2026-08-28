@@ -283,32 +283,26 @@ func TestEventEmitIdempotentReplay(t *testing.T) {
 	}
 }
 
-func TestExtMsgAdapterRegisterIdempotentReplay(t *testing.T) {
+func TestExtMsgAdapterRegisterRejectsIdempotencyKeyToAvoidSecretReplay(t *testing.T) {
 	state := newFakeState(t)
 	state.adapterReg = extmsg.NewAdapterRegistry()
 	h := newTestCityHandler(t, state)
 
 	body := `{"provider":"slack","account_id":"T123","callback_url":"http://127.0.0.1:9/cb"}`
-	first := postIdempotent(t, h, cityURL(state, "/extmsg/adapters"), "adapter-reg-1", body)
-	if first.Code != http.StatusCreated {
-		t.Fatalf("first register: status = %d, want 201; body = %s", first.Code, first.Body.String())
+	response := postIdempotent(t, h, cityURL(state, "/extmsg/adapters"), "adapter-reg-1", body)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("register with Idempotency-Key: status = %d, want 400; body = %s", response.Code, response.Body.String())
 	}
-
-	replay := postIdempotent(t, h, cityURL(state, "/extmsg/adapters"), "adapter-reg-1", body)
-	if replay.Code != http.StatusCreated {
-		t.Fatalf("replay: status = %d, want 201; body = %s", replay.Code, replay.Body.String())
+	if got := state.adapterReg.Lookup(extmsg.AdapterKey{Provider: "slack", AccountID: "T123"}); got != nil {
+		t.Fatalf("registration with Idempotency-Key installed adapter = %v, want nil", got)
 	}
-	if replay.Body.String() != first.Body.String() {
-		t.Fatalf("replay body = %s, want %s", replay.Body.String(), first.Body.String())
-	}
-	// The ExtMsgAdapterAdded event must have fired exactly once.
 	ep := state.eventProv.(*events.Fake)
 	evts, err := ep.List(events.Filter{Type: events.ExtMsgAdapterAdded})
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
-	if len(evts) != 1 {
-		t.Fatalf("ExtMsgAdapterAdded fired %d times, want 1 (replay re-ran the register)", len(evts))
+	if len(evts) != 0 {
+		t.Fatalf("ExtMsgAdapterAdded fired %d times, want 0", len(evts))
 	}
 }
 

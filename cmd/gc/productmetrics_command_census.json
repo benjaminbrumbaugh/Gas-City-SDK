@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "next_id": 214,
+  "next_id": 217,
   "permanent_ids": [
     {
       "name": "help",
@@ -1017,6 +1017,67 @@
       "id": 44
     },
     {
+      "path": "gc coordination",
+      "aliases": [],
+      "conditional_modes": [],
+      "hidden": false,
+      "effective_hidden": false,
+      "disable_flag_parsing": false,
+      "shape": "structural",
+      "recording_policy": "recordable",
+      "mode": "standard",
+      "notice_policy": "eligible",
+      "classification": "help",
+      "canonical_target": "@help",
+      "owner": "structural",
+      "id": 1
+    },
+    {
+      "path": "gc coordination list",
+      "aliases": [],
+      "conditional_modes": [],
+      "hidden": false,
+      "effective_hidden": false,
+      "disable_flag_parsing": false,
+      "shape": "runnable",
+      "recording_policy": "recordable",
+      "mode": "standard",
+      "notice_policy": "eligible",
+      "classification": "coordination-list",
+      "owner": "immediate",
+      "id": 214
+    },
+    {
+      "path": "gc coordination request",
+      "aliases": [],
+      "conditional_modes": [],
+      "hidden": false,
+      "effective_hidden": false,
+      "disable_flag_parsing": false,
+      "shape": "runnable",
+      "recording_policy": "recordable",
+      "mode": "standard",
+      "notice_policy": "eligible",
+      "classification": "coordination-request",
+      "owner": "immediate",
+      "id": 215
+    },
+    {
+      "path": "gc coordination show",
+      "aliases": [],
+      "conditional_modes": [],
+      "hidden": false,
+      "effective_hidden": false,
+      "disable_flag_parsing": false,
+      "shape": "runnable",
+      "recording_policy": "recordable",
+      "mode": "standard",
+      "notice_policy": "eligible",
+      "classification": "coordination-show",
+      "owner": "immediate",
+      "id": 216
+    },
+    {
       "path": "gc costs",
       "aliases": [],
       "conditional_modes": [],
@@ -1774,67 +1835,6 @@
       "classification": "handoff",
       "owner": "immediate",
       "id": 61
-    },
-    {
-      "path": "gc hca",
-      "aliases": [],
-      "conditional_modes": [],
-      "hidden": false,
-      "effective_hidden": false,
-      "disable_flag_parsing": false,
-      "shape": "structural",
-      "recording_policy": "recordable",
-      "mode": "standard",
-      "notice_policy": "eligible",
-      "classification": "help",
-      "canonical_target": "@help",
-      "owner": "structural",
-      "id": 1
-    },
-    {
-      "path": "gc hca list",
-      "aliases": [],
-      "conditional_modes": [],
-      "hidden": false,
-      "effective_hidden": false,
-      "disable_flag_parsing": false,
-      "shape": "runnable",
-      "recording_policy": "recordable",
-      "mode": "standard",
-      "notice_policy": "eligible",
-      "classification": "hca-list",
-      "owner": "immediate",
-      "id": 208
-    },
-    {
-      "path": "gc hca request",
-      "aliases": [],
-      "conditional_modes": [],
-      "hidden": false,
-      "effective_hidden": false,
-      "disable_flag_parsing": false,
-      "shape": "runnable",
-      "recording_policy": "recordable",
-      "mode": "standard",
-      "notice_policy": "eligible",
-      "classification": "hca-request",
-      "owner": "immediate",
-      "id": 209
-    },
-    {
-      "path": "gc hca show",
-      "aliases": [],
-      "conditional_modes": [],
-      "hidden": false,
-      "effective_hidden": false,
-      "disable_flag_parsing": false,
-      "shape": "runnable",
-      "recording_policy": "recordable",
-      "mode": "standard",
-      "notice_policy": "eligible",
-      "classification": "hca-show",
-      "owner": "immediate",
-      "id": 210
     },
     {
       "path": "gc help",
@@ -4873,5 +4873,21 @@
       "exclusion": "private-completion"
     }
   ],
-  "tombstones": []
+  "tombstones": [
+    {
+      "name": "hca-list",
+      "id": 208,
+      "wire": "hca-list"
+    },
+    {
+      "name": "hca-request",
+      "id": 209,
+      "wire": "hca-request"
+    },
+    {
+      "name": "hca-show",
+      "id": 210,
+      "wire": "hca-show"
+    }
+  ]
 }

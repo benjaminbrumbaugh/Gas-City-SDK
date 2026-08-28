@@ -14,20 +14,20 @@ import (
 // Idempotency-Key header. This set grows as each wiring slice (audit P0 #4)
 // lands; a regression that drops the header fails TestCreateEndpointsAreTriagedForIdempotency.
 var requireIdempotency = map[string]bool{
-	"create-bead":                            true,
-	"send-mail":                              true,
-	"create-agent":                           true,
-	"create-provider":                        true,
-	"create-rig":                             true,
-	"create-convoy":                          true,
-	"add-pack":                               true,
-	"reply-mail":                             true,
-	"register-extmsg-adapter":                true,
-	"emit-event":                             true,
-	"post-v0-city":                           true,
-	"ingest-routing-decision":                true,
-	"post-v0-city-by-city-name-hca-requests": true,
-	"post-v0-city-by-city-name-hca-responses": true,
+	"create-bead":             true,
+	"send-mail":               true,
+	"create-agent":            true,
+	"create-provider":         true,
+	"create-rig":              true,
+	"create-convoy":           true,
+	"add-pack":                true,
+	"reply-mail":              true,
+	"register-extmsg-adapter": true,
+	"emit-event":              true,
+	"post-v0-city":            true,
+	"ingest-routing-decision": true,
+	"post-v0-city-by-city-name-external-coordination-requests":  true,
+	"post-v0-city-by-city-name-external-coordination-responses": true,
 }
 
 // pendingIdempotency lists known create operations that are deliberately NOT

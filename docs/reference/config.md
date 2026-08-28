@@ -46,7 +46,7 @@ City is the top-level configuration for a Gas City instance.
 | `webhooks` | WebhookPolicyConfig |  |  | WebhookPolicy holds city-level webhook governance (the [webhooks] table, notably allow_public grants). Authored only in the root city.toml; never merged from packs or fragments so a pack cannot grant itself exposure. |
 | `github` | GitHubConfig |  |  | GitHub configures GitHub-facing repository monitors. |
 | `extmsg` | ExtMsgConfig |  |  | ExtMsg configures the external-messaging fabric (default routes for inbound conversations with no binding). |
-| `human_coordinator` | HumanCoordinatorConfig |  |  | HumanCoordinator configures the provider-neutral external coordinator affordance. The selected adapter is supplied by the runtime. |
+| `external_coordination` | ExternalCoordinationConfig |  |  | ExternalCoordination configures the provider-neutral external coordinator capability. The selected adapter is supplied by the runtime. |
 | `agent_defaults` | AgentDefaults |  |  | AgentDefaults provides root city defaults for agents that don't override them (canonical TOML key: agent_defaults). Pack-local defaults use the same table shape in pack.toml. The runtime currently applies provider, default_sling_formula, and append_fragments; the attachment-list fields remain tombstones, and the other fields are parsed/composed but not yet inherited automatically. |
 | `pricing` | []ModelPricing |  |  | Pricing holds per-model cost rate overrides keyed by (provider, model). City-level entries override pack-level entries which override the defaults shipped with the pricing package. See internal/pricing for the estimation seam introduced by issue #1255 (1d). |
 
@@ -422,6 +422,38 @@ ExtMsgDefaultRoute routes unbound inbound conversations from one external messag
 | `account_id` | string |  |  | AccountID narrows the route to one adapter account. Empty matches every account of the provider that has no account-specific route. |
 | `agent` | string | **yes** |  | Agent is the configured agent identity to route to. It must resolve to a configured named session so the delivery layer can cold-wake a session for it. |
 
+## ExternalCoordinationCapabilities
+
+ExternalCoordinationCapabilities describes declared adapter capabilities.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `can_create_session` | boolean |  |  |  |
+| `can_resume_session` | boolean |  |  |  |
+| `can_submit_prompt` | boolean |  |  |  |
+| `can_interrupt` | boolean |  |  |  |
+| `can_receive_events` | boolean |  |  |  |
+| `can_return_results` | boolean |  |  |  |
+
+## ExternalCoordinationConfig
+
+ExternalCoordinationConfig declares the external coordination capability.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `enabled` | boolean |  |  |  |
+| `target` | string |  |  |  |
+| `adapter` | string |  |  |  |
+| `provider` | string |  |  |  |
+| `account_id` | string |  |  |  |
+| `conversation_id` | string |  |  |  |
+| `delivery` | string |  |  |  |
+| `interrupt_policy` | string |  |  |  |
+| `session_policy` | string |  |  |  |
+| `config_revision` | integer |  |  |  |
+| `triggers` | []string |  |  |  |
+| `capabilities` | ExternalCoordinationCapabilities |  |  |  |
+
 ## FormulasConfig
 
 FormulasConfig is the legacy [formulas] table with no supported fields: authored [formulas].dir is rejected at config load (use the well-known formulas/ directory instead), and gc doctor flags any declaration as a fixable v2-formulas-dir error.
@@ -472,38 +504,6 @@ GitHubPRMonitorPatch modifies an existing GitHub PR readiness monitor by name.
 | `webhook_secret_key` | string |  |  | WebhookSecretKey overrides the stable webhook secret key. |
 | `poll_interval` | string |  |  | PollInterval overrides the optional polling cadence. |
 | `merge_queue` | string |  |  | MergeQueuePolicy overrides merge-queue signal handling. Enum: `ignore`, `observe`, `repair` |
-
-## HumanCoordinatorCapabilities
-
-HumanCoordinatorCapabilities describes declared adapter capabilities.
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `can_create_session` | boolean |  |  |  |
-| `can_resume_session` | boolean |  |  |  |
-| `can_submit_prompt` | boolean |  |  |  |
-| `can_interrupt` | boolean |  |  |  |
-| `can_receive_events` | boolean |  |  |  |
-| `can_return_results` | boolean |  |  |  |
-
-## HumanCoordinatorConfig
-
-HumanCoordinatorConfig declares the external coordinator affordance.
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `enabled` | boolean |  |  |  |
-| `target` | string |  |  |  |
-| `adapter` | string |  |  |  |
-| `provider` | string |  |  |  |
-| `account_id` | string |  |  |  |
-| `conversation_id` | string |  |  |  |
-| `delivery` | string |  |  |  |
-| `interrupt_policy` | string |  |  |  |
-| `session_policy` | string |  |  |  |
-| `config_revision` | integer |  |  |  |
-| `triggers` | []string |  |  |  |
-| `capabilities` | HumanCoordinatorCapabilities |  |  |  |
 
 ## Import
 
