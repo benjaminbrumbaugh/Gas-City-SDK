@@ -1959,18 +1959,10 @@ esac
 	}
 }
 
-// TestCmdHookClaimSuffixedPoolWorkerDoesNotAdoptBareTemplateInProgressWork is
-// the ga-80pen8 end-to-end regression: "builder" is BOTH a [[named_session]]
-// holder's own identity AND a pool template shared by suffixed instances
-// (max_active_sessions > 1), mirroring the config shape confirmed in the
-// field incident. A suffixed pool worker resolves its config via the
-// GC_TEMPLATE fallback, so its resolvedAgentName is the bare template — which
-// is ALSO the named holder's identity. Before the fix, that let the worker
-// adopt the holder's in_progress bead through hookClaimExistingAssignment
-// without ever going through the store.Claim CAS, so two identities worked
-// (and closed) the same bead. The worker must instead drain no_work, and the
-// claim mutation must never run for a bead it does not own.
-func TestCmdHookClaimSuffixedPoolWorkerDoesNotAdoptBareTemplateInProgressWork(t *testing.T) {
+// TestCmdHookClaimPoolWorkerDoesNotAdoptRebindingAliasWork covers the real pool
+// ownership boundary: a durable session identity must not adopt work left under
+// a rebinding public alias, even when that alias still names the current slot.
+func TestCmdHookClaimPoolWorkerDoesNotAdoptRebindingAliasWork(t *testing.T) {
 	clearGCEnv(t)
 	disableManagedDoltRecoveryForTest(t)
 	cityDir := t.TempDir()
@@ -1983,7 +1975,7 @@ name = "test-city"
 [[agent]]
 name = "builder"
 max_active_sessions = 3
-work_query = "printf '[{\"id\":\"ga-frpt4k\",\"status\":\"in_progress\",\"assignee\":\"builder\",\"metadata\":{\"gc.routed_to\":\"builder\"}}]'"
+work_query = "printf '[{\"id\":\"ga-frpt4k\",\"status\":\"in_progress\",\"assignee\":\"builder-1\",\"metadata\":{\"gc.routed_to\":\"builder\"}}]'"
 
 [[named_session]]
 template = "builder"
@@ -2005,25 +1997,26 @@ printf '[]'
 
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GC_CITY", cityDir)
-	// Suffixed pool worker: GC_TEMPLATE is the bare pool binding, GC_ALIAS and
-	// GC_SESSION_NAME are this instance's own suffixed runtime identity.
+	// The public alias is a rebinding pool slot. BEADS_ACTOR/GC_SESSION_NAME are
+	// the durable owner identity for this session incarnation.
 	t.Setenv("GC_TEMPLATE", "builder")
 	t.Setenv("GC_ALIAS", "builder-1")
-	t.Setenv("GC_SESSION_NAME", "builder-1")
+	t.Setenv("BEADS_ACTOR", "test-city--builder-1")
+	t.Setenv("GC_SESSION_NAME", "test-city--builder-1")
 	t.Setenv("GC_SESSION_ID", "session-builder-1")
 
 	var stdout, stderr bytes.Buffer
 	code := cmdHookWithOptions(nil, hookCommandOptions{Claim: true, JSON: true}, &stdout, &stderr)
 	if code != 1 {
-		t.Fatalf("cmdHookWithOptions(--claim, suffixed pool worker) = %d, want 1 (no_work drain); stdout=%q stderr=%s", code, stdout.String(), stderr.String())
+		t.Fatalf("cmdHookWithOptions(--claim, pool worker) = %d, want 1 (no_work drain); stdout=%q stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var result hookClaimJSONResult
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("stdout is not JSON: %v\nraw: %s", err, stdout.String())
 	}
 	if result.Action == "work" && result.Reason == "existing_assignment" {
-		t.Fatalf("REGRESSION ga-80pen8: suffixed pool worker %q adopted named holder %q's in_progress bead %q (%+v)",
-			"builder-1", "builder", result.BeadID, result)
+		t.Fatalf("pool worker %q adopted rebinding alias %q's in_progress bead %q (%+v)",
+			"test-city--builder-1", "builder-1", result.BeadID, result)
 	}
 	if result.Action != "drain" || result.Reason != "no_work" {
 		t.Fatalf("result = %+v, want action=drain reason=no_work", result)

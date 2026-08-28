@@ -457,6 +457,10 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 			durableActor = strings.TrimSpace(os.Getenv("BEADS_ACTOR"))
 		}
 		assignee := firstNonEmptyHookValue(durableActor, alias, agentForQuery, resolvedAgentName, sessionName, sessionID)
+		identityCandidates := hookClaimIdentityCandidates(assignee, sessionID, sessionName)
+		if durableActor == "" {
+			identityCandidates = hookClaimIdentityCandidates(assignee, sessionID, sessionName, alias, agentForQuery)
+		}
 		claimOpts := hookClaimOptions{
 			Assignee: assignee,
 			// IdentityCandidates governs ADOPTION of already-owned in_progress/open
@@ -467,20 +471,14 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 			// resolvedAgentName == a.QualifiedName() is the bare template, which is
 			// ALSO the [[named_session]] holder's identity — including it let a
 			// suffixed worker adopt the holder's in_progress bead (ga-80pen8). The
-			// bare template stays in RouteTargets, which governs FRESH claims of
-			// UNASSIGNED routed work. The canonical slot / named holder keep it via
-			// `alias` (GC_ALIAS == qualified bare name); only suffixed workers drop it.
-			IdentityCandidates: hookClaimIdentityCandidates(
-				assignee,
-				sessionID,
-				sessionName,
-				alias,
-				agentForQuery,
-			),
-			RouteTargets: hookClaimRouteTargets(hookClaimPrimaryRouteTarget(&a), resolvedAgentName, strings.TrimSpace(overrides["GC_TEMPLATE"])),
-			Env:          queryEnv,
-			DrainAck:     opts.DrainAck,
-			JSON:         opts.JSON,
+			// The bare template stays in RouteTargets, which governs FRESH claims of
+			// UNASSIGNED routed work. A projected durable actor excludes all rebinding
+			// aliases from adoption; legacy contexts retain the prior alias fallback.
+			IdentityCandidates: identityCandidates,
+			RouteTargets:       hookClaimRouteTargets(hookClaimPrimaryRouteTarget(&a), resolvedAgentName, strings.TrimSpace(overrides["GC_TEMPLATE"])),
+			Env:                queryEnv,
+			DrainAck:           opts.DrainAck,
+			JSON:               opts.JSON,
 		}
 		return claimHookWork(cityPath, workQuery, workDir, queryEnv, stores, claimOpts, emitQueryFailure, stdout, stderr)
 	}
