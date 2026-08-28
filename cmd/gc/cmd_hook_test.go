@@ -1695,8 +1695,8 @@ case "$*" in
   *"list --json --status=open"*"gc.continuation_group=body"*"gc.root_bead_id=root-1"*)
     printf '[{"id":"hw-claim","status":"open","metadata":{"gc.routed_to":"worker","gc.root_bead_id":"root-1","gc.continuation_group":"body"}},{"id":"hw-next","status":"open","metadata":{"gc.routed_to":"worker","gc.root_bead_id":"root-1","gc.continuation_group":"body"}},{"id":"hw-other","status":"open","metadata":{"gc.routed_to":"other","gc.root_bead_id":"root-1","gc.continuation_group":"body"}}]'
     ;;
-  *"update --json hw-next --assignee worker-1"*)
-    printf '[{"id":"hw-next","status":"open","assignee":"worker-1","metadata":{"gc.routed_to":"worker"}}]'
+  *"update --json hw-next --assignee test-city--worker-1"*)
+    printf '[{"id":"hw-next","status":"open","assignee":"test-city--worker-1","metadata":{"gc.routed_to":"worker"}}]'
     ;;
   *"query --json ephemeral=true AND status=open --limit 0"*)
     printf '[]'
@@ -1717,6 +1717,7 @@ esac
 	t.Setenv("GC_CITY", cityDir)
 	t.Setenv("GC_TEMPLATE", "worker")
 	t.Setenv("GC_ALIAS", "worker-1")
+	t.Setenv("BEADS_ACTOR", "test-city--worker-1")
 	t.Setenv("GC_SESSION_ID", "session-id-1")
 	t.Setenv("GC_SESSION_NAME", "test-city--worker-1")
 	t.Setenv("GC_SESSION_ORIGIN", "ephemeral")
@@ -1730,7 +1731,7 @@ esac
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("stdout is not JSON: %v\nraw: %s", err, stdout.String())
 	}
-	if result.BeadID != "hw-claim" || result.Assignee != "worker-1" || result.Reason != "claimed" {
+	if result.BeadID != "hw-claim" || result.Assignee != "test-city--worker-1" || result.Reason != "claimed" {
 		t.Fatalf("unexpected claim result: %+v", result)
 	}
 	if result.RootBeadID != "root-1" || result.ContinuationGroup != "body" {
@@ -1745,13 +1746,13 @@ esac
 		t.Fatalf("ReadFile(%s): %v", logPath, err)
 	}
 	logText := string(logData)
-	if !strings.Contains(logText, "actor=worker-1 args=update hw-claim --claim --json") {
-		t.Fatalf("bd claim did not use canonical BEADS_ACTOR=worker-1; log:\n%s", logText)
+	if !strings.Contains(logText, "actor=test-city--worker-1 args=update hw-claim --claim --json") {
+		t.Fatalf("bd claim did not use durable BEADS_ACTOR=test-city--worker-1; log:\n%s", logText)
 	}
-	if !strings.Contains(logText, "actor=worker-1 args=show --json hw-claim") {
-		t.Fatalf("bd canonical read did not use BEADS_ACTOR=worker-1; log:\n%s", logText)
+	if !strings.Contains(logText, "actor=test-city--worker-1 args=show --json hw-claim") {
+		t.Fatalf("bd canonical read did not use durable BEADS_ACTOR=test-city--worker-1; log:\n%s", logText)
 	}
-	if !strings.Contains(logText, "args=update --json hw-next --assignee worker-1") {
+	if !strings.Contains(logText, "args=update --json hw-next --assignee test-city--worker-1") {
 		t.Fatalf("continuation sibling was not preassigned through bd; log:\n%s", logText)
 	}
 	if strings.Contains(logText, "args=update hw-other --assignee") {

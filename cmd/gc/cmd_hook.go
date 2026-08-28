@@ -448,9 +448,15 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 		sessionID := strings.TrimSpace(overrides["GC_SESSION_ID"])
 		sessionName := strings.TrimSpace(sessionForQuery)
 		alias := strings.TrimSpace(overrides["GC_ALIAS"])
-		// Write the alias/agent form that read paths query through GC_AGENT.
-		// Session forms remain fallbacks for unaliased workers.
-		assignee := firstNonEmptyHookValue(alias, agentForQuery, resolvedAgentName, sessionName, sessionID)
+		// The session layer projects its durable ownership identity through
+		// BEADS_ACTOR: configured identity for named sessions, runtime session name
+		// for pool sessions. Pool aliases rebind, so they remain compatibility
+		// fallbacks rather than becoming claim owners.
+		durableActor := ""
+		if sessionTemplateContext {
+			durableActor = strings.TrimSpace(os.Getenv("BEADS_ACTOR"))
+		}
+		assignee := firstNonEmptyHookValue(durableActor, alias, agentForQuery, resolvedAgentName, sessionName, sessionID)
 		claimOpts := hookClaimOptions{
 			Assignee: assignee,
 			// IdentityCandidates governs ADOPTION of already-owned in_progress/open
