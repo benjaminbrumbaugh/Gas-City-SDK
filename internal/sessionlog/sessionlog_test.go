@@ -2171,7 +2171,10 @@ func TestFindCodexSessionFileMatchesEquivalentResolvedWorkDir(t *testing.T) {
 	}
 	sessDir := t.TempDir()
 	workDir := filepath.Join(os.TempDir(), "gascity-codex-live")
-	aliasedWorkDir := "/private" + workDir
+	aliasedWorkDir := strings.TrimPrefix(workDir, "/private")
+	if aliasedWorkDir == workDir {
+		aliasedWorkDir = "/private" + workDir
+	}
 	dayDir := filepath.Join(sessDir, "2026", "06", "21")
 	if err := os.MkdirAll(dayDir, 0o755); err != nil {
 		t.Fatal(err)
