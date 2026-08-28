@@ -2168,8 +2168,9 @@ op_start() {
         die "dolt is required but not installed. Install: https://github.com/dolthub/dolt/releases"
     fi
 
-    # Create data dir and runtime state dir if needed.
-    mkdir -p "$DATA_DIR" "$(dirname "$LOCK_FILE")"
+    # Create the runtime state directory before acquiring the start lock. The
+    # managed data root is created only after the lock and fresh-root check.
+    mkdir -p "$(dirname "$LOCK_FILE")"
 
     # Acquire exclusive start lock (prevents concurrent starts).
     # Use fd 9 for the lock and keep retrying on the same inode. Deleting and
@@ -2193,6 +2194,9 @@ op_start() {
         fi
         die "could not acquire dolt start lock ($LOCK_FILE)"
     fi
+
+    seed_bd_current_era_witness_for_fresh_root
+    mkdir -p "$DATA_DIR" || die "failed to create managed dolt data root"
 
     # Check if a dolt process is already serving our data dir (any port).
     # This prevents starting a second server that dies on database locks.
@@ -2520,11 +2524,32 @@ seed_bd_current_era_witness_for_fresh_root() {
     version="${3:-}"
     bd_witness_is_current "$version" || die "selected bd did not report a current semantic version"
 
-    mkdir -p "$BEADS_DIR_ROOT" || die "failed to create managed beads directory"
+    # Recheck after version discovery, then atomically claim DATA_DIR. If any
+    # other actor created the root, this is not a provably fresh workspace.
+    for legacy in \
+        "$DATA_DIR" \
+        "$BEADS_DIR_ROOT/dolt" \
+        "$BEADS_DIR_ROOT/embeddeddolt" \
+        "$BEADS_DIR_ROOT/beads.db" \
+        "$BEADS_DIR_ROOT/issues.db" \
+        "$BEADS_DIR_ROOT/issues.jsonl" \
+        "$witness"
+    do
+        [ ! -e "$legacy" ] || return 0
+    done
+    mkdir -p "$BEADS_DIR_ROOT" "$(dirname "$DATA_DIR")" || die "failed to create managed beads parent directory"
+    if ! mkdir "$DATA_DIR" 2>/dev/null; then
+        return 0
+    fi
+
     tmp="$witness.tmp.$$"
-    printf '%s\n' "${version#v}" > "$tmp" || die "failed to write current-era witness"
+    if ! printf '%s\n' "${version#v}" > "$tmp"; then
+        rmdir "$DATA_DIR" 2>/dev/null || true
+        die "failed to write current-era witness"
+    fi
     if ! mv "$tmp" "$witness"; then
         rm -f "$tmp"
+        rmdir "$DATA_DIR" 2>/dev/null || true
         die "failed to install current-era witness"
     fi
 }
@@ -3272,14 +3297,7 @@ if ! load_runtime_layout_from_gc; then
     LOCK_FILE="${GC_DOLT_LOCK_FILE:-$PACK_STATE_DIR/dolt.lock}"
     CONFIG_FILE="${GC_DOLT_CONFIG_FILE:-$PACK_STATE_DIR/dolt-config.yaml}"
 fi
-if is_doltlite_backend; then
-    mkdir -p "$PACK_STATE_DIR"
-else
-    if [ "$op" = "start" ] && ! is_remote; then
-        seed_bd_current_era_witness_for_fresh_root
-    fi
-    mkdir -p "$PACK_STATE_DIR"
-fi
+mkdir -p "$PACK_STATE_DIR"
 
 # Resolve DOLT_PORT now that STATE_FILE is set.
 DOLT_PORT=$(allocate_port)

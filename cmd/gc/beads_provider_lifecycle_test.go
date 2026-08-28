@@ -7843,10 +7843,32 @@ func TestGcBeadsBdStartSeedsVersionWitnessOnlyForFreshManagedDataRoot(t *testing
 	script := filepath.Join(repoRootForLint(t), "examples", "bd", "assets", "scripts", "gc-beads-bd.sh")
 	fakeBin := t.TempDir()
 	bdPath := filepath.Join(fakeBin, "bd")
-	if err := os.WriteFile(bdPath, []byte("#!/bin/sh\nprintf 'bd version 1.1.1 (test)\\n'\n"), 0o755); err != nil {
+	fakeBD := `#!/bin/sh
+if [ -n "${BD_RACE_DATA_DIR:-}" ]; then
+    mkdir -p "$BD_RACE_DATA_DIR"
+fi
+printf 'bd version 1.1.1 (test)\n'
+`
+	if err := os.WriteFile(bdPath, []byte(fakeBD), 0o755); err != nil {
 		t.Fatalf("write fake bd: %v", err)
 	}
-	for _, tool := range []string{"mkdir", "mv", "rm"} {
+	if err := os.WriteFile(filepath.Join(fakeBin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake flock: %v", err)
+	}
+	fakeDolt := `#!/bin/sh
+if [ "$1" = "config" ]; then
+    case "$*" in
+        *user.name*) printf 'gc-test\n' ;;
+        *user.email*) printf 'gc-test@example.invalid\n' ;;
+    esac
+    exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(fakeBin, "dolt"), []byte(fakeDolt), 0o755); err != nil {
+		t.Fatalf("write fake dolt: %v", err)
+	}
+	for _, tool := range []string{"awk", "basename", "cat", "dirname", "grep", "head", "mkdir", "mv", "ps", "rm", "rmdir", "sleep"} {
 		resolved, err := exec.LookPath(tool)
 		if err != nil {
 			t.Fatalf("look up %s: %v", tool, err)
@@ -7857,12 +7879,16 @@ func TestGcBeadsBdStartSeedsVersionWitnessOnlyForFreshManagedDataRoot(t *testing
 	}
 
 	for _, tt := range []struct {
-		name        string
-		preseedData bool
-		wantWitness bool
+		name                  string
+		op                    string
+		preseedData           bool
+		createDataDuringProbe bool
+		wantWitness           bool
 	}{
-		{name: "fresh managed data root", wantWitness: true},
-		{name: "pre-existing managed data root", preseedData: true},
+		{name: "start creates fresh managed data root", op: "start", wantWitness: true},
+		{name: "ensure-ready creates fresh managed data root", op: "ensure-ready", wantWitness: true},
+		{name: "start preserves pre-existing managed data root", op: "start", preseedData: true},
+		{name: "start refuses root created during version probe", op: "start", createDataDuringProbe: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cityPath := t.TempDir()
@@ -7873,13 +7899,17 @@ func TestGcBeadsBdStartSeedsVersionWitnessOnlyForFreshManagedDataRoot(t *testing
 				}
 			}
 
-			cmd := exec.Command(script, "start")
-			cmd.Env = sanitizedBaseEnv(
-				"BD_BIN="+bdPath,
-				"GC_CITY_PATH="+cityPath,
-				"GC_DOLT_PORT="+freeLoopbackPort(t),
-				"PATH="+fakeBin,
-			)
+			cmd := exec.Command(script, tt.op)
+			env := []string{
+				"BD_BIN=" + bdPath,
+				"GC_CITY_PATH=" + cityPath,
+				"GC_DOLT_PORT=" + freeLoopbackPort(t),
+				"PATH=" + fakeBin,
+			}
+			if tt.createDataDuringProbe {
+				env = append(env, "BD_RACE_DATA_DIR="+dataDir)
+			}
+			cmd.Env = sanitizedBaseEnv(env...)
 			if out, err := cmd.CombinedOutput(); err == nil {
 				t.Fatalf("start unexpectedly succeeded without flock/dolt:\n%s", out)
 			}
