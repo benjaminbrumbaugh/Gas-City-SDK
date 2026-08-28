@@ -15,7 +15,6 @@ type routingDecisionRecoveryAuthorizer struct {
 	store    *routingdecision.Store
 	verifier *routingdecision.Verifier
 	now      time.Time
-	owned    bool
 }
 
 func (cr *CityRuntime) newRoutingDecisionRecoveryAuthorizer(now time.Time) routingDecisionRecoveryAuthorizer {
@@ -24,19 +23,12 @@ func (cr *CityRuntime) newRoutingDecisionRecoveryAuthorizer(now time.Time) routi
 		return authorizer
 	}
 	authorizer.verifier = cr.routingDecisionVerifier
-	store, owned, err := cr.decisionStoreForPass()
+	store, err := cr.decisionStoreForPass()
 	if err != nil {
 		return authorizer
 	}
 	authorizer.store = store
-	authorizer.owned = owned
 	return authorizer
-}
-
-func (authorizer routingDecisionRecoveryAuthorizer) Close() {
-	if authorizer.owned && authorizer.store != nil {
-		_ = authorizer.store.Close()
-	}
 }
 
 // Allows preserves legacy unmarked recovery and admits a marked carried route

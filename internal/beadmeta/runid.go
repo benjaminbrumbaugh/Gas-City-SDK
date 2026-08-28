@@ -7,6 +7,7 @@ import "strings"
 // an execution root from the persistent session fallback used by named agents.
 type RunIdentityKind string
 
+// Run identity sources identify which durable field supplied a resolved run ID.
 const (
 	RunIdentityWorkflow        RunIdentityKind = "workflow_id"
 	RunIdentityMolecule        RunIdentityKind = "molecule_id"

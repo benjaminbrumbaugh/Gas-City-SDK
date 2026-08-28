@@ -847,18 +847,11 @@ type routeRestoreOutcome struct {
 	err         error
 }
 
-// restoreRoute re-stamps gc.routed_to from the route the LIVE row still
-// declares, and is the only place this lane writes a route.
-//
-// The live row is the authority: recomputing carriedPoolRoute on it is what
-// makes the pass idempotent (a bead another pass already restored yields "") and
-// what keeps a claim that landed since the scan from being clobbered — a claim
-// flips the bead to in_progress and consumes gc.routed_to in one update (ga-sa0,
-// ga-bgu).
-func (l *routeRecoveryLane) restoreRoute(store beads.Store, live beads.Bead, backstop bool) routeRestoreOutcome {
-	return l.restoreRouteWithAuthorization(store, live, backstop, "", nil)
-}
-
+// restoreRouteWithAuthorization re-stamps gc.routed_to from the route the LIVE
+// row still declares, and is the only place this lane writes a route. The live
+// row is the authority: recomputing carriedPoolRoute on it makes the pass
+// idempotent and prevents a claim that landed after the scan from being
+// clobbered.
 func (l *routeRecoveryLane) restoreRouteWithAuthorization(store beads.Store, live beads.Bead, backstop bool, legLabel string, authorization routeRecoveryAuthorization) routeRestoreOutcome {
 	route := carriedPoolRoute(live)
 	if route == "" || live.Status != "open" || strings.TrimSpace(live.Assignee) != "" {

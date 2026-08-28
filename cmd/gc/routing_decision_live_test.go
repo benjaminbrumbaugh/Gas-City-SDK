@@ -102,14 +102,14 @@ func TestRoutingDecisionServiceBootLatchesAuthorityBeforeOpeningLedger(t *testin
 
 func TestRoutingDecisionSnapshotsAreDeterministicAndSelectionSafe(t *testing.T) {
 	now := time.Date(2026, 8, 7, 20, 0, 0, 0, time.UTC)
-	max, min := 2, 1
+	maxActive, minActive := 2, 1
 	cfg := &config.City{
 		Workspace: config.Workspace{Provider: "safe"},
 		Providers: map[string]config.ProviderSpec{"safe": {Command: "provider-binary"}},
 		Agents: []config.Agent{
-			{Name: "zeta", Dir: "z-rig", Description: "Z", MaxActiveSessions: &max, MinActiveSessions: &min, Env: map[string]string{"TOKEN": "secret-z"}},
-			{Name: "alpha", Dir: "a-rig", Description: "A", MaxActiveSessions: &max, MinActiveSessions: &min, Env: map[string]string{"TOKEN": "secret-a"}},
-			{Name: "disabled", Dir: "a-rig", Suspended: true, MaxActiveSessions: &max, MinActiveSessions: &min},
+			{Name: "zeta", Dir: "z-rig", Description: "Z", MaxActiveSessions: &maxActive, MinActiveSessions: &minActive, Env: map[string]string{"TOKEN": "secret-z"}},
+			{Name: "alpha", Dir: "a-rig", Description: "A", MaxActiveSessions: &maxActive, MinActiveSessions: &minActive, Env: map[string]string{"TOKEN": "secret-a"}},
+			{Name: "disabled", Dir: "a-rig", Suspended: true, MaxActiveSessions: &maxActive, MinActiveSessions: &minActive},
 		},
 	}
 	cityStore := beads.NewMemStoreFrom(0, []beads.Bead{{ID: "CITY-READY", Status: "open"}, {ID: "CITY-ROUTED", Status: "open", Metadata: map[string]string{beadmeta.RoutedToMetadataKey: "a-rig/alpha"}}}, nil)

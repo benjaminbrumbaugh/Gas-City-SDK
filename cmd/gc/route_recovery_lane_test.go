@@ -936,7 +936,7 @@ func TestRouteRecoveryBackstopPassForwardsDecisionAuthorization(t *testing.T) {
 	}
 
 	seenRig := ""
-	denied := newRouteRecoveryLane().backstopPassWithAuthorization(plan, backstopReasonCadence, func(rig string, bead beads.Bead) bool {
+	denied := newRouteRecoveryLane().backstopPassWithAuthorization(plan, backstopReasonCadence, func(rig string, _ beads.Bead) bool {
 		seenRig = rig
 		return false
 	})

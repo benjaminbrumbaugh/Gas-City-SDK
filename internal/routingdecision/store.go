@@ -16,6 +16,7 @@ import (
 	"time"
 
 	bbolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 const (
@@ -76,6 +77,7 @@ type boltTx = bbolt.Tx
 // State is a durable routing-decision lifecycle state.
 type State string
 
+// Routing decision lifecycle states are persisted in the local decision ledger.
 const (
 	StateProposed         State = "proposed"
 	StateApproved         State = "approved"
@@ -711,7 +713,7 @@ func OpenStore(cityRoot string, options StoreOptions) (*Store, error) {
 		},
 	})
 	if err != nil {
-		if errors.Is(err, bbolt.ErrTimeout) {
+		if errors.Is(err, bolterrors.ErrTimeout) {
 			return nil, ErrStoreLocked
 		}
 		return nil, fmt.Errorf("%w: open ledger", ErrStoreCorrupt)

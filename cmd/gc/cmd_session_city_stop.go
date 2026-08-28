@@ -43,7 +43,7 @@ write. --check validates the same predicates without writing.`,
 
 func cmdSessionClearCityStop(args []string, opts sessionClearCityStopOptions, stdout, stderr io.Writer) int {
 	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
-		fmt.Fprintln(stderr, "gc session clear-city-stop: exact session bead ID required")
+		fmt.Fprintln(stderr, "gc session clear-city-stop: exact session bead ID required") //nolint:errcheck // best-effort stderr
 		return 1
 	}
 	id := strings.TrimSpace(args[0])
@@ -53,12 +53,12 @@ func cmdSessionClearCityStop(args []string, opts sessionClearCityStopOptions, st
 	}
 	cityPath, err := resolveCity()
 	if err != nil {
-		fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err)
+		fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
 	cfg, err := loadCityConfig(cityPath, configWarnWriter(opts.JSON, stderr))
 	if err != nil {
-		fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err)
+		fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
 	sessStore := cliSessionStore(store, cfg, cityPath)
@@ -67,22 +67,22 @@ func cmdSessionClearCityStop(args []string, opts sessionClearCityStopOptions, st
 		if err == nil {
 			err = fmt.Errorf("%q is not a session bead", id)
 		}
-		fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err)
+		fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
 	sp, err := newSessionProvider()
 	if err != nil {
-		fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err)
+		fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
 	handle, err := workerHandleForSessionWithConfig(cityPath, sessStore, sp, cfg, id)
 	if err != nil {
-		fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err)
+		fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
 	obs, err := handle.LiveObservation(context.Background())
 	if err != nil {
-		fmt.Fprintf(stderr, "gc session clear-city-stop: runtime observation: %v\n", err)
+		fmt.Fprintf(stderr, "gc session clear-city-stop: runtime observation: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
 	req := session.ClearCityStopRequest{ExpectedHeldUntil: strings.TrimSpace(opts.ExpectedHeldUntil), RuntimeRunning: obs.Running, RuntimeAlive: obs.Alive, Now: time.Now().UTC()}
@@ -95,16 +95,16 @@ func cmdSessionClearCityStop(args []string, opts sessionClearCityStopOptions, st
 		err = front.ClearCityStop(id, req)
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err)
+		fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
 	if opts.JSON {
 		if err := writeSessionActionJSON(stdout, sessionActionResult{Command: "session clear-city-stop", Action: action, SessionID: id, State: string(session.State(bead.Metadata["state"]))}); err != nil {
-			fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err)
+			fmt.Fprintf(stderr, "gc session clear-city-stop: %v\n", err) //nolint:errcheck // best-effort stderr
 			return 1
 		}
 		return 0
 	}
-	fmt.Fprintf(stdout, "Session %s city-stop latch %s.\n", id, map[bool]string{true: "validated", false: "cleared"}[opts.CheckOnly])
+	fmt.Fprintf(stdout, "Session %s city-stop latch %s.\n", id, map[bool]string{true: "validated", false: "cleared"}[opts.CheckOnly]) //nolint:errcheck // best-effort stdout
 	return 0
 }

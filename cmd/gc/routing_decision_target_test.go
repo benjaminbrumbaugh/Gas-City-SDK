@@ -26,9 +26,9 @@ func TestRoutingDecisionTargetDigestCoversEveryExportedAgentField(t *testing.T) 
 }
 
 func TestRoutingDecisionTargetDigestIsStableAndChangesWithSecurityFacts(t *testing.T) {
-	max := 2
+	maxActive := 2
 	agent := config.Agent{
-		Name: "reviewer", Dir: "demo", StartCommand: "review", MaxActiveSessions: &max,
+		Name: "reviewer", Dir: "demo", StartCommand: "review", MaxActiveSessions: &maxActive,
 		Env:            map[string]string{"TOKEN": "credential-secret", "REGION": "west"},
 		OptionDefaults: map[string]string{"model": "fast", "permission_mode": "plan"},
 	}

@@ -35,7 +35,7 @@ func newRoutingProxy(rawBase string) *routingProxy {
 	}
 	host := u.Hostname()
 	ip := net.ParseIP(host)
-	if !(strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback())) {
+	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
 		return &routingProxy{}
 	}
 	u.Path = ""
@@ -85,7 +85,7 @@ func (p *Plane) proxyRouting(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, routingUnavailableMessage)
 		return
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	payload, err := io.ReadAll(io.LimitReader(response.Body, routingProxyMaxResponse+1))
 	if err != nil || len(payload) > routingProxyMaxResponse {
 		writeError(w, http.StatusBadGateway, "routing service returned an invalid response")
