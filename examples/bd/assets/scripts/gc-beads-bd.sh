@@ -2476,8 +2476,57 @@ run_bd_pinned() {
         export GC_DOLT_PASSWORD="$DOLT_PASSWORD"
         export BEADS_DOLT_SERVER_USER="$DOLT_USER"
         export BEADS_DOLT_PASSWORD="$DOLT_PASSWORD"
-        bd "$@"
+        "${BD_BIN:-bd}" "$@"
     )
+}
+
+bd_witness_is_current() {
+    local version major rest minor patch
+    version="${1#v}"
+    case "$version" in
+        ''|*[!0-9.]*) return 1 ;;
+    esac
+    major="${version%%.*}"
+    rest="${version#*.}"
+    [ "$rest" != "$version" ] || return 1
+    minor="${rest%%.*}"
+    patch="${rest#*.}"
+    [ "$patch" != "$rest" ] || return 1
+    case "$patch" in *.*) return 1 ;; esac
+    [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ] || return 1
+    [ "$major" -ge 1 ] 2>/dev/null || return 1
+}
+
+# seed_bd_current_era_witness_for_fresh_root records the selected bd version
+# only before Gas City creates a new managed data root. Existing roots and
+# legacy artifacts remain unmarked so bd's migration guard classifies them.
+seed_bd_current_era_witness_for_fresh_root() {
+    local legacy witness version_output version tmp
+    [ ! -e "$DATA_DIR" ] || return 0
+    for legacy in \
+        "$BEADS_DIR_ROOT/dolt" \
+        "$BEADS_DIR_ROOT/embeddeddolt" \
+        "$BEADS_DIR_ROOT/beads.db" \
+        "$BEADS_DIR_ROOT/issues.db" \
+        "$BEADS_DIR_ROOT/issues.jsonl"
+    do
+        [ ! -e "$legacy" ] || return 0
+    done
+    witness="$BEADS_DIR_ROOT/.local_version"
+    [ ! -e "$witness" ] || return 0
+
+    version_output=$("${BD_BIN:-bd}" version 2>/dev/null) || die "selected bd did not report its version"
+    set -- $version_output
+    version="${3:-}"
+    bd_witness_is_current "$version" || die "selected bd did not report a current semantic version"
+
+    mkdir -p "$BEADS_DIR_ROOT" || die "failed to create managed beads directory"
+    tmp="$witness.tmp.$$"
+    printf '%s\n' "${version#v}" > "$tmp" || die "failed to write current-era witness"
+    if ! mv "$tmp" "$witness"; then
+        rm -f "$tmp"
+        die "failed to install current-era witness"
+    fi
 }
 
 run_bd_init_pinned() {
@@ -2765,6 +2814,10 @@ op_init() {
         fi
         exit 0
     fi
+
+    # Direct provider-init callers must cross the same Go-owned canonical
+    # metadata boundary as initAndHookDir before bd inspects workspace era.
+    normalize_scope_after_init "$dir" "$prefix" "$dolt_database"
 
     # If already initialized on disk, ensure the database is also registered
     # with the running server. gc's normalizeCanonicalBdScopeFilesForInit
@@ -3222,7 +3275,10 @@ fi
 if is_doltlite_backend; then
     mkdir -p "$PACK_STATE_DIR"
 else
-    mkdir -p "$DATA_DIR" "$PACK_STATE_DIR"
+    if [ "$op" = "start" ] && ! is_remote; then
+        seed_bd_current_era_witness_for_fresh_root
+    fi
+    mkdir -p "$PACK_STATE_DIR"
 fi
 
 # Resolve DOLT_PORT now that STATE_FILE is set.

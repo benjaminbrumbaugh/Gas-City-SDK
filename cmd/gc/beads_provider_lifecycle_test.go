@@ -7839,6 +7839,72 @@ func TestGcBeadsBdInitDoltliteRejectsUnsafeCustomTypes(t *testing.T) {
 	}
 }
 
+func TestGcBeadsBdStartSeedsVersionWitnessOnlyForFreshManagedDataRoot(t *testing.T) {
+	script := filepath.Join(repoRootForLint(t), "examples", "bd", "assets", "scripts", "gc-beads-bd.sh")
+	fakeBin := t.TempDir()
+	bdPath := filepath.Join(fakeBin, "bd")
+	if err := os.WriteFile(bdPath, []byte("#!/bin/sh\nprintf 'bd version 1.1.1 (test)\\n'\n"), 0o755); err != nil {
+		t.Fatalf("write fake bd: %v", err)
+	}
+	for _, tool := range []string{"mkdir", "mv", "rm"} {
+		resolved, err := exec.LookPath(tool)
+		if err != nil {
+			t.Fatalf("look up %s: %v", tool, err)
+		}
+		if err := os.Symlink(resolved, filepath.Join(fakeBin, tool)); err != nil {
+			t.Fatalf("link %s: %v", tool, err)
+		}
+	}
+
+	for _, tt := range []struct {
+		name        string
+		preseedData bool
+		wantWitness bool
+	}{
+		{name: "fresh managed data root", wantWitness: true},
+		{name: "pre-existing managed data root", preseedData: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cityPath := t.TempDir()
+			dataDir := filepath.Join(cityPath, ".beads", "dolt")
+			if tt.preseedData {
+				if err := os.MkdirAll(dataDir, 0o755); err != nil {
+					t.Fatalf("preseed data root: %v", err)
+				}
+			}
+
+			cmd := exec.Command(script, "start")
+			cmd.Env = sanitizedBaseEnv(
+				"BD_BIN="+bdPath,
+				"GC_CITY_PATH="+cityPath,
+				"GC_DOLT_PORT="+freeLoopbackPort(t),
+				"PATH="+fakeBin,
+			)
+			if out, err := cmd.CombinedOutput(); err == nil {
+				t.Fatalf("start unexpectedly succeeded without flock/dolt:\n%s", out)
+			}
+
+			witnessPath := filepath.Join(cityPath, ".beads", ".local_version")
+			witness, err := os.ReadFile(witnessPath)
+			if tt.wantWitness {
+				if err != nil {
+					t.Fatalf("read fresh witness: %v", err)
+				}
+				if got := strings.TrimSpace(string(witness)); got != "1.1.1" {
+					t.Fatalf("fresh witness = %q, want 1.1.1", got)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("pre-existing data root received witness %q", strings.TrimSpace(string(witness)))
+			}
+			if !os.IsNotExist(err) {
+				t.Fatalf("stat pre-existing-root witness: %v", err)
+			}
+		})
+	}
+}
+
 // ── isExternalDolt tests ──────────────────────────────────────────────
 
 func TestIsExternalDoltEnvFallback(t *testing.T) {
