@@ -399,11 +399,30 @@ max = 5
 		"Agent=rigrepo/furiosa",
 		"Template=polecat",
 		"Rig=rigrepo",
-		"Root=" + rigDir,
-		"WorkDir=" + workDir,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want %q", out, want)
+		}
+	}
+	fields := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if key, value, ok := strings.Cut(line, "="); ok {
+			fields[key] = value
+		}
+	}
+	for _, want := range []struct {
+		name string
+		path string
+	}{
+		{name: "Root", path: rigDir},
+		{name: "WorkDir", path: workDir},
+	} {
+		got, ok := fields[want.name]
+		if !ok {
+			t.Fatalf("stdout = %q, missing %s path", out, want.name)
+		}
+		if canonicalTestPath(got) != canonicalTestPath(want.path) {
+			t.Fatalf("stdout %s = %q, want path %q", want.name, got, want.path)
 		}
 	}
 	if strings.Contains(out, "# Gas City Agent") {

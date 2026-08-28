@@ -860,7 +860,7 @@ func TestEnsureInfraClassMigratedSurfacesAStrandedWrite(t *testing.T) {
 // themselves.
 func migratedThenCollectedCity(t *testing.T) (cityPath string, cfg *config.City, source beads.Store, collected []string) {
 	t.Helper()
-	cityPath = t.TempDir()
+	cityPath = canonicalTestPath(t.TempDir())
 	source = stubInfraMigrationSource(t)
 
 	// A closed workflow root and its step: the ownership closure the graph arm
