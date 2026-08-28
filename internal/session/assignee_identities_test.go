@@ -135,6 +135,11 @@ func TestAssigneeIdentifier(t *testing.T) {
 			want: "al",
 		},
 		{
+			name: "pool alias stays public but does not own work",
+			info: Info{ID: "s1", SessionNameMetadata: "sn", Alias: "al", PoolManaged: true},
+			want: "sn",
+		},
+		{
 			name: "configured named identity when no alias",
 			info: Info{ID: "s1", SessionNameMetadata: "sn", ConfiguredNamedIdentity: "ni"},
 			want: "ni",
