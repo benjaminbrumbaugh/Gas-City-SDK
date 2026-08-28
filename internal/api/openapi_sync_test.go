@@ -66,7 +66,7 @@ func TestOpenAPISpecInSync(t *testing.T) {
 	}
 }
 
-func TestHCAResponseRouteDeclaresForbiddenInOpenAPI(t *testing.T) {
+func TestExternalCoordinationResponseRouteDeclaresForbiddenInOpenAPI(t *testing.T) {
 	sm := api.NewSupervisorMux(emptyTestResolver{}, nil, false, "", "", time.Time{})
 	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
 	rec := httptest.NewRecorder()
@@ -80,12 +80,12 @@ func TestHCAResponseRouteDeclaresForbiddenInOpenAPI(t *testing.T) {
 		t.Fatalf("parse live spec: %v", err)
 	}
 	paths, _ := spec["paths"].(map[string]any)
-	path, _ := paths["/v0/city/{cityName}/hca/responses"].(map[string]any)
+	path, _ := paths["/v0/city/{cityName}/external-coordination/responses"].(map[string]any)
 	post, _ := path["post"].(map[string]any)
 	responses, _ := post["responses"].(map[string]any)
 	forbidden, ok := responses["403"].(map[string]any)
 	if !ok {
-		t.Fatalf("POST /v0/city/{cityName}/hca/responses does not declare 403: responses=%v", responses)
+		t.Fatalf("POST /v0/city/{cityName}/external-coordination/responses does not declare 403: responses=%v", responses)
 	}
 	content, _ := forbidden["content"].(map[string]any)
 	problem, _ := content["application/problem+json"].(map[string]any)

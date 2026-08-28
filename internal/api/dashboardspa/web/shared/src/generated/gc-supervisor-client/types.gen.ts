@@ -1065,7 +1065,7 @@ export type ExtMsgAdapterRegisterOutputBody = {
      */
     generation: number;
     /**
-     * Opaque callback registration instance; required with the credential for HCA responses.
+     * Opaque callback registration instance; required with the credential for external coordination responses.
      */
     instance: string;
     /**
@@ -1266,6 +1266,60 @@ export type ExternalAttachment = {
     url: string;
 };
 
+export type ExternalCoordinationCapabilities = {
+    can_create_session: boolean;
+    can_interrupt: boolean;
+    can_receive_events: boolean;
+    can_resume_session: boolean;
+    can_return_results: boolean;
+    can_submit_prompt: boolean;
+};
+
+export type ExternalCoordinationCapability = {
+    adapter: string;
+    available: boolean;
+    capabilities: ExternalCoordinationCapabilities;
+    config_revision: number;
+    delivery: string;
+    instruction: string;
+    interrupt_policy: string;
+    logical_role: string;
+    session_policy: string;
+    target: string;
+    triggers: Array<string> | null;
+};
+
+export type ExternalCoordinationRequestBody = {
+    allowed_tools?: Array<string> | null;
+    city?: string;
+    content_retention?: string;
+    correlation_id: string;
+    delivery_mode?: string;
+    expires_at?: string;
+    idempotency_key?: string;
+    prompt: string;
+    reason: string;
+    repository?: string;
+    result_destination?: string;
+    rig?: string;
+    route_identity?: {
+        [key: string]: string;
+    };
+    session_mode?: string;
+    source_agent: string;
+    target?: Target;
+    work_ref?: string;
+};
+
+export type ExternalCoordinationRequestListOutputBody = {
+    items: Array<RequestRecord> | null;
+    total: number;
+};
+
+export type ExternalCoordinationResponseOutputBody = {
+    status: string;
+};
+
 export type ExternalInboundMessage = {
     actor: ExternalActor;
     attachments?: Array<ExternalAttachment> | null;
@@ -1457,37 +1511,6 @@ export type GroupRouteDecision = {
     UpdateCursor: boolean;
 };
 
-export type HcaRequestBody = {
-    allowed_tools?: Array<string> | null;
-    city?: string;
-    content_retention?: string;
-    correlation_id: string;
-    delivery_mode?: string;
-    expires_at?: string;
-    idempotency_key?: string;
-    prompt: string;
-    reason: string;
-    repository?: string;
-    result_destination?: string;
-    rig?: string;
-    route_identity?: {
-        [key: string]: string;
-    };
-    session_mode?: string;
-    source_agent: string;
-    target?: Target;
-    work_ref?: string;
-};
-
-export type HcaRequestListOutputBody = {
-    items: Array<RequestRecord> | null;
-    total: number;
-};
-
-export type HcaResponseOutputBody = {
-    status: string;
-};
-
 export type HealthOutputBody = {
     /**
      * City name.
@@ -1512,29 +1535,6 @@ export type HeartbeatEvent = {
      * ISO 8601 timestamp when the heartbeat was sent.
      */
     timestamp: string;
-};
-
-export type HumanCoordinatorCapabilities = {
-    can_create_session: boolean;
-    can_interrupt: boolean;
-    can_receive_events: boolean;
-    can_resume_session: boolean;
-    can_return_results: boolean;
-    can_submit_prompt: boolean;
-};
-
-export type HumanCoordinatorSignifier = {
-    adapter: string;
-    available: boolean;
-    capabilities: HumanCoordinatorCapabilities;
-    config_revision: number;
-    delivery: string;
-    instruction: string;
-    interrupt_policy: string;
-    logical_role: string;
-    session_policy: string;
-    target: string;
-    triggers: Array<string> | null;
 };
 
 export type InboundEventPayload = {
@@ -12431,6 +12431,231 @@ export type StreamEventsResponses = {
 
 export type StreamEventsResponse = StreamEventsResponses[keyof StreamEventsResponses];
 
+export type GetV0CityByCityNameExternalCoordinationData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/external-coordination';
+};
+
+export type GetV0CityByCityNameExternalCoordinationErrors = {
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type GetV0CityByCityNameExternalCoordinationError = GetV0CityByCityNameExternalCoordinationErrors[keyof GetV0CityByCityNameExternalCoordinationErrors];
+
+export type GetV0CityByCityNameExternalCoordinationResponses = {
+    /**
+     * OK
+     */
+    200: ExternalCoordinationCapability;
+};
+
+export type GetV0CityByCityNameExternalCoordinationResponse = GetV0CityByCityNameExternalCoordinationResponses[keyof GetV0CityByCityNameExternalCoordinationResponses];
+
+export type GetV0CityByCityNameExternalCoordinationRequestsData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: {
+        /**
+         * Optional delivery state filter.
+         */
+        state?: string;
+    };
+    url: '/v0/city/{cityName}/external-coordination/requests';
+};
+
+export type GetV0CityByCityNameExternalCoordinationRequestsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type GetV0CityByCityNameExternalCoordinationRequestsError = GetV0CityByCityNameExternalCoordinationRequestsErrors[keyof GetV0CityByCityNameExternalCoordinationRequestsErrors];
+
+export type GetV0CityByCityNameExternalCoordinationRequestsResponses = {
+    /**
+     * OK
+     */
+    200: ExternalCoordinationRequestListOutputBody;
+};
+
+export type GetV0CityByCityNameExternalCoordinationRequestsResponse = GetV0CityByCityNameExternalCoordinationRequestsResponses[keyof GetV0CityByCityNameExternalCoordinationRequestsResponses];
+
+export type PostV0CityByCityNameExternalCoordinationRequestsData = {
+    body: ExternalCoordinationRequestBody;
+    headers: {
+        /**
+         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+         */
+        'X-GC-Request': string;
+        /**
+         * Idempotency key for safe retries.
+         */
+        'Idempotency-Key'?: string;
+    };
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/external-coordination/requests';
+};
+
+export type PostV0CityByCityNameExternalCoordinationRequestsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type PostV0CityByCityNameExternalCoordinationRequestsError = PostV0CityByCityNameExternalCoordinationRequestsErrors[keyof PostV0CityByCityNameExternalCoordinationRequestsErrors];
+
+export type PostV0CityByCityNameExternalCoordinationRequestsResponses = {
+    /**
+     * OK
+     */
+    200: RequestRecord;
+};
+
+export type PostV0CityByCityNameExternalCoordinationRequestsResponse = PostV0CityByCityNameExternalCoordinationRequestsResponses[keyof PostV0CityByCityNameExternalCoordinationRequestsResponses];
+
+export type PostV0CityByCityNameExternalCoordinationResponsesData = {
+    body: Response;
+    headers: {
+        /**
+         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+         */
+        'X-GC-Request': string;
+        /**
+         * Idempotency key for safe retries.
+         */
+        'Idempotency-Key'?: string;
+        /**
+         * Bearer credential issued to the registered external coordination adapter.
+         */
+        Authorization: string;
+        /**
+         * Registered external coordination adapter name.
+         */
+        'X-GC-Coordination-Adapter': string;
+        /**
+         * Current adapter registration generation.
+         */
+        'X-GC-Coordination-Adapter-Generation': number;
+        /**
+         * Current adapter registration instance.
+         */
+        'X-GC-Coordination-Adapter-Instance': string;
+    };
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/external-coordination/responses';
+};
+
+export type PostV0CityByCityNameExternalCoordinationResponsesErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Forbidden
+     */
+    403: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type PostV0CityByCityNameExternalCoordinationResponsesError = PostV0CityByCityNameExternalCoordinationResponsesErrors[keyof PostV0CityByCityNameExternalCoordinationResponsesErrors];
+
+export type PostV0CityByCityNameExternalCoordinationResponsesResponses = {
+    /**
+     * OK
+     */
+    200: ExternalCoordinationResponseOutputBody;
+};
+
+export type PostV0CityByCityNameExternalCoordinationResponsesResponse = PostV0CityByCityNameExternalCoordinationResponsesResponses[keyof PostV0CityByCityNameExternalCoordinationResponsesResponses];
+
 export type DeleteV0CityByCityNameExtmsgAdaptersData = {
     body: ExtMsgAdapterUnregisterInputBody;
     headers: {
@@ -13858,231 +14083,6 @@ export type PostV0CityByCityNameFormulasByNameValidateResponses = {
 };
 
 export type PostV0CityByCityNameFormulasByNameValidateResponse = PostV0CityByCityNameFormulasByNameValidateResponses[keyof PostV0CityByCityNameFormulasByNameValidateResponses];
-
-export type GetV0CityByCityNameHcaData = {
-    body?: never;
-    path: {
-        /**
-         * City name.
-         */
-        cityName: string;
-    };
-    query?: never;
-    url: '/v0/city/{cityName}/hca';
-};
-
-export type GetV0CityByCityNameHcaErrors = {
-    /**
-     * Not Found
-     */
-    404: ErrorModel;
-    /**
-     * Unprocessable Entity
-     */
-    422: ErrorModel;
-    /**
-     * Internal Server Error
-     */
-    500: ErrorModel;
-    /**
-     * Service Unavailable
-     */
-    503: ErrorModel;
-};
-
-export type GetV0CityByCityNameHcaError = GetV0CityByCityNameHcaErrors[keyof GetV0CityByCityNameHcaErrors];
-
-export type GetV0CityByCityNameHcaResponses = {
-    /**
-     * OK
-     */
-    200: HumanCoordinatorSignifier;
-};
-
-export type GetV0CityByCityNameHcaResponse = GetV0CityByCityNameHcaResponses[keyof GetV0CityByCityNameHcaResponses];
-
-export type GetV0CityByCityNameHcaRequestsData = {
-    body?: never;
-    path: {
-        /**
-         * City name.
-         */
-        cityName: string;
-    };
-    query?: {
-        /**
-         * Optional delivery state filter.
-         */
-        state?: string;
-    };
-    url: '/v0/city/{cityName}/hca/requests';
-};
-
-export type GetV0CityByCityNameHcaRequestsErrors = {
-    /**
-     * Bad Request
-     */
-    400: ErrorModel;
-    /**
-     * Not Found
-     */
-    404: ErrorModel;
-    /**
-     * Unprocessable Entity
-     */
-    422: ErrorModel;
-    /**
-     * Internal Server Error
-     */
-    500: ErrorModel;
-    /**
-     * Service Unavailable
-     */
-    503: ErrorModel;
-};
-
-export type GetV0CityByCityNameHcaRequestsError = GetV0CityByCityNameHcaRequestsErrors[keyof GetV0CityByCityNameHcaRequestsErrors];
-
-export type GetV0CityByCityNameHcaRequestsResponses = {
-    /**
-     * OK
-     */
-    200: HcaRequestListOutputBody;
-};
-
-export type GetV0CityByCityNameHcaRequestsResponse = GetV0CityByCityNameHcaRequestsResponses[keyof GetV0CityByCityNameHcaRequestsResponses];
-
-export type PostV0CityByCityNameHcaRequestsData = {
-    body: HcaRequestBody;
-    headers: {
-        /**
-         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
-         */
-        'X-GC-Request': string;
-        /**
-         * Idempotency key for safe retries.
-         */
-        'Idempotency-Key'?: string;
-    };
-    path: {
-        /**
-         * City name.
-         */
-        cityName: string;
-    };
-    query?: never;
-    url: '/v0/city/{cityName}/hca/requests';
-};
-
-export type PostV0CityByCityNameHcaRequestsErrors = {
-    /**
-     * Bad Request
-     */
-    400: ErrorModel;
-    /**
-     * Not Found
-     */
-    404: ErrorModel;
-    /**
-     * Unprocessable Entity
-     */
-    422: ErrorModel;
-    /**
-     * Internal Server Error
-     */
-    500: ErrorModel;
-    /**
-     * Service Unavailable
-     */
-    503: ErrorModel;
-};
-
-export type PostV0CityByCityNameHcaRequestsError = PostV0CityByCityNameHcaRequestsErrors[keyof PostV0CityByCityNameHcaRequestsErrors];
-
-export type PostV0CityByCityNameHcaRequestsResponses = {
-    /**
-     * OK
-     */
-    200: RequestRecord;
-};
-
-export type PostV0CityByCityNameHcaRequestsResponse = PostV0CityByCityNameHcaRequestsResponses[keyof PostV0CityByCityNameHcaRequestsResponses];
-
-export type PostV0CityByCityNameHcaResponsesData = {
-    body: Response;
-    headers: {
-        /**
-         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
-         */
-        'X-GC-Request': string;
-        /**
-         * Idempotency key for safe retries.
-         */
-        'Idempotency-Key'?: string;
-        /**
-         * Bearer credential issued to the registered HCA adapter.
-         */
-        Authorization: string;
-        /**
-         * Registered HCA adapter name.
-         */
-        'X-HCA-Adapter': string;
-        /**
-         * Current adapter registration generation.
-         */
-        'X-HCA-Adapter-Generation': number;
-        /**
-         * Current adapter registration instance.
-         */
-        'X-HCA-Adapter-Instance': string;
-    };
-    path: {
-        /**
-         * City name.
-         */
-        cityName: string;
-    };
-    query?: never;
-    url: '/v0/city/{cityName}/hca/responses';
-};
-
-export type PostV0CityByCityNameHcaResponsesErrors = {
-    /**
-     * Bad Request
-     */
-    400: ErrorModel;
-    /**
-     * Forbidden
-     */
-    403: ErrorModel;
-    /**
-     * Not Found
-     */
-    404: ErrorModel;
-    /**
-     * Unprocessable Entity
-     */
-    422: ErrorModel;
-    /**
-     * Internal Server Error
-     */
-    500: ErrorModel;
-    /**
-     * Service Unavailable
-     */
-    503: ErrorModel;
-};
-
-export type PostV0CityByCityNameHcaResponsesError = PostV0CityByCityNameHcaResponsesErrors[keyof PostV0CityByCityNameHcaResponsesErrors];
-
-export type PostV0CityByCityNameHcaResponsesResponses = {
-    /**
-     * OK
-     */
-    200: HcaResponseOutputBody;
-};
-
-export type PostV0CityByCityNameHcaResponsesResponse = PostV0CityByCityNameHcaResponsesResponses[keyof PostV0CityByCityNameHcaResponsesResponses];
 
 export type GetV0CityByCityNameHealthData = {
     body?: never;

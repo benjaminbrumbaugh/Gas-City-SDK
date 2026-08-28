@@ -1927,7 +1927,7 @@ type ExtMsgAdapterRegisterOutputBody struct {
 	// Generation Current callback credential generation; a replacement registration revokes prior generations.
 	Generation int64 `json:"generation"`
 
-	// Instance Opaque callback registration instance; required with the credential for HCA responses.
+	// Instance Opaque callback registration instance; required with the credential for external coordination responses.
 	Instance string `json:"instance"`
 
 	// Name Adapter name.
@@ -2074,6 +2074,63 @@ type ExternalAttachment struct {
 	MimeType   string `json:"mime_type"`
 	ProviderId string `json:"provider_id"`
 	Url        string `json:"url"`
+}
+
+// ExternalCoordinationCapabilities defines model for ExternalCoordinationCapabilities.
+type ExternalCoordinationCapabilities struct {
+	CanCreateSession bool `json:"can_create_session"`
+	CanInterrupt     bool `json:"can_interrupt"`
+	CanReceiveEvents bool `json:"can_receive_events"`
+	CanResumeSession bool `json:"can_resume_session"`
+	CanReturnResults bool `json:"can_return_results"`
+	CanSubmitPrompt  bool `json:"can_submit_prompt"`
+}
+
+// ExternalCoordinationCapability defines model for ExternalCoordinationCapability.
+type ExternalCoordinationCapability struct {
+	Adapter         string                           `json:"adapter"`
+	Available       bool                             `json:"available"`
+	Capabilities    ExternalCoordinationCapabilities `json:"capabilities"`
+	ConfigRevision  int64                            `json:"config_revision"`
+	Delivery        string                           `json:"delivery"`
+	Instruction     string                           `json:"instruction"`
+	InterruptPolicy string                           `json:"interrupt_policy"`
+	LogicalRole     string                           `json:"logical_role"`
+	SessionPolicy   string                           `json:"session_policy"`
+	Target          string                           `json:"target"`
+	Triggers        *[]string                        `json:"triggers"`
+}
+
+// ExternalCoordinationRequestBody defines model for ExternalCoordinationRequestBody.
+type ExternalCoordinationRequestBody struct {
+	AllowedTools      *[]string          `json:"allowed_tools,omitempty"`
+	City              *string            `json:"city,omitempty"`
+	ContentRetention  *string            `json:"content_retention,omitempty"`
+	CorrelationId     string             `json:"correlation_id"`
+	DeliveryMode      *string            `json:"delivery_mode,omitempty"`
+	ExpiresAt         *time.Time         `json:"expires_at,omitempty"`
+	IdempotencyKey    *string            `json:"idempotency_key,omitempty"`
+	Prompt            string             `json:"prompt"`
+	Reason            string             `json:"reason"`
+	Repository        *string            `json:"repository,omitempty"`
+	ResultDestination *string            `json:"result_destination,omitempty"`
+	Rig               *string            `json:"rig,omitempty"`
+	RouteIdentity     *map[string]string `json:"route_identity,omitempty"`
+	SessionMode       *string            `json:"session_mode,omitempty"`
+	SourceAgent       string             `json:"source_agent"`
+	Target            *Target            `json:"target,omitempty"`
+	WorkRef           *string            `json:"work_ref,omitempty"`
+}
+
+// ExternalCoordinationRequestListOutputBody defines model for ExternalCoordinationRequestListOutputBody.
+type ExternalCoordinationRequestListOutputBody struct {
+	Items *[]RequestRecord `json:"items"`
+	Total int64            `json:"total"`
+}
+
+// ExternalCoordinationResponseOutputBody defines model for ExternalCoordinationResponseOutputBody.
+type ExternalCoordinationResponseOutputBody struct {
+	Status string `json:"status"`
 }
 
 // ExternalInboundMessage defines model for ExternalInboundMessage.
@@ -2264,38 +2321,6 @@ type GroupRouteDecision struct {
 	UpdateCursor    bool   `json:"UpdateCursor"`
 }
 
-// HCARequestBody defines model for HCARequestBody.
-type HCARequestBody struct {
-	AllowedTools      *[]string          `json:"allowed_tools,omitempty"`
-	City              *string            `json:"city,omitempty"`
-	ContentRetention  *string            `json:"content_retention,omitempty"`
-	CorrelationId     string             `json:"correlation_id"`
-	DeliveryMode      *string            `json:"delivery_mode,omitempty"`
-	ExpiresAt         *time.Time         `json:"expires_at,omitempty"`
-	IdempotencyKey    *string            `json:"idempotency_key,omitempty"`
-	Prompt            string             `json:"prompt"`
-	Reason            string             `json:"reason"`
-	Repository        *string            `json:"repository,omitempty"`
-	ResultDestination *string            `json:"result_destination,omitempty"`
-	Rig               *string            `json:"rig,omitempty"`
-	RouteIdentity     *map[string]string `json:"route_identity,omitempty"`
-	SessionMode       *string            `json:"session_mode,omitempty"`
-	SourceAgent       string             `json:"source_agent"`
-	Target            *Target            `json:"target,omitempty"`
-	WorkRef           *string            `json:"work_ref,omitempty"`
-}
-
-// HCARequestListOutputBody defines model for HCARequestListOutputBody.
-type HCARequestListOutputBody struct {
-	Items *[]RequestRecord `json:"items"`
-	Total int64            `json:"total"`
-}
-
-// HCAResponseOutputBody defines model for HCAResponseOutputBody.
-type HCAResponseOutputBody struct {
-	Status string `json:"status"`
-}
-
 // HealthOutputBody defines model for HealthOutputBody.
 type HealthOutputBody struct {
 	// City City name.
@@ -2315,31 +2340,6 @@ type HealthOutputBody struct {
 type HeartbeatEvent struct {
 	// Timestamp ISO 8601 timestamp when the heartbeat was sent.
 	Timestamp string `json:"timestamp"`
-}
-
-// HumanCoordinatorCapabilities defines model for HumanCoordinatorCapabilities.
-type HumanCoordinatorCapabilities struct {
-	CanCreateSession bool `json:"can_create_session"`
-	CanInterrupt     bool `json:"can_interrupt"`
-	CanReceiveEvents bool `json:"can_receive_events"`
-	CanResumeSession bool `json:"can_resume_session"`
-	CanReturnResults bool `json:"can_return_results"`
-	CanSubmitPrompt  bool `json:"can_submit_prompt"`
-}
-
-// HumanCoordinatorSignifier defines model for HumanCoordinatorSignifier.
-type HumanCoordinatorSignifier struct {
-	Adapter         string                       `json:"adapter"`
-	Available       bool                         `json:"available"`
-	Capabilities    HumanCoordinatorCapabilities `json:"capabilities"`
-	ConfigRevision  int64                        `json:"config_revision"`
-	Delivery        string                       `json:"delivery"`
-	Instruction     string                       `json:"instruction"`
-	InterruptPolicy string                       `json:"interrupt_policy"`
-	LogicalRole     string                       `json:"logical_role"`
-	SessionPolicy   string                       `json:"session_policy"`
-	Target          string                       `json:"target"`
-	Triggers        *[]string                    `json:"triggers"`
 }
 
 // InboundEventPayload defines model for InboundEventPayload.
@@ -9357,6 +9357,42 @@ type StreamEventsParams struct {
 	LastEventID *string `json:"Last-Event-ID,omitempty"`
 }
 
+// GetV0CityByCityNameExternalCoordinationRequestsParams defines parameters for GetV0CityByCityNameExternalCoordinationRequests.
+type GetV0CityByCityNameExternalCoordinationRequestsParams struct {
+	// State Optional delivery state filter.
+	State *string `form:"state,omitempty" json:"state,omitempty"`
+}
+
+// PostV0CityByCityNameExternalCoordinationRequestsParams defines parameters for PostV0CityByCityNameExternalCoordinationRequests.
+type PostV0CityByCityNameExternalCoordinationRequestsParams struct {
+	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+	XGCRequest string `json:"X-GC-Request"`
+
+	// IdempotencyKey Idempotency key for safe retries.
+	IdempotencyKey *string `json:"Idempotency-Key,omitempty"`
+}
+
+// PostV0CityByCityNameExternalCoordinationResponsesParams defines parameters for PostV0CityByCityNameExternalCoordinationResponses.
+type PostV0CityByCityNameExternalCoordinationResponsesParams struct {
+	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+	XGCRequest string `json:"X-GC-Request"`
+
+	// IdempotencyKey Idempotency key for safe retries.
+	IdempotencyKey *string `json:"Idempotency-Key,omitempty"`
+
+	// Authorization Bearer credential issued to the registered external coordination adapter.
+	Authorization string `json:"Authorization"`
+
+	// XGCCoordinationAdapter Registered external coordination adapter name.
+	XGCCoordinationAdapter string `json:"X-GC-Coordination-Adapter"`
+
+	// XGCCoordinationAdapterGeneration Current adapter registration generation.
+	XGCCoordinationAdapterGeneration int64 `json:"X-GC-Coordination-Adapter-Generation"`
+
+	// XGCCoordinationAdapterInstance Current adapter registration instance.
+	XGCCoordinationAdapterInstance string `json:"X-GC-Coordination-Adapter-Instance"`
+}
+
 // DeleteV0CityByCityNameExtmsgAdaptersParams defines parameters for DeleteV0CityByCityNameExtmsgAdapters.
 type DeleteV0CityByCityNameExtmsgAdaptersParams struct {
 	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
@@ -9556,42 +9592,6 @@ type GetV0CityByCityNameFormulasByNameRunsParams struct {
 type PostV0CityByCityNameFormulasByNameValidateParams struct {
 	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
 	XGCRequest string `json:"X-GC-Request"`
-}
-
-// GetV0CityByCityNameHcaRequestsParams defines parameters for GetV0CityByCityNameHcaRequests.
-type GetV0CityByCityNameHcaRequestsParams struct {
-	// State Optional delivery state filter.
-	State *string `form:"state,omitempty" json:"state,omitempty"`
-}
-
-// PostV0CityByCityNameHcaRequestsParams defines parameters for PostV0CityByCityNameHcaRequests.
-type PostV0CityByCityNameHcaRequestsParams struct {
-	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
-	XGCRequest string `json:"X-GC-Request"`
-
-	// IdempotencyKey Idempotency key for safe retries.
-	IdempotencyKey *string `json:"Idempotency-Key,omitempty"`
-}
-
-// PostV0CityByCityNameHcaResponsesParams defines parameters for PostV0CityByCityNameHcaResponses.
-type PostV0CityByCityNameHcaResponsesParams struct {
-	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
-	XGCRequest string `json:"X-GC-Request"`
-
-	// IdempotencyKey Idempotency key for safe retries.
-	IdempotencyKey *string `json:"Idempotency-Key,omitempty"`
-
-	// Authorization Bearer credential issued to the registered HCA adapter.
-	Authorization string `json:"Authorization"`
-
-	// XHCAAdapter Registered HCA adapter name.
-	XHCAAdapter string `json:"X-HCA-Adapter"`
-
-	// XHCAAdapterGeneration Current adapter registration generation.
-	XHCAAdapterGeneration int64 `json:"X-HCA-Adapter-Generation"`
-
-	// XHCAAdapterInstance Current adapter registration instance.
-	XHCAAdapterInstance string `json:"X-HCA-Adapter-Instance"`
 }
 
 // GetV0CityByCityNameMailParams defines parameters for GetV0CityByCityNameMail.
@@ -10239,6 +10239,12 @@ type CreateConvoyJSONRequestBody = ConvoyCreateInputBody
 // EmitEventJSONRequestBody defines body for EmitEvent for application/json ContentType.
 type EmitEventJSONRequestBody = EventEmitRequest
 
+// PostV0CityByCityNameExternalCoordinationRequestsJSONRequestBody defines body for PostV0CityByCityNameExternalCoordinationRequests for application/json ContentType.
+type PostV0CityByCityNameExternalCoordinationRequestsJSONRequestBody = ExternalCoordinationRequestBody
+
+// PostV0CityByCityNameExternalCoordinationResponsesJSONRequestBody defines body for PostV0CityByCityNameExternalCoordinationResponses for application/json ContentType.
+type PostV0CityByCityNameExternalCoordinationResponsesJSONRequestBody = Response
+
 // DeleteV0CityByCityNameExtmsgAdaptersJSONRequestBody defines body for DeleteV0CityByCityNameExtmsgAdapters for application/json ContentType.
 type DeleteV0CityByCityNameExtmsgAdaptersJSONRequestBody = ExtMsgAdapterUnregisterInputBody
 
@@ -10271,12 +10277,6 @@ type PostV0CityByCityNameExtmsgUnbindJSONRequestBody = ExtMsgUnbindInputBody
 
 // PostV0CityByCityNameFormulasByNamePreviewJSONRequestBody defines body for PostV0CityByCityNameFormulasByNamePreview for application/json ContentType.
 type PostV0CityByCityNameFormulasByNamePreviewJSONRequestBody = FormulaPreviewBody
-
-// PostV0CityByCityNameHcaRequestsJSONRequestBody defines body for PostV0CityByCityNameHcaRequests for application/json ContentType.
-type PostV0CityByCityNameHcaRequestsJSONRequestBody = HCARequestBody
-
-// PostV0CityByCityNameHcaResponsesJSONRequestBody defines body for PostV0CityByCityNameHcaResponses for application/json ContentType.
-type PostV0CityByCityNameHcaResponsesJSONRequestBody = Response
 
 // SendMailJSONRequestBody defines body for SendMail for application/json ContentType.
 type SendMailJSONRequestBody = MailSendInputBody
@@ -19157,6 +19157,22 @@ type ClientInterface interface {
 	// StreamEvents request
 	StreamEvents(ctx context.Context, cityName string, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetV0CityByCityNameExternalCoordination request
+	GetV0CityByCityNameExternalCoordination(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetV0CityByCityNameExternalCoordinationRequests request
+	GetV0CityByCityNameExternalCoordinationRequests(ctx context.Context, cityName string, params *GetV0CityByCityNameExternalCoordinationRequestsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PostV0CityByCityNameExternalCoordinationRequestsWithBody request with any body
+	PostV0CityByCityNameExternalCoordinationRequestsWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationRequestsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostV0CityByCityNameExternalCoordinationRequests(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationRequestsParams, body PostV0CityByCityNameExternalCoordinationRequestsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PostV0CityByCityNameExternalCoordinationResponsesWithBody request with any body
+	PostV0CityByCityNameExternalCoordinationResponsesWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationResponsesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostV0CityByCityNameExternalCoordinationResponses(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationResponsesParams, body PostV0CityByCityNameExternalCoordinationResponsesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// DeleteV0CityByCityNameExtmsgAdaptersWithBody request with any body
 	DeleteV0CityByCityNameExtmsgAdaptersWithBody(ctx context.Context, cityName string, params *DeleteV0CityByCityNameExtmsgAdaptersParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -19250,22 +19266,6 @@ type ClientInterface interface {
 
 	// PostV0CityByCityNameFormulasByNameValidateWithBody request with any body
 	PostV0CityByCityNameFormulasByNameValidateWithBody(ctx context.Context, cityName string, name string, params *PostV0CityByCityNameFormulasByNameValidateParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// GetV0CityByCityNameHca request
-	GetV0CityByCityNameHca(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// GetV0CityByCityNameHcaRequests request
-	GetV0CityByCityNameHcaRequests(ctx context.Context, cityName string, params *GetV0CityByCityNameHcaRequestsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// PostV0CityByCityNameHcaRequestsWithBody request with any body
-	PostV0CityByCityNameHcaRequestsWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaRequestsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	PostV0CityByCityNameHcaRequests(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaRequestsParams, body PostV0CityByCityNameHcaRequestsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// PostV0CityByCityNameHcaResponsesWithBody request with any body
-	PostV0CityByCityNameHcaResponsesWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaResponsesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	PostV0CityByCityNameHcaResponses(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaResponsesParams, body PostV0CityByCityNameHcaResponsesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetV0CityByCityNameHealth request
 	GetV0CityByCityNameHealth(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -20325,6 +20325,78 @@ func (c *Client) StreamEvents(ctx context.Context, cityName string, params *Stre
 	return c.Client.Do(req)
 }
 
+func (c *Client) GetV0CityByCityNameExternalCoordination(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetV0CityByCityNameExternalCoordinationRequest(c.Server, cityName)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetV0CityByCityNameExternalCoordinationRequests(ctx context.Context, cityName string, params *GetV0CityByCityNameExternalCoordinationRequestsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetV0CityByCityNameExternalCoordinationRequestsRequest(c.Server, cityName, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameExternalCoordinationRequestsWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationRequestsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameExternalCoordinationRequestsRequestWithBody(c.Server, cityName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameExternalCoordinationRequests(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationRequestsParams, body PostV0CityByCityNameExternalCoordinationRequestsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameExternalCoordinationRequestsRequest(c.Server, cityName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameExternalCoordinationResponsesWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationResponsesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameExternalCoordinationResponsesRequestWithBody(c.Server, cityName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameExternalCoordinationResponses(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationResponsesParams, body PostV0CityByCityNameExternalCoordinationResponsesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameExternalCoordinationResponsesRequest(c.Server, cityName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) DeleteV0CityByCityNameExtmsgAdaptersWithBody(ctx context.Context, cityName string, params *DeleteV0CityByCityNameExtmsgAdaptersParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewDeleteV0CityByCityNameExtmsgAdaptersRequestWithBody(c.Server, cityName, params, contentType, body)
 	if err != nil {
@@ -20735,78 +20807,6 @@ func (c *Client) GetV0CityByCityNameFormulasByNameSource(ctx context.Context, ci
 
 func (c *Client) PostV0CityByCityNameFormulasByNameValidateWithBody(ctx context.Context, cityName string, name string, params *PostV0CityByCityNameFormulasByNameValidateParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPostV0CityByCityNameFormulasByNameValidateRequestWithBody(c.Server, cityName, name, params, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) GetV0CityByCityNameHca(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetV0CityByCityNameHcaRequest(c.Server, cityName)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) GetV0CityByCityNameHcaRequests(ctx context.Context, cityName string, params *GetV0CityByCityNameHcaRequestsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetV0CityByCityNameHcaRequestsRequest(c.Server, cityName, params)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) PostV0CityByCityNameHcaRequestsWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaRequestsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostV0CityByCityNameHcaRequestsRequestWithBody(c.Server, cityName, params, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) PostV0CityByCityNameHcaRequests(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaRequestsParams, body PostV0CityByCityNameHcaRequestsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostV0CityByCityNameHcaRequestsRequest(c.Server, cityName, params, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) PostV0CityByCityNameHcaResponsesWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaResponsesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostV0CityByCityNameHcaResponsesRequestWithBody(c.Server, cityName, params, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) PostV0CityByCityNameHcaResponses(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaResponsesParams, body PostV0CityByCityNameHcaResponsesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostV0CityByCityNameHcaResponsesRequest(c.Server, cityName, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -25219,6 +25219,274 @@ func NewStreamEventsRequest(server string, cityName string, params *StreamEvents
 	return req, nil
 }
 
+// NewGetV0CityByCityNameExternalCoordinationRequest generates requests for GetV0CityByCityNameExternalCoordination
+func NewGetV0CityByCityNameExternalCoordinationRequest(server string, cityName string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/external-coordination", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetV0CityByCityNameExternalCoordinationRequestsRequest generates requests for GetV0CityByCityNameExternalCoordinationRequests
+func NewGetV0CityByCityNameExternalCoordinationRequestsRequest(server string, cityName string, params *GetV0CityByCityNameExternalCoordinationRequestsParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/external-coordination/requests", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.State != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "state", *params.State, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPostV0CityByCityNameExternalCoordinationRequestsRequest calls the generic PostV0CityByCityNameExternalCoordinationRequests builder with application/json body
+func NewPostV0CityByCityNameExternalCoordinationRequestsRequest(server string, cityName string, params *PostV0CityByCityNameExternalCoordinationRequestsParams, body PostV0CityByCityNameExternalCoordinationRequestsJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostV0CityByCityNameExternalCoordinationRequestsRequestWithBody(server, cityName, params, "application/json", bodyReader)
+}
+
+// NewPostV0CityByCityNameExternalCoordinationRequestsRequestWithBody generates requests for PostV0CityByCityNameExternalCoordinationRequests with any type of body
+func NewPostV0CityByCityNameExternalCoordinationRequestsRequestWithBody(server string, cityName string, params *PostV0CityByCityNameExternalCoordinationRequestsParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/external-coordination/requests", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Request", headerParam0)
+
+		if params.IdempotencyKey != nil {
+			var headerParam1 string
+
+			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "Idempotency-Key", *params.IdempotencyKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Idempotency-Key", headerParam1)
+		}
+
+	}
+
+	return req, nil
+}
+
+// NewPostV0CityByCityNameExternalCoordinationResponsesRequest calls the generic PostV0CityByCityNameExternalCoordinationResponses builder with application/json body
+func NewPostV0CityByCityNameExternalCoordinationResponsesRequest(server string, cityName string, params *PostV0CityByCityNameExternalCoordinationResponsesParams, body PostV0CityByCityNameExternalCoordinationResponsesJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostV0CityByCityNameExternalCoordinationResponsesRequestWithBody(server, cityName, params, "application/json", bodyReader)
+}
+
+// NewPostV0CityByCityNameExternalCoordinationResponsesRequestWithBody generates requests for PostV0CityByCityNameExternalCoordinationResponses with any type of body
+func NewPostV0CityByCityNameExternalCoordinationResponsesRequestWithBody(server string, cityName string, params *PostV0CityByCityNameExternalCoordinationResponsesParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/external-coordination/responses", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Request", headerParam0)
+
+		if params.IdempotencyKey != nil {
+			var headerParam1 string
+
+			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "Idempotency-Key", *params.IdempotencyKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Idempotency-Key", headerParam1)
+		}
+
+		var headerParam2 string
+
+		headerParam2, err = runtime.StyleParamWithOptions("simple", false, "Authorization", params.Authorization, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("Authorization", headerParam2)
+
+		var headerParam3 string
+
+		headerParam3, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Coordination-Adapter", params.XGCCoordinationAdapter, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Coordination-Adapter", headerParam3)
+
+		var headerParam4 string
+
+		headerParam4, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Coordination-Adapter-Generation", params.XGCCoordinationAdapterGeneration, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "integer", Format: "int64"})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Coordination-Adapter-Generation", headerParam4)
+
+		var headerParam5 string
+
+		headerParam5, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Coordination-Adapter-Instance", params.XGCCoordinationAdapterInstance, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Coordination-Adapter-Instance", headerParam5)
+
+	}
+
+	return req, nil
+}
+
 // NewDeleteV0CityByCityNameExtmsgAdaptersRequest calls the generic DeleteV0CityByCityNameExtmsgAdapters builder with application/json body
 func NewDeleteV0CityByCityNameExtmsgAdaptersRequest(server string, cityName string, params *DeleteV0CityByCityNameExtmsgAdaptersParams, body DeleteV0CityByCityNameExtmsgAdaptersJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -26929,274 +27197,6 @@ func NewPostV0CityByCityNameFormulasByNameValidateRequestWithBody(server string,
 		}
 
 		req.Header.Set("X-GC-Request", headerParam0)
-
-	}
-
-	return req, nil
-}
-
-// NewGetV0CityByCityNameHcaRequest generates requests for GetV0CityByCityNameHca
-func NewGetV0CityByCityNameHcaRequest(server string, cityName string) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/v0/city/%s/hca", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("GET", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewGetV0CityByCityNameHcaRequestsRequest generates requests for GetV0CityByCityNameHcaRequests
-func NewGetV0CityByCityNameHcaRequestsRequest(server string, cityName string, params *GetV0CityByCityNameHcaRequestsParams) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/v0/city/%s/hca/requests", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	if params != nil {
-		queryValues := queryURL.Query()
-
-		if params.State != nil {
-
-			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "state", *params.State, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
-				return nil, err
-			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
-				return nil, err
-			} else {
-				for k, v := range parsed {
-					for _, v2 := range v {
-						queryValues.Add(k, v2)
-					}
-				}
-			}
-
-		}
-
-		queryURL.RawQuery = queryValues.Encode()
-	}
-
-	req, err := http.NewRequest("GET", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewPostV0CityByCityNameHcaRequestsRequest calls the generic PostV0CityByCityNameHcaRequests builder with application/json body
-func NewPostV0CityByCityNameHcaRequestsRequest(server string, cityName string, params *PostV0CityByCityNameHcaRequestsParams, body PostV0CityByCityNameHcaRequestsJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewPostV0CityByCityNameHcaRequestsRequestWithBody(server, cityName, params, "application/json", bodyReader)
-}
-
-// NewPostV0CityByCityNameHcaRequestsRequestWithBody generates requests for PostV0CityByCityNameHcaRequests with any type of body
-func NewPostV0CityByCityNameHcaRequestsRequestWithBody(server string, cityName string, params *PostV0CityByCityNameHcaRequestsParams, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/v0/city/%s/hca/requests", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	if params != nil {
-
-		var headerParam0 string
-
-		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-		if err != nil {
-			return nil, err
-		}
-
-		req.Header.Set("X-GC-Request", headerParam0)
-
-		if params.IdempotencyKey != nil {
-			var headerParam1 string
-
-			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "Idempotency-Key", *params.IdempotencyKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-			if err != nil {
-				return nil, err
-			}
-
-			req.Header.Set("Idempotency-Key", headerParam1)
-		}
-
-	}
-
-	return req, nil
-}
-
-// NewPostV0CityByCityNameHcaResponsesRequest calls the generic PostV0CityByCityNameHcaResponses builder with application/json body
-func NewPostV0CityByCityNameHcaResponsesRequest(server string, cityName string, params *PostV0CityByCityNameHcaResponsesParams, body PostV0CityByCityNameHcaResponsesJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewPostV0CityByCityNameHcaResponsesRequestWithBody(server, cityName, params, "application/json", bodyReader)
-}
-
-// NewPostV0CityByCityNameHcaResponsesRequestWithBody generates requests for PostV0CityByCityNameHcaResponses with any type of body
-func NewPostV0CityByCityNameHcaResponsesRequestWithBody(server string, cityName string, params *PostV0CityByCityNameHcaResponsesParams, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/v0/city/%s/hca/responses", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	if params != nil {
-
-		var headerParam0 string
-
-		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-		if err != nil {
-			return nil, err
-		}
-
-		req.Header.Set("X-GC-Request", headerParam0)
-
-		if params.IdempotencyKey != nil {
-			var headerParam1 string
-
-			headerParam1, err = runtime.StyleParamWithOptions("simple", false, "Idempotency-Key", *params.IdempotencyKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-			if err != nil {
-				return nil, err
-			}
-
-			req.Header.Set("Idempotency-Key", headerParam1)
-		}
-
-		var headerParam2 string
-
-		headerParam2, err = runtime.StyleParamWithOptions("simple", false, "Authorization", params.Authorization, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-		if err != nil {
-			return nil, err
-		}
-
-		req.Header.Set("Authorization", headerParam2)
-
-		var headerParam3 string
-
-		headerParam3, err = runtime.StyleParamWithOptions("simple", false, "X-HCA-Adapter", params.XHCAAdapter, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-		if err != nil {
-			return nil, err
-		}
-
-		req.Header.Set("X-HCA-Adapter", headerParam3)
-
-		var headerParam4 string
-
-		headerParam4, err = runtime.StyleParamWithOptions("simple", false, "X-HCA-Adapter-Generation", params.XHCAAdapterGeneration, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "integer", Format: "int64"})
-		if err != nil {
-			return nil, err
-		}
-
-		req.Header.Set("X-HCA-Adapter-Generation", headerParam4)
-
-		var headerParam5 string
-
-		headerParam5, err = runtime.StyleParamWithOptions("simple", false, "X-HCA-Adapter-Instance", params.XHCAAdapterInstance, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-		if err != nil {
-			return nil, err
-		}
-
-		req.Header.Set("X-HCA-Adapter-Instance", headerParam5)
 
 	}
 
@@ -33482,6 +33482,22 @@ type ClientWithResponsesInterface interface {
 	// StreamEventsWithResponse request
 	StreamEventsWithResponse(ctx context.Context, cityName string, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*StreamEventsResponse, error)
 
+	// GetV0CityByCityNameExternalCoordinationWithResponse request
+	GetV0CityByCityNameExternalCoordinationWithResponse(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameExternalCoordinationResponse, error)
+
+	// GetV0CityByCityNameExternalCoordinationRequestsWithResponse request
+	GetV0CityByCityNameExternalCoordinationRequestsWithResponse(ctx context.Context, cityName string, params *GetV0CityByCityNameExternalCoordinationRequestsParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameExternalCoordinationRequestsResponse, error)
+
+	// PostV0CityByCityNameExternalCoordinationRequestsWithBodyWithResponse request with any body
+	PostV0CityByCityNameExternalCoordinationRequestsWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationRequestsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameExternalCoordinationRequestsResponse, error)
+
+	PostV0CityByCityNameExternalCoordinationRequestsWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationRequestsParams, body PostV0CityByCityNameExternalCoordinationRequestsJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameExternalCoordinationRequestsResponse, error)
+
+	// PostV0CityByCityNameExternalCoordinationResponsesWithBodyWithResponse request with any body
+	PostV0CityByCityNameExternalCoordinationResponsesWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationResponsesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameExternalCoordinationResponsesResponse, error)
+
+	PostV0CityByCityNameExternalCoordinationResponsesWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationResponsesParams, body PostV0CityByCityNameExternalCoordinationResponsesJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameExternalCoordinationResponsesResponse, error)
+
 	// DeleteV0CityByCityNameExtmsgAdaptersWithBodyWithResponse request with any body
 	DeleteV0CityByCityNameExtmsgAdaptersWithBodyWithResponse(ctx context.Context, cityName string, params *DeleteV0CityByCityNameExtmsgAdaptersParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DeleteV0CityByCityNameExtmsgAdaptersResponse, error)
 
@@ -33575,22 +33591,6 @@ type ClientWithResponsesInterface interface {
 
 	// PostV0CityByCityNameFormulasByNameValidateWithBodyWithResponse request with any body
 	PostV0CityByCityNameFormulasByNameValidateWithBodyWithResponse(ctx context.Context, cityName string, name string, params *PostV0CityByCityNameFormulasByNameValidateParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameFormulasByNameValidateResponse, error)
-
-	// GetV0CityByCityNameHcaWithResponse request
-	GetV0CityByCityNameHcaWithResponse(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameHcaResponse, error)
-
-	// GetV0CityByCityNameHcaRequestsWithResponse request
-	GetV0CityByCityNameHcaRequestsWithResponse(ctx context.Context, cityName string, params *GetV0CityByCityNameHcaRequestsParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameHcaRequestsResponse, error)
-
-	// PostV0CityByCityNameHcaRequestsWithBodyWithResponse request with any body
-	PostV0CityByCityNameHcaRequestsWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaRequestsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameHcaRequestsResponse, error)
-
-	PostV0CityByCityNameHcaRequestsWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaRequestsParams, body PostV0CityByCityNameHcaRequestsJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameHcaRequestsResponse, error)
-
-	// PostV0CityByCityNameHcaResponsesWithBodyWithResponse request with any body
-	PostV0CityByCityNameHcaResponsesWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaResponsesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameHcaResponsesResponse, error)
-
-	PostV0CityByCityNameHcaResponsesWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaResponsesParams, body PostV0CityByCityNameHcaResponsesJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameHcaResponsesResponse, error)
 
 	// GetV0CityByCityNameHealthWithResponse request
 	GetV0CityByCityNameHealthWithResponse(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameHealthResponse, error)
@@ -35192,6 +35192,114 @@ func (r StreamEventsResponse) StatusCode() int {
 	return 0
 }
 
+type GetV0CityByCityNameExternalCoordinationResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *ExternalCoordinationCapability
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r GetV0CityByCityNameExternalCoordinationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetV0CityByCityNameExternalCoordinationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetV0CityByCityNameExternalCoordinationRequestsResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *ExternalCoordinationRequestListOutputBody
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r GetV0CityByCityNameExternalCoordinationRequestsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetV0CityByCityNameExternalCoordinationRequestsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PostV0CityByCityNameExternalCoordinationRequestsResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *RequestRecord
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r PostV0CityByCityNameExternalCoordinationRequestsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostV0CityByCityNameExternalCoordinationRequestsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PostV0CityByCityNameExternalCoordinationResponsesResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *ExternalCoordinationResponseOutputBody
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON403 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r PostV0CityByCityNameExternalCoordinationResponsesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostV0CityByCityNameExternalCoordinationResponsesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type DeleteV0CityByCityNameExtmsgAdaptersResponse struct {
 	Body                      []byte
 	HTTPResponse              *http.Response
@@ -35854,114 +35962,6 @@ func (r PostV0CityByCityNameFormulasByNameValidateResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r PostV0CityByCityNameFormulasByNameValidateResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type GetV0CityByCityNameHcaResponse struct {
-	Body                      []byte
-	HTTPResponse              *http.Response
-	JSON200                   *HumanCoordinatorSignifier
-	ApplicationproblemJSON404 *ErrorModel
-	ApplicationproblemJSON422 *ErrorModel
-	ApplicationproblemJSON500 *ErrorModel
-	ApplicationproblemJSON503 *ErrorModel
-}
-
-// Status returns HTTPResponse.Status
-func (r GetV0CityByCityNameHcaResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r GetV0CityByCityNameHcaResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type GetV0CityByCityNameHcaRequestsResponse struct {
-	Body                      []byte
-	HTTPResponse              *http.Response
-	JSON200                   *HCARequestListOutputBody
-	ApplicationproblemJSON400 *ErrorModel
-	ApplicationproblemJSON404 *ErrorModel
-	ApplicationproblemJSON422 *ErrorModel
-	ApplicationproblemJSON500 *ErrorModel
-	ApplicationproblemJSON503 *ErrorModel
-}
-
-// Status returns HTTPResponse.Status
-func (r GetV0CityByCityNameHcaRequestsResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r GetV0CityByCityNameHcaRequestsResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type PostV0CityByCityNameHcaRequestsResponse struct {
-	Body                      []byte
-	HTTPResponse              *http.Response
-	JSON200                   *RequestRecord
-	ApplicationproblemJSON400 *ErrorModel
-	ApplicationproblemJSON404 *ErrorModel
-	ApplicationproblemJSON422 *ErrorModel
-	ApplicationproblemJSON500 *ErrorModel
-	ApplicationproblemJSON503 *ErrorModel
-}
-
-// Status returns HTTPResponse.Status
-func (r PostV0CityByCityNameHcaRequestsResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r PostV0CityByCityNameHcaRequestsResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type PostV0CityByCityNameHcaResponsesResponse struct {
-	Body                      []byte
-	HTTPResponse              *http.Response
-	JSON200                   *HCAResponseOutputBody
-	ApplicationproblemJSON400 *ErrorModel
-	ApplicationproblemJSON403 *ErrorModel
-	ApplicationproblemJSON404 *ErrorModel
-	ApplicationproblemJSON422 *ErrorModel
-	ApplicationproblemJSON500 *ErrorModel
-	ApplicationproblemJSON503 *ErrorModel
-}
-
-// Status returns HTTPResponse.Status
-func (r PostV0CityByCityNameHcaResponsesResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r PostV0CityByCityNameHcaResponsesResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -39163,6 +39163,58 @@ func (c *ClientWithResponses) StreamEventsWithResponse(ctx context.Context, city
 	return ParseStreamEventsResponse(rsp)
 }
 
+// GetV0CityByCityNameExternalCoordinationWithResponse request returning *GetV0CityByCityNameExternalCoordinationResponse
+func (c *ClientWithResponses) GetV0CityByCityNameExternalCoordinationWithResponse(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameExternalCoordinationResponse, error) {
+	rsp, err := c.GetV0CityByCityNameExternalCoordination(ctx, cityName, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetV0CityByCityNameExternalCoordinationResponse(rsp)
+}
+
+// GetV0CityByCityNameExternalCoordinationRequestsWithResponse request returning *GetV0CityByCityNameExternalCoordinationRequestsResponse
+func (c *ClientWithResponses) GetV0CityByCityNameExternalCoordinationRequestsWithResponse(ctx context.Context, cityName string, params *GetV0CityByCityNameExternalCoordinationRequestsParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameExternalCoordinationRequestsResponse, error) {
+	rsp, err := c.GetV0CityByCityNameExternalCoordinationRequests(ctx, cityName, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetV0CityByCityNameExternalCoordinationRequestsResponse(rsp)
+}
+
+// PostV0CityByCityNameExternalCoordinationRequestsWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameExternalCoordinationRequestsResponse
+func (c *ClientWithResponses) PostV0CityByCityNameExternalCoordinationRequestsWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationRequestsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameExternalCoordinationRequestsResponse, error) {
+	rsp, err := c.PostV0CityByCityNameExternalCoordinationRequestsWithBody(ctx, cityName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameExternalCoordinationRequestsResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostV0CityByCityNameExternalCoordinationRequestsWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationRequestsParams, body PostV0CityByCityNameExternalCoordinationRequestsJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameExternalCoordinationRequestsResponse, error) {
+	rsp, err := c.PostV0CityByCityNameExternalCoordinationRequests(ctx, cityName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameExternalCoordinationRequestsResponse(rsp)
+}
+
+// PostV0CityByCityNameExternalCoordinationResponsesWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameExternalCoordinationResponsesResponse
+func (c *ClientWithResponses) PostV0CityByCityNameExternalCoordinationResponsesWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationResponsesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameExternalCoordinationResponsesResponse, error) {
+	rsp, err := c.PostV0CityByCityNameExternalCoordinationResponsesWithBody(ctx, cityName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameExternalCoordinationResponsesResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostV0CityByCityNameExternalCoordinationResponsesWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameExternalCoordinationResponsesParams, body PostV0CityByCityNameExternalCoordinationResponsesJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameExternalCoordinationResponsesResponse, error) {
+	rsp, err := c.PostV0CityByCityNameExternalCoordinationResponses(ctx, cityName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameExternalCoordinationResponsesResponse(rsp)
+}
+
 // DeleteV0CityByCityNameExtmsgAdaptersWithBodyWithResponse request with arbitrary body returning *DeleteV0CityByCityNameExtmsgAdaptersResponse
 func (c *ClientWithResponses) DeleteV0CityByCityNameExtmsgAdaptersWithBodyWithResponse(ctx context.Context, cityName string, params *DeleteV0CityByCityNameExtmsgAdaptersParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DeleteV0CityByCityNameExtmsgAdaptersResponse, error) {
 	rsp, err := c.DeleteV0CityByCityNameExtmsgAdaptersWithBody(ctx, cityName, params, contentType, body, reqEditors...)
@@ -39465,58 +39517,6 @@ func (c *ClientWithResponses) PostV0CityByCityNameFormulasByNameValidateWithBody
 		return nil, err
 	}
 	return ParsePostV0CityByCityNameFormulasByNameValidateResponse(rsp)
-}
-
-// GetV0CityByCityNameHcaWithResponse request returning *GetV0CityByCityNameHcaResponse
-func (c *ClientWithResponses) GetV0CityByCityNameHcaWithResponse(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameHcaResponse, error) {
-	rsp, err := c.GetV0CityByCityNameHca(ctx, cityName, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseGetV0CityByCityNameHcaResponse(rsp)
-}
-
-// GetV0CityByCityNameHcaRequestsWithResponse request returning *GetV0CityByCityNameHcaRequestsResponse
-func (c *ClientWithResponses) GetV0CityByCityNameHcaRequestsWithResponse(ctx context.Context, cityName string, params *GetV0CityByCityNameHcaRequestsParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameHcaRequestsResponse, error) {
-	rsp, err := c.GetV0CityByCityNameHcaRequests(ctx, cityName, params, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseGetV0CityByCityNameHcaRequestsResponse(rsp)
-}
-
-// PostV0CityByCityNameHcaRequestsWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameHcaRequestsResponse
-func (c *ClientWithResponses) PostV0CityByCityNameHcaRequestsWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaRequestsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameHcaRequestsResponse, error) {
-	rsp, err := c.PostV0CityByCityNameHcaRequestsWithBody(ctx, cityName, params, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParsePostV0CityByCityNameHcaRequestsResponse(rsp)
-}
-
-func (c *ClientWithResponses) PostV0CityByCityNameHcaRequestsWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaRequestsParams, body PostV0CityByCityNameHcaRequestsJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameHcaRequestsResponse, error) {
-	rsp, err := c.PostV0CityByCityNameHcaRequests(ctx, cityName, params, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParsePostV0CityByCityNameHcaRequestsResponse(rsp)
-}
-
-// PostV0CityByCityNameHcaResponsesWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameHcaResponsesResponse
-func (c *ClientWithResponses) PostV0CityByCityNameHcaResponsesWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaResponsesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameHcaResponsesResponse, error) {
-	rsp, err := c.PostV0CityByCityNameHcaResponsesWithBody(ctx, cityName, params, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParsePostV0CityByCityNameHcaResponsesResponse(rsp)
-}
-
-func (c *ClientWithResponses) PostV0CityByCityNameHcaResponsesWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameHcaResponsesParams, body PostV0CityByCityNameHcaResponsesJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameHcaResponsesResponse, error) {
-	rsp, err := c.PostV0CityByCityNameHcaResponses(ctx, cityName, params, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParsePostV0CityByCityNameHcaResponsesResponse(rsp)
 }
 
 // GetV0CityByCityNameHealthWithResponse request returning *GetV0CityByCityNameHealthResponse
@@ -43388,6 +43388,250 @@ func ParseStreamEventsResponse(rsp *http.Response) (*StreamEventsResponse, error
 	return response, nil
 }
 
+// ParseGetV0CityByCityNameExternalCoordinationResponse parses an HTTP response from a GetV0CityByCityNameExternalCoordinationWithResponse call
+func ParseGetV0CityByCityNameExternalCoordinationResponse(rsp *http.Response) (*GetV0CityByCityNameExternalCoordinationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetV0CityByCityNameExternalCoordinationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ExternalCoordinationCapability
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetV0CityByCityNameExternalCoordinationRequestsResponse parses an HTTP response from a GetV0CityByCityNameExternalCoordinationRequestsWithResponse call
+func ParseGetV0CityByCityNameExternalCoordinationRequestsResponse(rsp *http.Response) (*GetV0CityByCityNameExternalCoordinationRequestsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetV0CityByCityNameExternalCoordinationRequestsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ExternalCoordinationRequestListOutputBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostV0CityByCityNameExternalCoordinationRequestsResponse parses an HTTP response from a PostV0CityByCityNameExternalCoordinationRequestsWithResponse call
+func ParsePostV0CityByCityNameExternalCoordinationRequestsResponse(rsp *http.Response) (*PostV0CityByCityNameExternalCoordinationRequestsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostV0CityByCityNameExternalCoordinationRequestsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RequestRecord
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostV0CityByCityNameExternalCoordinationResponsesResponse parses an HTTP response from a PostV0CityByCityNameExternalCoordinationResponsesWithResponse call
+func ParsePostV0CityByCityNameExternalCoordinationResponsesResponse(rsp *http.Response) (*PostV0CityByCityNameExternalCoordinationResponsesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostV0CityByCityNameExternalCoordinationResponsesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ExternalCoordinationResponseOutputBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseDeleteV0CityByCityNameExtmsgAdaptersResponse parses an HTTP response from a DeleteV0CityByCityNameExtmsgAdaptersWithResponse call
 func ParseDeleteV0CityByCityNameExtmsgAdaptersResponse(rsp *http.Response) (*DeleteV0CityByCityNameExtmsgAdaptersResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -44986,250 +45230,6 @@ func ParsePostV0CityByCityNameFormulasByNameValidateResponse(rsp *http.Response)
 			return nil, err
 		}
 		response.ApplicationproblemJSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseGetV0CityByCityNameHcaResponse parses an HTTP response from a GetV0CityByCityNameHcaWithResponse call
-func ParseGetV0CityByCityNameHcaResponse(rsp *http.Response) (*GetV0CityByCityNameHcaResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &GetV0CityByCityNameHcaResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest HumanCoordinatorSignifier
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON500 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON503 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseGetV0CityByCityNameHcaRequestsResponse parses an HTTP response from a GetV0CityByCityNameHcaRequestsWithResponse call
-func ParseGetV0CityByCityNameHcaRequestsResponse(rsp *http.Response) (*GetV0CityByCityNameHcaRequestsResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &GetV0CityByCityNameHcaRequestsResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest HCARequestListOutputBody
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON500 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON503 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParsePostV0CityByCityNameHcaRequestsResponse parses an HTTP response from a PostV0CityByCityNameHcaRequestsWithResponse call
-func ParsePostV0CityByCityNameHcaRequestsResponse(rsp *http.Response) (*PostV0CityByCityNameHcaRequestsResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &PostV0CityByCityNameHcaRequestsResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest RequestRecord
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON500 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON503 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParsePostV0CityByCityNameHcaResponsesResponse parses an HTTP response from a PostV0CityByCityNameHcaResponsesWithResponse call
-func ParsePostV0CityByCityNameHcaResponsesResponse(rsp *http.Response) (*PostV0CityByCityNameHcaResponsesResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &PostV0CityByCityNameHcaResponsesResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest HCAResponseOutputBody
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON403 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON422 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON500 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
-		var dest ErrorModel
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.ApplicationproblemJSON503 = &dest
 
 	}
 

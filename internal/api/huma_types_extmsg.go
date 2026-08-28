@@ -207,7 +207,7 @@ type ExtMsgAdapterRegisterOutput struct {
 		Name       string `json:"name" doc:"Adapter name."`
 		Credential string `json:"credential" doc:"Ephemeral bearer credential issued only by this successful registration response; never returned by adapter-list operations."`
 		Generation uint64 `json:"generation" doc:"Current callback credential generation; a replacement registration revokes prior generations."`
-		Instance   string `json:"instance" doc:"Opaque callback registration instance; required with the credential for HCA responses."`
+		Instance   string `json:"instance" doc:"Opaque callback registration instance; required with the credential for external coordination responses."`
 	}
 }
 

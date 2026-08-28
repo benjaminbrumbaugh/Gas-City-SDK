@@ -615,6 +615,33 @@ export const zExternalAttachment = z.object({
     url: z.string()
 });
 
+export const zExternalCoordinationCapabilities = z.object({
+    can_create_session: z.boolean(),
+    can_interrupt: z.boolean(),
+    can_receive_events: z.boolean(),
+    can_resume_session: z.boolean(),
+    can_return_results: z.boolean(),
+    can_submit_prompt: z.boolean()
+});
+
+export const zExternalCoordinationCapability = z.object({
+    adapter: z.string(),
+    available: z.boolean(),
+    capabilities: zExternalCoordinationCapabilities,
+    config_revision: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    delivery: z.string(),
+    instruction: z.string(),
+    interrupt_policy: z.string(),
+    logical_role: z.string(),
+    session_policy: z.string(),
+    target: z.string(),
+    triggers: z.array(z.string()).nullable()
+});
+
+export const zExternalCoordinationResponseOutputBody = z.object({
+    status: z.string()
+});
+
 export const zExternalInboundMessage = z.object({
     actor: zExternalActor,
     attachments: z.array(zExternalAttachment).nullish(),
@@ -772,10 +799,6 @@ export const zGroupRouteDecision = z.object({
     UpdateCursor: z.boolean()
 });
 
-export const zHcaResponseOutputBody = z.object({
-    status: z.string()
-});
-
 export const zHealthOutputBody = z.object({
     city: z.string().optional(),
     status: z.string(),
@@ -785,29 +808,6 @@ export const zHealthOutputBody = z.object({
 
 export const zHeartbeatEvent = z.object({
     timestamp: z.string()
-});
-
-export const zHumanCoordinatorCapabilities = z.object({
-    can_create_session: z.boolean(),
-    can_interrupt: z.boolean(),
-    can_receive_events: z.boolean(),
-    can_resume_session: z.boolean(),
-    can_return_results: z.boolean(),
-    can_submit_prompt: z.boolean()
-});
-
-export const zHumanCoordinatorSignifier = z.object({
-    adapter: z.string(),
-    available: z.boolean(),
-    capabilities: zHumanCoordinatorCapabilities,
-    config_revision: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
-    delivery: z.string(),
-    instruction: z.string(),
-    interrupt_policy: z.string(),
-    logical_role: z.string(),
-    session_policy: z.string(),
-    target: z.string(),
-    triggers: z.array(z.string()).nullable()
 });
 
 export const zInboundEventPayload = z.object({
@@ -3829,7 +3829,7 @@ export const zTarget = z.object({
     target_id: z.string()
 });
 
-export const zHcaRequestBody = z.object({
+export const zExternalCoordinationRequestBody = z.object({
     allowed_tools: z.array(z.string()).nullish(),
     city: z.string().optional(),
     content_retention: z.string().optional(),
@@ -3883,7 +3883,7 @@ export const zRequestRecord = z.object({
     state: z.string()
 });
 
-export const zHcaRequestListOutputBody = z.object({
+export const zExternalCoordinationRequestListOutputBody = z.object({
     items: z.array(zRequestRecord).nullable(),
     total: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' })
 });
@@ -8585,6 +8585,64 @@ export const zStreamEventsResponse = z.array(z.union([z.object({
         retry: z.int().optional()
     })]));
 
+export const zGetV0CityByCityNameExternalCoordinationPath = z.object({
+    cityName: z.string().min(1).regex(/\S/)
+});
+
+/**
+ * OK
+ */
+export const zGetV0CityByCityNameExternalCoordinationResponse = zExternalCoordinationCapability;
+
+export const zGetV0CityByCityNameExternalCoordinationRequestsPath = z.object({
+    cityName: z.string().min(1).regex(/\S/)
+});
+
+export const zGetV0CityByCityNameExternalCoordinationRequestsQuery = z.object({
+    state: z.string().optional()
+});
+
+/**
+ * OK
+ */
+export const zGetV0CityByCityNameExternalCoordinationRequestsResponse = zExternalCoordinationRequestListOutputBody;
+
+export const zPostV0CityByCityNameExternalCoordinationRequestsBody = zExternalCoordinationRequestBody;
+
+export const zPostV0CityByCityNameExternalCoordinationRequestsHeaders = z.object({
+    'X-GC-Request': z.string().min(1),
+    'Idempotency-Key': z.string().optional()
+});
+
+export const zPostV0CityByCityNameExternalCoordinationRequestsPath = z.object({
+    cityName: z.string().min(1).regex(/\S/)
+});
+
+/**
+ * OK
+ */
+export const zPostV0CityByCityNameExternalCoordinationRequestsResponse = zRequestRecord;
+
+export const zPostV0CityByCityNameExternalCoordinationResponsesBody = zResponse;
+
+export const zPostV0CityByCityNameExternalCoordinationResponsesHeaders = z.object({
+    'X-GC-Request': z.string().min(1),
+    'Idempotency-Key': z.string().optional(),
+    Authorization: z.string(),
+    'X-GC-Coordination-Adapter': z.string(),
+    'X-GC-Coordination-Adapter-Generation': z.coerce.bigint().gte(BigInt(0)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    'X-GC-Coordination-Adapter-Instance': z.string()
+});
+
+export const zPostV0CityByCityNameExternalCoordinationResponsesPath = z.object({
+    cityName: z.string().min(1).regex(/\S/)
+});
+
+/**
+ * OK
+ */
+export const zPostV0CityByCityNameExternalCoordinationResponsesResponse = zExternalCoordinationResponseOutputBody;
+
 export const zDeleteV0CityByCityNameExtmsgAdaptersBody = zExtMsgAdapterUnregisterInputBody;
 
 export const zDeleteV0CityByCityNameExtmsgAdaptersHeaders = z.object({
@@ -8944,64 +9002,6 @@ export const zPostV0CityByCityNameFormulasByNameValidatePath = z.object({
  * OK
  */
 export const zPostV0CityByCityNameFormulasByNameValidateResponse = zFormulaValidateOutputBody;
-
-export const zGetV0CityByCityNameHcaPath = z.object({
-    cityName: z.string().min(1).regex(/\S/)
-});
-
-/**
- * OK
- */
-export const zGetV0CityByCityNameHcaResponse = zHumanCoordinatorSignifier;
-
-export const zGetV0CityByCityNameHcaRequestsPath = z.object({
-    cityName: z.string().min(1).regex(/\S/)
-});
-
-export const zGetV0CityByCityNameHcaRequestsQuery = z.object({
-    state: z.string().optional()
-});
-
-/**
- * OK
- */
-export const zGetV0CityByCityNameHcaRequestsResponse = zHcaRequestListOutputBody;
-
-export const zPostV0CityByCityNameHcaRequestsBody = zHcaRequestBody;
-
-export const zPostV0CityByCityNameHcaRequestsHeaders = z.object({
-    'X-GC-Request': z.string().min(1),
-    'Idempotency-Key': z.string().optional()
-});
-
-export const zPostV0CityByCityNameHcaRequestsPath = z.object({
-    cityName: z.string().min(1).regex(/\S/)
-});
-
-/**
- * OK
- */
-export const zPostV0CityByCityNameHcaRequestsResponse = zRequestRecord;
-
-export const zPostV0CityByCityNameHcaResponsesBody = zResponse;
-
-export const zPostV0CityByCityNameHcaResponsesHeaders = z.object({
-    'X-GC-Request': z.string().min(1),
-    'Idempotency-Key': z.string().optional(),
-    Authorization: z.string(),
-    'X-HCA-Adapter': z.string(),
-    'X-HCA-Adapter-Generation': z.coerce.bigint().gte(BigInt(0)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
-    'X-HCA-Adapter-Instance': z.string()
-});
-
-export const zPostV0CityByCityNameHcaResponsesPath = z.object({
-    cityName: z.string().min(1).regex(/\S/)
-});
-
-/**
- * OK
- */
-export const zPostV0CityByCityNameHcaResponsesResponse = zHcaResponseOutputBody;
 
 export const zGetV0CityByCityNameHealthPath = z.object({
     cityName: z.string().min(1).regex(/\S/)

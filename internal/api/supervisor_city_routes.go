@@ -513,9 +513,9 @@ func (sm *SupervisorMux) registerCityRoutes() {
 	}, (*Server).humaHandleExtMsgAdapterRegister)
 	cityDelete(sm, "/extmsg/adapters", (*Server).humaHandleExtMsgAdapterUnregister, errorStatuses(http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable))
 
-	// Human Coordinator Agent affordance.
-	cityGet(sm, "/hca", (*Server).humaHandleHCAAffordance, errorStatuses(http.StatusNotFound, http.StatusServiceUnavailable))
-	cityPost(sm, "/hca/requests", (*Server).humaHandleHCARequest, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
-	cityGet(sm, "/hca/requests", (*Server).humaHandleHCARequestList, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
-	cityPost(sm, "/hca/responses", (*Server).humaHandleHCAResponse, errorStatuses(http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable))
+	// External coordination capability.
+	cityGet(sm, "/external-coordination", (*Server).humaHandleExternalCoordinationCapability, errorStatuses(http.StatusNotFound, http.StatusServiceUnavailable))
+	cityPost(sm, "/external-coordination/requests", (*Server).humaHandleExternalCoordinationRequest, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
+	cityGet(sm, "/external-coordination/requests", (*Server).humaHandleExternalCoordinationRequestList, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
+	cityPost(sm, "/external-coordination/responses", (*Server).humaHandleExternalCoordinationResponse, errorStatuses(http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable))
 }
