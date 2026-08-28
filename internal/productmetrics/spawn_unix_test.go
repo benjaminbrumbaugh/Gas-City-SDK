@@ -191,7 +191,7 @@ func TestRecordOnceReservesAndStartsAfterReleasingStateTransaction(t *testing.T)
 			}
 			probe := mustOpenMutableRoot(t, home)
 			defer func() { _ = probe.Close() }()
-			probeContext, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			probeContext, cancel := context.WithTimeout(context.Background(), testutil.GoroutineRaceTimeout)
 			defer cancel()
 			state, err := probe.acquireLock(probeContext, stateLockName)
 			if err != nil {
@@ -206,7 +206,7 @@ func TestRecordOnceReservesAndStartsAfterReleasingStateTransaction(t *testing.T)
 	service := mustOpenTestService(t, deps)
 	permit := service.RecordingPermit(recordableInvocationAt(testRecordHour))
 	defer func() { _ = permit.Close() }()
-	if got := service.RecordOnce(permit, CommandHelp); got != RecordStored || !startCalled {
+	if got := service.recordOnce(permit, CommandHelp, testutil.GoroutineRaceTimeout); got != RecordStored || !startCalled {
 		t.Fatalf("RecordOnce = %v, startCalled=%v", got, startCalled)
 	}
 	select {

@@ -152,6 +152,10 @@ func operatingSystemForRuntime() OperatingSystem {
 // whether it succeeds. It revalidates the exact config record under state.lock,
 // durably reserves root-global quota, and then installs one immutable file.
 func (service *Service) RecordOnce(permit RecordingPermit, commandID CommandID) RecordResult {
+	return service.recordOnce(permit, commandID, defaultRecordDecisionBudget)
+}
+
+func (service *Service) recordOnce(permit RecordingPermit, commandID CommandID, decisionBudget time.Duration) RecordResult {
 	if service == nil || !service.recordAttempt.CompareAndSwap(false, true) {
 		return RecordDropped
 	}
@@ -172,7 +176,7 @@ func (service *Service) RecordOnce(permit RecordingPermit, commandID CommandID) 
 	if !eventWithinRetention(occurred, started) {
 		return RecordDropped
 	}
-	window := recordDecisionWindow{started: started, now: service.deps.now, limit: defaultRecordDecisionBudget}
+	window := recordDecisionWindow{started: started, now: service.deps.now, limit: decisionBudget}
 	eventID, err := service.deps.newUUID()
 	if err != nil || !validCanonicalUUIDv4(eventID) {
 		return RecordDropped
