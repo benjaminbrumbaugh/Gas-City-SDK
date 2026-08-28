@@ -126,8 +126,8 @@ func (s *BdStore) markConditionalWritesUnsupported() {
 // writes. The codes are provisional until #4682 lands; the //go:build integration
 // conformance row against a #4682-capable bd is the authoritative guard.
 const (
-	bdConditionalCodePreconditionFailed = "precondition-failed"
-	bdConditionalCodeUnsupported        = "conditional-write-unsupported"
+	bdConditionalCodePreconditionFailed = "precondition_failed"
+	bdConditionalCodeUnsupported        = "conditional_write_unsupported"
 	bdConditionalCodeNotReady           = "not_ready"
 )
 

@@ -873,7 +873,7 @@ func TestResolveContextFromDirRefusesAmbientWalkUpInTestBinary(t *testing.T) {
 	}
 	t.Chdir(nested)
 
-	ctx, err := resolveContextFromDir()
+	ctx, err := resolveContextFromDir(contextResolutionMode{})
 	if err == nil {
 		t.Fatalf("resolveContextFromDir() = %+v, nil; want an error refusing the ambient walk-up to %q in a test binary", ctx, ambient)
 	}
@@ -902,7 +902,7 @@ func TestIsCityDiscoveryNotFoundRecognizesTestBinaryGuardRefusal(t *testing.T) {
 	}
 	t.Chdir(nested)
 
-	_, err := resolveContextFromDir()
+	_, err := resolveContextFromDir(contextResolutionMode{})
 	if err == nil {
 		t.Fatal("resolveContextFromDir() = nil error; want the test-binary ambient-walk refusal")
 	}

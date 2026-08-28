@@ -327,6 +327,66 @@ func clearStalePoolClaimOwner(store beads.Store, id string) {
 	}
 }
 
+// releaseConfirmedOrphanSessionWork releases the pool-routed work still held by
+// a session the reconciler has confirmed orphaned, so the close guard that
+// refuses to close a seat holding work stops being a permanent block.
+//
+// The caller MUST have confirmed the runtime is observably dead. Every per-bead
+// gate from releaseOrphanedPoolAssignments applies unchanged, including the
+// live re-read in liveWorkAssignmentStillReleasable.
+func releaseConfirmedOrphanSessionWork(
+	cfg *config.City,
+	store beads.Store,
+	rigStores map[string]beads.Store,
+	assignedWorkBeads []beads.Bead,
+	info session.Info,
+) []releasedPoolAssignment {
+	if cfg == nil || store == nil || len(assignedWorkBeads) == 0 {
+		return nil
+	}
+	identifiers := make(map[string]struct{}, 5)
+	for _, id := range sessionAssignmentIdentifiersForConfigInfo(info, cfg) {
+		if id = strings.TrimSpace(id); id != "" {
+			identifiers[id] = struct{}{}
+		}
+	}
+	if len(identifiers) == 0 {
+		return nil
+	}
+
+	var released []releasedPoolAssignment
+	for i, wb := range assignedWorkBeads {
+		if wb.Status != "open" && wb.Status != "in_progress" {
+			continue
+		}
+		assignee := strings.TrimSpace(wb.Assignee)
+		if assignee == "" {
+			continue
+		}
+		if _, ok := identifiers[assignee]; !ok {
+			continue
+		}
+		template := routedToOrLegacyWorkflowTarget(wb)
+		if template == "" {
+			continue
+		}
+		agentCfg := findAgentByTemplate(cfg, template)
+		if agentCfg == nil || !agentCfg.SupportsGenericEphemeralSessions() {
+			continue
+		}
+		ownerStore := storeForPoolAssignment(cfg, store, rigStores, wb)
+		if ownerStore == nil || !liveWorkAssignmentStillReleasable(ownerStore, wb.ID, wb.Status, assignee) {
+			continue
+		}
+		allowsRelease, clearDetached := detachedProbeAllowsOrphanRelease(wb)
+		if !allowsRelease || !releaseOrphanedPoolAssignment(ownerStore, wb, clearDetached) {
+			continue
+		}
+		released = append(released, releasedPoolAssignment{ID: wb.ID, Index: i})
+	}
+	return released
+}
+
 // assignedWorkOwnerStore resolves the store that owns the assigned work bead at
 // index i, or the routed fallback when the snapshot is not store-aware.
 func assignedWorkOwnerStore(cfg *config.City, cityStore beads.Store, rigStores map[string]beads.Store, assignedWorkStores []beads.Store, i int, wb beads.Bead) beads.Store {
