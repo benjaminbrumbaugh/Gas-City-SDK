@@ -370,6 +370,11 @@ func TestStateCache_NoServerRefreshPreservesLastKnownGood(t *testing.T) {
 // fresh city with no tmux server yet would otherwise storm the (absent) server
 // with one list-panes per liveness probe.
 func TestStateCache_UnprimedNoServerPrimesEmptyWithoutRefetch(t *testing.T) {
+	var buf bytes.Buffer
+	oldOutput := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(oldOutput) })
+
 	fe := &fakeExecutor{
 		// Every list-panes reports no server; the cache is never primed good.
 		errs: []error{ErrNoServer, ErrNoServer, ErrNoServer, ErrNoServer},
@@ -387,6 +392,9 @@ func TestStateCache_UnprimedNoServerPrimesEmptyWithoutRefetch(t *testing.T) {
 	_ = cache.IsRunning("agent-2")
 	if calls := len(fe.calls); calls != 1 {
 		t.Fatalf("list-panes calls = %d, want 1: an unprimed no-server must prime empty once, not refetch on every IsRunning", calls)
+	}
+	if got := buf.String(); strings.Contains(got, "tmux state cache: refresh failed") {
+		t.Fatalf("unprimed no-server logged an expected idle state as a refresh failure: %q", got)
 	}
 
 	// The cache is primed: fetchedAt set, and the failure recorded in lastError.

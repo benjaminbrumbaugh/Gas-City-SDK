@@ -832,6 +832,7 @@ export type DecisionPayload = {
     policy_digest: string;
     provider: string;
     reason: string;
+    recommendation_id?: string;
     rig: string;
     schema: number;
     serve_as: string;
@@ -1056,6 +1057,18 @@ export type ExtMsgAdapterRegisterOutputBody = {
      */
     account_id: string;
     /**
+     * Ephemeral bearer credential issued only by this successful registration response; never returned by adapter-list operations.
+     */
+    credential: string;
+    /**
+     * Current callback credential generation; a replacement registration revokes prior generations.
+     */
+    generation: number;
+    /**
+     * Opaque callback registration instance; required with the credential for external coordination responses.
+     */
+    instance: string;
+    /**
      * Adapter name.
      */
     name: string;
@@ -1253,6 +1266,60 @@ export type ExternalAttachment = {
     url: string;
 };
 
+export type ExternalCoordinationCapabilities = {
+    can_create_session: boolean;
+    can_interrupt: boolean;
+    can_receive_events: boolean;
+    can_resume_session: boolean;
+    can_return_results: boolean;
+    can_submit_prompt: boolean;
+};
+
+export type ExternalCoordinationCapability = {
+    adapter: string;
+    available: boolean;
+    capabilities: ExternalCoordinationCapabilities;
+    config_revision: number;
+    delivery: string;
+    instruction: string;
+    interrupt_policy: string;
+    logical_role: string;
+    session_policy: string;
+    target: string;
+    triggers: Array<string> | null;
+};
+
+export type ExternalCoordinationRequestBody = {
+    allowed_tools?: Array<string> | null;
+    city?: string;
+    content_retention?: string;
+    correlation_id: string;
+    delivery_mode?: string;
+    expires_at?: string;
+    idempotency_key?: string;
+    prompt: string;
+    reason: string;
+    repository?: string;
+    result_destination?: string;
+    rig?: string;
+    route_identity?: {
+        [key: string]: string;
+    };
+    session_mode?: string;
+    source_agent: string;
+    target?: Target;
+    work_ref?: string;
+};
+
+export type ExternalCoordinationRequestListOutputBody = {
+    items: Array<RequestRecord> | null;
+    total: number;
+};
+
+export type ExternalCoordinationResponseOutputBody = {
+    status: string;
+};
+
 export type ExternalInboundMessage = {
     actor: ExternalActor;
     attachments?: Array<ExternalAttachment> | null;
@@ -1444,37 +1511,6 @@ export type GroupRouteDecision = {
     UpdateCursor: boolean;
 };
 
-export type HcaRequestBody = {
-    allowed_tools?: Array<string> | null;
-    city?: string;
-    content_retention?: string;
-    correlation_id?: string;
-    delivery_mode?: string;
-    expires_at?: string;
-    idempotency_key?: string;
-    prompt: string;
-    reason: string;
-    repository?: string;
-    result_destination?: string;
-    rig?: string;
-    route_identity?: {
-        [key: string]: string;
-    };
-    session_mode?: string;
-    source_agent: string;
-    target?: Target;
-    work_ref?: string;
-};
-
-export type HcaRequestListOutputBody = {
-    items: Array<RequestRecord> | null;
-    total: number;
-};
-
-export type HcaResponseOutputBody = {
-    status: string;
-};
-
 export type HealthOutputBody = {
     /**
      * City name.
@@ -1499,29 +1535,6 @@ export type HeartbeatEvent = {
      * ISO 8601 timestamp when the heartbeat was sent.
      */
     timestamp: string;
-};
-
-export type HumanCoordinatorCapabilities = {
-    can_create_session: boolean;
-    can_interrupt: boolean;
-    can_receive_events: boolean;
-    can_resume_session: boolean;
-    can_return_results: boolean;
-    can_submit_prompt: boolean;
-};
-
-export type HumanCoordinatorSignifier = {
-    adapter: string;
-    available: boolean;
-    capabilities: HumanCoordinatorCapabilities;
-    config_revision: number;
-    delivery: string;
-    instruction: string;
-    interrupt_policy: string;
-    logical_role: string;
-    session_policy: string;
-    target: string;
-    triggers: Array<string> | null;
 };
 
 export type InboundEventPayload = {
@@ -2287,6 +2300,65 @@ export type OutboundResult = {
     TranscriptEntry: ConversationTranscriptRecord;
 };
 
+export type OutcomePage = {
+    items: Array<OutcomeRecord> | null;
+    next_cursor?: string;
+    partial: boolean;
+    schema_version: 'routing/outcome/v2';
+};
+
+export type OutcomeRecord = {
+    actual_config_digest: string | null;
+    actual_target_id: ((string | null) & (string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null)) | null;
+    admission_receipt_id: ((string | null) & (string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null)) | null;
+    correlation_id: string & string & (string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string) & (string | string | string) & (string | string | string) & (string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string | string | string | string | string | string | string | string);
+    coverage: 'available' | 'partial' | 'unknown';
+    disposition: 'shipped' | 'no_op' | 'blocked' | 'abandoned' | 'not_admitted' | 'unknown';
+    execution_id: ((string | null) & (string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null)) | null;
+    failure_class: 'none' | 'transient' | 'hard' | 'unknown';
+    observed_at_unix: number;
+    outcome_id: string;
+    provenance: 'authoritative_routing_decision' | 'authoritative_routing_decision_exact_work';
+    recommendation_id: string;
+    requested_config_digest: string;
+    requested_target_id: string & string & (string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string) & (string | string | string) & (string | string | string) & (string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string | string | string | string | string | string | string | string);
+    routing_decision_id: ((string | null) & (string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null)) | null;
+    schema_version: 'routing/outcome/v2';
+    session_id: ((string | null) & (string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null) & (string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null | string | null)) | null;
+    status: 'claimed' | 'succeeded' | 'failed';
+    work_id: string & string & (string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string) & (string | string | string) & (string | string | string) & (string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string) & (string | string | string | string | string | string | string | string | string | string | string);
+} & ({
+    actual_config_digest: string;
+    actual_target_id: string;
+    disposition: 'unknown';
+    failure_class: 'unknown';
+    status: 'claimed';
+} | {
+    actual_config_digest: string;
+    actual_target_id: string;
+    admission_receipt_id: string;
+    disposition: 'shipped' | 'no_op';
+    execution_id: string;
+    failure_class: 'none';
+    session_id: string;
+    status: 'succeeded';
+} | {
+    actual_config_digest: string | null;
+    actual_target_id: string | null;
+    admission_receipt_id: string | null;
+    disposition: 'not_admitted';
+    execution_id: string | null;
+    failure_class: 'transient' | 'hard' | 'unknown';
+    session_id: string | null;
+    status: 'failed';
+} | {
+    actual_config_digest: string;
+    actual_target_id: string;
+    disposition: 'blocked' | 'abandoned' | 'unknown';
+    failure_class: 'transient' | 'hard' | 'unknown';
+    status: 'failed';
+});
+
 export type OutputTurn = {
     role: string;
     text: string;
@@ -2738,6 +2810,7 @@ export type Record = {
 
 export type Request = {
     allowed_tools?: Array<string> | null;
+    attempt: number;
     city?: string;
     content_retention: string;
     correlation_id: string;
@@ -2791,7 +2864,9 @@ export type RequestRecord = {
 };
 
 export type Response = {
+    attempt: number;
     content_retention?: string;
+    correlation_id: string;
     follow_up_required: boolean;
     received_at: string;
     request_id: string;
@@ -12404,6 +12479,231 @@ export type StreamEventsResponses = {
 
 export type StreamEventsResponse = StreamEventsResponses[keyof StreamEventsResponses];
 
+export type GetV0CityByCityNameExternalCoordinationData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/external-coordination';
+};
+
+export type GetV0CityByCityNameExternalCoordinationErrors = {
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type GetV0CityByCityNameExternalCoordinationError = GetV0CityByCityNameExternalCoordinationErrors[keyof GetV0CityByCityNameExternalCoordinationErrors];
+
+export type GetV0CityByCityNameExternalCoordinationResponses = {
+    /**
+     * OK
+     */
+    200: ExternalCoordinationCapability;
+};
+
+export type GetV0CityByCityNameExternalCoordinationResponse = GetV0CityByCityNameExternalCoordinationResponses[keyof GetV0CityByCityNameExternalCoordinationResponses];
+
+export type GetV0CityByCityNameExternalCoordinationRequestsData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: {
+        /**
+         * Optional delivery state filter.
+         */
+        state?: string;
+    };
+    url: '/v0/city/{cityName}/external-coordination/requests';
+};
+
+export type GetV0CityByCityNameExternalCoordinationRequestsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type GetV0CityByCityNameExternalCoordinationRequestsError = GetV0CityByCityNameExternalCoordinationRequestsErrors[keyof GetV0CityByCityNameExternalCoordinationRequestsErrors];
+
+export type GetV0CityByCityNameExternalCoordinationRequestsResponses = {
+    /**
+     * OK
+     */
+    200: ExternalCoordinationRequestListOutputBody;
+};
+
+export type GetV0CityByCityNameExternalCoordinationRequestsResponse = GetV0CityByCityNameExternalCoordinationRequestsResponses[keyof GetV0CityByCityNameExternalCoordinationRequestsResponses];
+
+export type PostV0CityByCityNameExternalCoordinationRequestsData = {
+    body: ExternalCoordinationRequestBody;
+    headers: {
+        /**
+         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+         */
+        'X-GC-Request': string;
+        /**
+         * Idempotency key for safe retries.
+         */
+        'Idempotency-Key'?: string;
+    };
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/external-coordination/requests';
+};
+
+export type PostV0CityByCityNameExternalCoordinationRequestsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type PostV0CityByCityNameExternalCoordinationRequestsError = PostV0CityByCityNameExternalCoordinationRequestsErrors[keyof PostV0CityByCityNameExternalCoordinationRequestsErrors];
+
+export type PostV0CityByCityNameExternalCoordinationRequestsResponses = {
+    /**
+     * OK
+     */
+    200: RequestRecord;
+};
+
+export type PostV0CityByCityNameExternalCoordinationRequestsResponse = PostV0CityByCityNameExternalCoordinationRequestsResponses[keyof PostV0CityByCityNameExternalCoordinationRequestsResponses];
+
+export type PostV0CityByCityNameExternalCoordinationResponsesData = {
+    body: Response;
+    headers: {
+        /**
+         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+         */
+        'X-GC-Request': string;
+        /**
+         * Idempotency key for safe retries.
+         */
+        'Idempotency-Key'?: string;
+        /**
+         * Bearer credential issued to the registered external coordination adapter.
+         */
+        Authorization: string;
+        /**
+         * Registered external coordination adapter name.
+         */
+        'X-GC-Coordination-Adapter': string;
+        /**
+         * Current adapter registration generation.
+         */
+        'X-GC-Coordination-Adapter-Generation': number;
+        /**
+         * Current adapter registration instance.
+         */
+        'X-GC-Coordination-Adapter-Instance': string;
+    };
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/external-coordination/responses';
+};
+
+export type PostV0CityByCityNameExternalCoordinationResponsesErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Forbidden
+     */
+    403: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type PostV0CityByCityNameExternalCoordinationResponsesError = PostV0CityByCityNameExternalCoordinationResponsesErrors[keyof PostV0CityByCityNameExternalCoordinationResponsesErrors];
+
+export type PostV0CityByCityNameExternalCoordinationResponsesResponses = {
+    /**
+     * OK
+     */
+    200: ExternalCoordinationResponseOutputBody;
+};
+
+export type PostV0CityByCityNameExternalCoordinationResponsesResponse = PostV0CityByCityNameExternalCoordinationResponsesResponses[keyof PostV0CityByCityNameExternalCoordinationResponsesResponses];
+
 export type DeleteV0CityByCityNameExtmsgAdaptersData = {
     body: ExtMsgAdapterUnregisterInputBody;
     headers: {
@@ -12526,6 +12826,10 @@ export type RegisterExtmsgAdapterData = {
 
 export type RegisterExtmsgAdapterErrors = {
     /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
      * Unauthorized
      */
     401: ErrorModel;
@@ -12537,10 +12841,6 @@ export type RegisterExtmsgAdapterErrors = {
      * Not Found
      */
     404: ErrorModel;
-    /**
-     * Conflict
-     */
-    409: ErrorModel;
     /**
      * Unprocessable Entity
      */
@@ -13831,211 +14131,6 @@ export type PostV0CityByCityNameFormulasByNameValidateResponses = {
 };
 
 export type PostV0CityByCityNameFormulasByNameValidateResponse = PostV0CityByCityNameFormulasByNameValidateResponses[keyof PostV0CityByCityNameFormulasByNameValidateResponses];
-
-export type GetV0CityByCityNameHcaData = {
-    body?: never;
-    path: {
-        /**
-         * City name.
-         */
-        cityName: string;
-    };
-    query?: never;
-    url: '/v0/city/{cityName}/hca';
-};
-
-export type GetV0CityByCityNameHcaErrors = {
-    /**
-     * Not Found
-     */
-    404: ErrorModel;
-    /**
-     * Unprocessable Entity
-     */
-    422: ErrorModel;
-    /**
-     * Internal Server Error
-     */
-    500: ErrorModel;
-    /**
-     * Service Unavailable
-     */
-    503: ErrorModel;
-};
-
-export type GetV0CityByCityNameHcaError = GetV0CityByCityNameHcaErrors[keyof GetV0CityByCityNameHcaErrors];
-
-export type GetV0CityByCityNameHcaResponses = {
-    /**
-     * OK
-     */
-    200: HumanCoordinatorSignifier;
-};
-
-export type GetV0CityByCityNameHcaResponse = GetV0CityByCityNameHcaResponses[keyof GetV0CityByCityNameHcaResponses];
-
-export type GetV0CityByCityNameHcaRequestsData = {
-    body?: never;
-    path: {
-        /**
-         * City name.
-         */
-        cityName: string;
-    };
-    query?: {
-        /**
-         * Optional delivery state filter.
-         */
-        state?: string;
-    };
-    url: '/v0/city/{cityName}/hca/requests';
-};
-
-export type GetV0CityByCityNameHcaRequestsErrors = {
-    /**
-     * Bad Request
-     */
-    400: ErrorModel;
-    /**
-     * Not Found
-     */
-    404: ErrorModel;
-    /**
-     * Unprocessable Entity
-     */
-    422: ErrorModel;
-    /**
-     * Internal Server Error
-     */
-    500: ErrorModel;
-    /**
-     * Service Unavailable
-     */
-    503: ErrorModel;
-};
-
-export type GetV0CityByCityNameHcaRequestsError = GetV0CityByCityNameHcaRequestsErrors[keyof GetV0CityByCityNameHcaRequestsErrors];
-
-export type GetV0CityByCityNameHcaRequestsResponses = {
-    /**
-     * OK
-     */
-    200: HcaRequestListOutputBody;
-};
-
-export type GetV0CityByCityNameHcaRequestsResponse = GetV0CityByCityNameHcaRequestsResponses[keyof GetV0CityByCityNameHcaRequestsResponses];
-
-export type PostV0CityByCityNameHcaRequestsData = {
-    body: HcaRequestBody;
-    headers: {
-        /**
-         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
-         */
-        'X-GC-Request': string;
-        /**
-         * Idempotency key for safe retries.
-         */
-        'Idempotency-Key'?: string;
-    };
-    path: {
-        /**
-         * City name.
-         */
-        cityName: string;
-    };
-    query?: never;
-    url: '/v0/city/{cityName}/hca/requests';
-};
-
-export type PostV0CityByCityNameHcaRequestsErrors = {
-    /**
-     * Bad Request
-     */
-    400: ErrorModel;
-    /**
-     * Not Found
-     */
-    404: ErrorModel;
-    /**
-     * Unprocessable Entity
-     */
-    422: ErrorModel;
-    /**
-     * Internal Server Error
-     */
-    500: ErrorModel;
-    /**
-     * Service Unavailable
-     */
-    503: ErrorModel;
-};
-
-export type PostV0CityByCityNameHcaRequestsError = PostV0CityByCityNameHcaRequestsErrors[keyof PostV0CityByCityNameHcaRequestsErrors];
-
-export type PostV0CityByCityNameHcaRequestsResponses = {
-    /**
-     * OK
-     */
-    200: RequestRecord;
-};
-
-export type PostV0CityByCityNameHcaRequestsResponse = PostV0CityByCityNameHcaRequestsResponses[keyof PostV0CityByCityNameHcaRequestsResponses];
-
-export type PostV0CityByCityNameHcaResponsesData = {
-    body: Response;
-    headers: {
-        /**
-         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
-         */
-        'X-GC-Request': string;
-        /**
-         * Idempotency key for safe retries.
-         */
-        'Idempotency-Key'?: string;
-    };
-    path: {
-        /**
-         * City name.
-         */
-        cityName: string;
-    };
-    query?: never;
-    url: '/v0/city/{cityName}/hca/responses';
-};
-
-export type PostV0CityByCityNameHcaResponsesErrors = {
-    /**
-     * Bad Request
-     */
-    400: ErrorModel;
-    /**
-     * Not Found
-     */
-    404: ErrorModel;
-    /**
-     * Unprocessable Entity
-     */
-    422: ErrorModel;
-    /**
-     * Internal Server Error
-     */
-    500: ErrorModel;
-    /**
-     * Service Unavailable
-     */
-    503: ErrorModel;
-};
-
-export type PostV0CityByCityNameHcaResponsesError = PostV0CityByCityNameHcaResponsesErrors[keyof PostV0CityByCityNameHcaResponsesErrors];
-
-export type PostV0CityByCityNameHcaResponsesResponses = {
-    /**
-     * OK
-     */
-    200: HcaResponseOutputBody;
-};
-
-export type PostV0CityByCityNameHcaResponsesResponse = PostV0CityByCityNameHcaResponsesResponses[keyof PostV0CityByCityNameHcaResponsesResponses];
 
 export type GetV0CityByCityNameHealthData = {
     body?: never;
@@ -17147,6 +17242,61 @@ export type GetRoutingEligibleResponses = {
 };
 
 export type GetRoutingEligibleResponse = GetRoutingEligibleResponses[keyof GetRoutingEligibleResponses];
+
+export type ListRoutingOutcomesData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: {
+        /**
+         * Maximum claimed or terminal outcome records to return.
+         */
+        limit?: number;
+        /**
+         * Opaque stable decision-ID keyset cursor.
+         */
+        cursor?: string;
+    };
+    url: '/v0/city/{cityName}/routing/outcomes';
+};
+
+export type ListRoutingOutcomesErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type ListRoutingOutcomesError = ListRoutingOutcomesErrors[keyof ListRoutingOutcomesErrors];
+
+export type ListRoutingOutcomesResponses = {
+    /**
+     * OK
+     */
+    200: OutcomePage;
+};
+
+export type ListRoutingOutcomesResponse = ListRoutingOutcomesResponses[keyof ListRoutingOutcomesResponses];
 
 export type GetRoutingStatusData = {
     body?: never;

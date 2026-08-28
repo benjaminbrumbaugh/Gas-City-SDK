@@ -350,8 +350,11 @@ func TestInjectedImmutableCommandCatalogRoundTripsWithoutExpandingProduction(t *
 
 	generatedCount := 0
 	generatedCommandIDCatalog(func(commandIDEntry) { generatedCount++ })
-	if generatedCount != 203 {
-		t.Fatalf("generated production catalog has %d entries, want 203", generatedCount)
+	// The routing outcome projection plus the three external coordination
+	// commands are part of the production contract; injected catalogs must not
+	// expand it further.
+	if generatedCount != 212 {
+		t.Fatalf("generated production catalog has %d entries, want 212", generatedCount)
 	}
 
 	injected := func(yield func(commandIDEntry)) {

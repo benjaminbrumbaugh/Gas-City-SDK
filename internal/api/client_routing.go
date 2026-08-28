@@ -16,6 +16,12 @@ type RoutingDecisionListRequest struct {
 	Cursor string
 }
 
+// RoutingOutcomeListRequest controls one bounded decision-ID outcome page.
+type RoutingOutcomeListRequest struct {
+	Limit  int
+	Cursor string
+}
+
 func convertRoutingWire[To any, From any](from From) (To, error) {
 	var to To
 	encoded, err := json.Marshal(from)
@@ -130,6 +136,35 @@ func (c *Client) RoutingDecisions(request RoutingDecisionListRequest) (routingde
 		next = *response.JSON200.NextCursor
 	}
 	return routingdecision.DecisionPage{Items: items, Total: int(response.JSON200.Total), NextCursor: next}, nil
+}
+
+// RoutingOutcomes reads one strict redacted routing/outcome/v2 page.
+func (c *Client) RoutingOutcomes(request RoutingOutcomeListRequest) (routingdecision.OutcomePage, error) {
+	if err := c.requireCityScope(); err != nil {
+		return routingdecision.OutcomePage{}, err
+	}
+	params := &genclient.ListRoutingOutcomesParams{}
+	if request.Limit != 0 {
+		limit := int64(request.Limit)
+		params.Limit = &limit
+	}
+	if request.Cursor != "" {
+		params.Cursor = &request.Cursor
+	}
+	response, err := c.cw.ListRoutingOutcomesWithResponse(context.Background(), c.cityName, params)
+	if err != nil {
+		return routingdecision.OutcomePage{}, &connError{err: fmt.Errorf("request failed: %w", err)}
+	}
+	if response == nil {
+		return routingdecision.OutcomePage{}, &connError{err: fmt.Errorf("nil response")}
+	}
+	if err := apiErrorFromResponse(response.StatusCode(), pdOf(response)); err != nil {
+		return routingdecision.OutcomePage{}, err
+	}
+	if response.JSON200 == nil {
+		return routingdecision.OutcomePage{}, fmt.Errorf("API returned %d with no body", response.StatusCode())
+	}
+	return convertRoutingWire[routingdecision.OutcomePage](*response.JSON200)
 }
 
 // RoutingIngest sends one exact typed signed envelope and idempotency key.

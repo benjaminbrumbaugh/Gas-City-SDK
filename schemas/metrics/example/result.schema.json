@@ -220,7 +220,13 @@
               "routing-targets",
               "hca-list",
               "hca-request",
-              "hca-show"
+              "hca-show",
+              "session-close-stale",
+              "session-clear-city-stop",
+              "routing-outcomes",
+              "coordination-list",
+              "coordination-request",
+              "coordination-show"
             ]
           },
           "event_id": {

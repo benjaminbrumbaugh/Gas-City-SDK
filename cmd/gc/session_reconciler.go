@@ -647,7 +647,7 @@ func finalizeDrainAckStoppedSession(
 	}
 	batch := sessionpkg.AcknowledgeDrainPatch(info.WakeMode == "fresh")
 	if hasAssignedWork {
-		batch = sessionpkg.CompleteDrainPatch(clk.Now().UTC(), string(sessionpkg.SleepReasonIdle), info.WakeMode == "fresh")
+		batch = sessionpkg.CompleteDrainPatch(clk.Now().UTC(), string(sessionpkg.SleepReasonIdle), info.WakeMode == "fresh", info.SleepIntent)
 	}
 	// A drain-ack that completes a restart-request cycle (gc session reset →
 	// agent drain-ack) must also consume restart_requested. The drain-ack

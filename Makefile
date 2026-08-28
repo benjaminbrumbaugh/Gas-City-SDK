@@ -21,7 +21,7 @@ INSTALL_DIR ?= $(HOME)/.local/bin
 # — a polecat worktree under the city directory picks up the city's commit and
 # the city's dirtiness (ga-u7fb) — so `build` below passes -buildvcs=false and
 # these variables are the single source of truth.
-VERSION    := $(shell tag=$$(git describe --tags --exact-match 2>/dev/null || true); if [ -n "$$tag" ]; then printf '%s' "$$tag" | sed 's/^v//'; else echo "dev"; fi)
+VERSION    := $(shell scripts/version-from-git.sh .)
 COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 DIRTY      := $(shell test -n "$$(git status --porcelain 2>/dev/null)" && echo "-dirty" || true)
 BUILD_TIME := $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)

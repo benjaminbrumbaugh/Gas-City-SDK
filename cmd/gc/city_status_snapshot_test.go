@@ -121,6 +121,43 @@ func TestCityStatusJSONMarksRuntimeProbePartialAsDegraded(t *testing.T) {
 	}
 }
 
+func TestCityStatusJSONTreatsZeroDemandQuiescenceAsHealthy(t *testing.T) {
+	summary := StatusSummaryJSON{TotalAgents: 3, RunningAgents: 0, ActiveSessions: 0}
+	status := cityStatusJSONFromSnapshot(cityStatusSnapshot{
+		CityName:   "city",
+		Controller: ControllerJSON{Running: true},
+		Summary:    summary,
+	}, summary)
+
+	if status.Health.Degraded {
+		t.Fatalf("Health = %#v, want a healthy quiescent city with no active sessions", status.Health)
+	}
+	for _, signal := range status.Health.Signals {
+		if signal == "no_agents_running" {
+			t.Fatalf("Health.Signals = %v, want no no_agents_running signal without active session state", status.Health.Signals)
+		}
+	}
+}
+
+func TestCityStatusJSONWarnsWhenActiveSessionsHaveNoRuntime(t *testing.T) {
+	summary := StatusSummaryJSON{TotalAgents: 3, RunningAgents: 0, ActiveSessions: 1}
+	status := cityStatusJSONFromSnapshot(cityStatusSnapshot{
+		CityName:   "city",
+		Controller: ControllerJSON{Running: true},
+		Summary:    summary,
+	}, summary)
+
+	if !status.Health.Degraded {
+		t.Fatalf("Health = %#v, want degraded when active session state has no running agent", status.Health)
+	}
+	for _, signal := range status.Health.Signals {
+		if signal == "no_agents_running" {
+			return
+		}
+	}
+	t.Fatalf("Health.Signals = %v, want no_agents_running", status.Health.Signals)
+}
+
 func TestCityStatusObservationTargetUsesConfiguredNamedIdentity(t *testing.T) {
 	snapshot := newSessionBeadSnapshot([]beads.Bead{{
 		ID:     "gc-named",

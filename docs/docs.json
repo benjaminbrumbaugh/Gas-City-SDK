@@ -193,7 +193,7 @@
               "guides/using-json-from-gc",
               "guides/connected-clients",
               "guides/multi-agent-engineering-environment",
-              "guides/human-coordinator"
+              "guides/external-coordination"
             ]
           }
         ]

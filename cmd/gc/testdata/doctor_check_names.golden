@@ -61,6 +61,7 @@ bd-split-store
 beads-store
 v2-routed-to-namespace
 census-owner-liveness
+session-hold-stall
 run-target-routed-to-backfill
 route-recovery-quarantine
 hold-label-routed-to

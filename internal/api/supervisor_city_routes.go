@@ -65,6 +65,12 @@ func (sm *SupervisorMux) registerCityRoutes() {
 		Errors:      []int{http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable},
 	}, (*Server).humaHandleRoutingDecisionList)
 	cityRegister(sm, huma.Operation{
+		OperationID: "list-routing-outcomes", Method: http.MethodGet, Path: "/routing/outcomes",
+		Summary:     "List authoritative recommendation outcomes",
+		Description: "Returns a bounded strict-redacted routing/outcome/v2 projection of claimed and terminal decisions in decision_id order. The handler performs no lifecycle or mutation operation.",
+		Errors:      []int{http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable},
+	}, (*Server).humaHandleRoutingOutcomeList)
+	cityRegister(sm, huma.Operation{
 		OperationID: "ingest-routing-decision", Method: http.MethodPost, Path: "/routing/decisions",
 		Summary: "Ingest one signed routing decision", DefaultStatus: http.StatusCreated,
 		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity, http.StatusServiceUnavailable},
@@ -503,14 +509,13 @@ func (sm *SupervisorMux) registerCityRoutes() {
 		Path:          "/extmsg/adapters",
 		Summary:       "Register an external messaging adapter",
 		DefaultStatus: http.StatusCreated,
-		// 409: a concurrent repeat of the same Idempotency-Key (idempotency-in-flight).
-		Errors: []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable},
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable},
 	}, (*Server).humaHandleExtMsgAdapterRegister)
 	cityDelete(sm, "/extmsg/adapters", (*Server).humaHandleExtMsgAdapterUnregister, errorStatuses(http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable))
 
-	// Human Coordinator Agent affordance.
-	cityGet(sm, "/hca", (*Server).humaHandleHCAAffordance, errorStatuses(http.StatusNotFound, http.StatusServiceUnavailable))
-	cityPost(sm, "/hca/requests", (*Server).humaHandleHCARequest, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
-	cityGet(sm, "/hca/requests", (*Server).humaHandleHCARequestList, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
-	cityPost(sm, "/hca/responses", (*Server).humaHandleHCAResponse, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
+	// External coordination capability.
+	cityGet(sm, "/external-coordination", (*Server).humaHandleExternalCoordinationCapability, errorStatuses(http.StatusNotFound, http.StatusServiceUnavailable))
+	cityPost(sm, "/external-coordination/requests", (*Server).humaHandleExternalCoordinationRequest, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
+	cityGet(sm, "/external-coordination/requests", (*Server).humaHandleExternalCoordinationRequestList, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
+	cityPost(sm, "/external-coordination/responses", (*Server).humaHandleExternalCoordinationResponse, errorStatuses(http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable))
 }

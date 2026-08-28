@@ -47,6 +47,16 @@ func (s *NativeDoltStore) CloseWithMetadataIfMatch(id string, expectedRevision i
 					Raw:      "native row-version mismatch",
 				}
 			}
+			if issue.Status != beadslib.StatusOpen {
+				return ErrNotClosableForConditionalClose
+			}
+			blocked, _, err := tx.IsBlocked(ctx, id)
+			if err != nil {
+				return nativeStoreError(id, err)
+			}
+			if blocked {
+				return ErrNotClosableForConditionalClose
+			}
 			merged, err := metadataMapFromNative(issue.Metadata)
 			if err != nil {
 				return fmt.Errorf("parsing metadata for bead %q: %w", id, err)

@@ -111,13 +111,14 @@ func TestJSONResultSchemasRequireSuccessDiscriminator(t *testing.T) {
 		}
 		if path == "schemas/metrics/example/result.schema.json" ||
 			path == "schemas/pack/registry/requests/result.schema.json" ||
-			path == "schemas/hca/request/result.schema.json" ||
-			path == "schemas/hca/list/result.schema.json" ||
-			path == "schemas/hca/show/result.schema.json" ||
+			path == "schemas/coordination/request/result.schema.json" ||
+			path == "schemas/coordination/list/result.schema.json" ||
+			path == "schemas/coordination/show/result.schema.json" ||
 			path == "schemas/ready/result.schema.json" {
 			// metrics example --json is deliberately the byte-exact product-
 			// metrics network fixture. Registry requests is the versioned
-			// HCA request/show/list are deliberately the API's raw payloads,
+			// product-metrics request envelope. External coordination request,
+			// show, and list are deliberately the API's raw payloads,
 			// rather than the generic CLI result envelope. gc ready is the
 			// in-process drop-in for `bd ready --json`, so its payload is bd's
 			// bare row array — the shape the hook work-query path already decodes

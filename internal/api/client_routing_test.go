@@ -11,6 +11,8 @@ import (
 	"github.com/gastownhall/gascity/internal/routingdecision"
 )
 
+func routingStringPointer(value string) *string { return &value }
+
 func TestRoutingClientUsesGeneratedRoutesAndFinalGrantBinding(t *testing.T) {
 	var binding GrantBinding
 	transport := rtFunc(func(r *http.Request) (*http.Response, error) {
@@ -27,6 +29,16 @@ func TestRoutingClientUsesGeneratedRoutesAndFinalGrantBinding(t *testing.T) {
 					Record: routingdecision.Record{Payload: routingdecision.DecisionPayload{DecisionID: "decision-1"}},
 				}},
 				Total: 1,
+			}
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/city/acme/routing/outcomes":
+			if r.URL.Query().Get("limit") != "10" || r.URL.Query().Get("cursor") != "after" {
+				t.Fatalf("outcome query = %q", r.URL.RawQuery)
+			}
+			status = http.StatusOK
+			value = routingdecision.OutcomePage{
+				SchemaVersion: routingdecision.OutcomeSchemaVersion,
+				Items:         []routingdecision.OutcomeRecord{{SchemaVersion: routingdecision.OutcomeSchemaVersion, RecommendationID: "routing/v2:" + strings.Repeat("c", 64), RoutingDecisionID: routingStringPointer("decision-1")}},
+				NextCursor:    "next", Partial: true,
 			}
 		case r.Method == http.MethodPost && r.URL.Path == "/v0/city/acme/routing/decisions":
 			if r.Header.Get("Idempotency-Key") != "idem-1" || r.Header.Get("X-GC-City-Write") != "grant-token" {
@@ -56,10 +68,12 @@ func TestRoutingClientUsesGeneratedRoutesAndFinalGrantBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.SetGrantSource(func(got GrantBinding) (string, error) {
+	if err := client.SetGrantSource(func(got GrantBinding) (string, error) {
 		binding = got
 		return "grant-token", nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	status, err := client.RoutingStatus()
 	if err != nil || status.Status != routingdecision.AvailabilityReady {
 		t.Fatalf("RoutingStatus = (%+v, %v)", status, err)
@@ -67,6 +81,10 @@ func TestRoutingClientUsesGeneratedRoutesAndFinalGrantBinding(t *testing.T) {
 	page, err := client.RoutingDecisions(RoutingDecisionListRequest{Limit: 10})
 	if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].Record.Payload.DecisionID != "decision-1" {
 		t.Fatalf("RoutingDecisions = (%+v, %v)", page, err)
+	}
+	outcomes, err := client.RoutingOutcomes(RoutingOutcomeListRequest{Limit: 10, Cursor: "after"})
+	if err != nil || outcomes.SchemaVersion != routingdecision.OutcomeSchemaVersion || len(outcomes.Items) != 1 || outcomes.Items[0].RecommendationID != "routing/v2:"+strings.Repeat("c", 64) || outcomes.NextCursor != "next" || !outcomes.Partial {
+		t.Fatalf("RoutingOutcomes = (%+v, %v)", outcomes, err)
 	}
 	request := routingdecision.IngestApprovedRequest{
 		Payload:          routingdecision.DecisionPayload{DecisionID: "decision-1", CreatedAt: time.Now()},

@@ -66,6 +66,10 @@ func newApprovedRoutingDecisionFixture(t *testing.T, decisionID string) routingD
 }
 
 func newApprovedRoutingDecisionFixtureWithOptions(t *testing.T, decisionID string, options routingdecision.StoreOptions) routingDecisionFixture {
+	return newApprovedRoutingDecisionFixtureForRecommendation(t, decisionID, "", options)
+}
+
+func newApprovedRoutingDecisionFixtureForRecommendation(t *testing.T, decisionID, recommendationID string, options routingdecision.StoreOptions) routingDecisionFixture {
 	t.Helper()
 	const (
 		city   = "test-city"
@@ -99,7 +103,7 @@ func newApprovedRoutingDecisionFixtureWithOptions(t *testing.T, decisionID strin
 		t.Fatal("target did not resolve")
 	}
 	payload := routingdecision.DecisionPayload{
-		Schema: routingdecision.SchemaVersion, DecisionID: decisionID, WorkBeadID: workID,
+		Schema: routingdecision.SchemaVersion, DecisionID: decisionID, RecommendationID: recommendationID, WorkBeadID: workID,
 		WorkRevision: seed.Revision, ClaimFence: seed.ClaimFence,
 		WorkStateDigest: routingdecision.WorkStateDigest(routingdecision.WorkStateFrom(seed.ID, seed.Status, seed.Assignee, seed.Metadata, seed.ClaimFence)),
 		City:            city, Rig: rig, Target: target, TargetConfigDigest: targetDigest,

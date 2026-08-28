@@ -3,7 +3,7 @@
 # textual diffing and the whitespace lint (`git diff --check`) on the minified
 # assets, and collapse it in review UIs. Drift is still caught by the content-based
 # `git diff --quiet -- internal/api/dashboardspa/dist` gate in the Makefile.
-internal/api/dashboardspa/dist/** -diff linguist-generated
+internal/api/dashboardspa/dist/** -diff -whitespace linguist-generated
 
 # The typed Go API client under internal/api/genclient/client_gen.go is emitted by
 # oapi-codegen (its header says "DO NOT EDIT") from the OpenAPI spec. Treat it as

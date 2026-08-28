@@ -22,6 +22,24 @@ func newStatusProbeProvider() *statusProbeProvider {
 	return p
 }
 
+func TestStatusProviderDefaultBudgetAllowsOrdinaryLocalProbe(t *testing.T) {
+	origWarn := statusProviderTimeoutWarning
+	t.Cleanup(func() { statusProviderTimeoutWarning = origWarn })
+	statusProviderTimeoutWarning = func() {}
+
+	base := newStatusProbeProvider()
+	base.running.Store(true)
+	base.delay.Store(int64(100 * time.Millisecond))
+	wrapped := newBoundedStatusProvider(base)
+
+	if !wrapped.IsRunning("worker") {
+		t.Fatal("IsRunning returned false for a 100ms local probe, want the ordinary provider result")
+	}
+	if statusProviderPartial(wrapped) {
+		t.Fatal("statusProviderPartial = true for a 100ms local probe, want complete status")
+	}
+}
+
 func (p *statusProbeProvider) IsRunning(string) bool {
 	time.Sleep(time.Duration(p.delay.Load()))
 	return p.running.Load()

@@ -305,9 +305,9 @@ type City struct {
 	// ExtMsg configures the external-messaging fabric (default routes
 	// for inbound conversations with no binding).
 	ExtMsg ExtMsgConfig `toml:"extmsg,omitempty"`
-	// HumanCoordinator configures the provider-neutral external coordinator
-	// affordance. The selected adapter is supplied by the runtime.
-	HumanCoordinator *HumanCoordinatorConfig `toml:"human_coordinator,omitempty"`
+	// ExternalCoordination configures the provider-neutral external coordinator
+	// capability. The selected adapter is supplied by the runtime.
+	ExternalCoordination *ExternalCoordinationConfig `toml:"external_coordination,omitempty"`
 	// AgentDefaults provides root city defaults for agents that don't override
 	// them (canonical TOML key: agent_defaults). Pack-local defaults use the
 	// same table shape in pack.toml. The runtime currently applies provider,

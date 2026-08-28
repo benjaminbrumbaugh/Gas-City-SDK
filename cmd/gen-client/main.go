@@ -7,12 +7,10 @@
 //     automatically; oapi-codegen v2.6.0 consumes it cleanly where it
 //     chokes on 3.1. The supervisor owns every operation, so one fetch
 //     yields the entire API surface — no merge step.
-//  2. Pipe the spec unchanged to oapi-codegen. There is NO preprocessing.
-//     The routes we register ARE the routes we expose. Every schema and
-//     path in the generated client matches what the server publishes to
-//     external consumers — no hidden rename, no hidden path rewrite.
-//     skip-prune keeps documentation-only compatibility components
-//     available to in-tree callers that still deserialize those shapes.
+//  2. Restore generator-only x-go-type extensions from the canonical 3.1
+//     document, because Huma's 3.0 downgrade drops schema extensions. No
+//     routes or wire schemas are rewritten: the extension only binds a
+//     generated model to its validated in-tree Go contract.
 //  3. Write the generated client to internal/api/genclient/client_gen.go.
 //
 // Usage:
@@ -25,6 +23,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -52,13 +51,24 @@ func run() error {
 		return fmt.Errorf("GET /openapi-3.0.json returned %d: %s", rec.Code, rec.Body.String())
 	}
 
-	// Step 2: write the spec verbatim to a temp file for oapi-codegen.
+	canonicalReq := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
+	canonicalRec := httptest.NewRecorder()
+	sm.ServeHTTP(canonicalRec, canonicalReq)
+	if canonicalRec.Code != http.StatusOK {
+		return fmt.Errorf("GET /openapi.json returned %d: %s", canonicalRec.Code, canonicalRec.Body.String())
+	}
+	spec, err := restoreGoTypeExtensions(rec.Body.Bytes(), canonicalRec.Body.Bytes())
+	if err != nil {
+		return fmt.Errorf("restore Go type extensions: %w", err)
+	}
+
+	// Step 2: write the generator-compatible spec to a temp file for oapi-codegen.
 	tmp, err := os.CreateTemp("", "gc-openapi-3.0-*.json")
 	if err != nil {
 		return fmt.Errorf("tempfile: %w", err)
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.Write(rec.Body.Bytes()); err != nil {
+	if _, err := tmp.Write(spec); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("write temp spec: %w", err)
 	}
@@ -75,6 +85,58 @@ func run() error {
 		return fmt.Errorf("oapi-codegen: %w", err)
 	}
 	return nil
+}
+
+func restoreGoTypeExtensions(downgraded, canonical []byte) ([]byte, error) {
+	var target, source map[string]any
+	if err := json.Unmarshal(downgraded, &target); err != nil {
+		return nil, fmt.Errorf("decode OpenAPI 3.0 document: %w", err)
+	}
+	if err := json.Unmarshal(canonical, &source); err != nil {
+		return nil, fmt.Errorf("decode canonical OpenAPI document: %w", err)
+	}
+	targetSchemas, err := componentSchemas(target)
+	if err != nil {
+		return nil, fmt.Errorf("OpenAPI 3.0: %w", err)
+	}
+	sourceSchemas, err := componentSchemas(source)
+	if err != nil {
+		return nil, fmt.Errorf("canonical OpenAPI: %w", err)
+	}
+	for name, sourceValue := range sourceSchemas {
+		sourceSchema, ok := sourceValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		targetSchema, ok := targetSchemas[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := sourceSchema["x-go-type"]; ok {
+			// oapi-codegen resolves allOf before x-go-type. The canonical Go type
+			// owns validation, so remove the downgraded composition and let the
+			// generator bind the component directly to that type.
+			delete(targetSchema, "allOf")
+		}
+		for _, extension := range []string{"x-go-type", "x-go-type-import"} {
+			if value, ok := sourceSchema[extension]; ok {
+				targetSchema[extension] = value
+			}
+		}
+	}
+	return json.Marshal(target)
+}
+
+func componentSchemas(document map[string]any) (map[string]any, error) {
+	components, ok := document["components"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("components object missing")
+	}
+	schemas, ok := components["schemas"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("components.schemas object missing")
+	}
+	return schemas, nil
 }
 
 // emptyResolver implements api.CityResolver with no cities. Schema

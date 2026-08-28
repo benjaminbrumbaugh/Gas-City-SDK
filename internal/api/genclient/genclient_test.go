@@ -6,10 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/api/genclient"
+	"github.com/gastownhall/gascity/internal/routingdecision"
 )
 
 // TestGeneratedClientInSync regenerates client_gen.go from the live spec
@@ -54,6 +56,32 @@ func TestGeneratedClientInSync(t *testing.T) {
 	if !bytes.Equal(committed, out.Bytes()) {
 		t.Errorf("generated client differs from committed file at %s", committedPath)
 		t.Errorf("regenerate via `go generate ./internal/api/genclient` and commit the result")
+	}
+}
+
+func TestOutcomeProvenanceRuntimeEnumsMatchGeneratedClient(t *testing.T) {
+	if routingdecision.OutcomeProvenanceExactWork != "authoritative_routing_decision_exact_work" {
+		t.Fatalf("exact-work provenance = %q, want safe-string-compatible canonical value", routingdecision.OutcomeProvenanceExactWork)
+	}
+	for name, runtimeValue := range map[string]string{
+		"decision":   routingdecision.OutcomeProvenanceDecision,
+		"exact work": routingdecision.OutcomeProvenanceExactWork,
+	} {
+		t.Run(name, func(t *testing.T) {
+			generated := genclient.OutcomeRecord{Provenance: runtimeValue}
+			if generated.Provenance != runtimeValue {
+				t.Fatalf("generated provenance = %q, want runtime value %q", generated.Provenance, runtimeValue)
+			}
+		})
+	}
+}
+
+func TestGeneratedOutcomeRecordUsesValidatedRuntimeContract(t *testing.T) {
+	if got, want := reflect.TypeOf(genclient.OutcomeRecord{}), reflect.TypeOf(routingdecision.OutcomeRecord{}); got != want {
+		t.Fatalf("generated OutcomeRecord type = %v, want validated runtime type %v", got, want)
+	}
+	if _, ok := any(genclient.OutcomeRecord{}).(interface{ Validate() error }); !ok {
+		t.Fatal("generated OutcomeRecord does not expose routing/outcome/v2 validation")
 	}
 }
 

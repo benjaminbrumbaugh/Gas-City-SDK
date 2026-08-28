@@ -23,7 +23,7 @@ func TestRoutingCLICommandGroupIsPublicAndComplete(t *testing.T) {
 	if err != nil || group == nil || group.Hidden {
 		t.Fatalf("routing group = (%v, %v), want visible command", group, err)
 	}
-	want := map[string]bool{"status": false, "targets": false, "eligible": false, "decisions": false, "ingest": false}
+	want := map[string]bool{"status": false, "targets": false, "eligible": false, "decisions": false, "outcomes": false, "ingest": false}
 	for _, child := range group.Commands() {
 		if _, ok := want[child.Name()]; ok {
 			want[child.Name()] = !child.Hidden
@@ -86,6 +86,11 @@ func TestRoutingCLIReadCommandsAreLiveAPIOnly(t *testing.T) {
 				Items []routingdecision.DecisionWithAudits `json:"items"`
 				Total int                                  `json:"total"`
 			}{Items: []routingdecision.DecisionWithAudits{}}), nil
+		case "/v0/city/acme/routing/outcomes":
+			if r.URL.Query().Get("limit") != "7" || r.URL.Query().Get("cursor") != "next" {
+				t.Fatalf("outcome query = %q", r.URL.RawQuery)
+			}
+			return routingCLIResponse(t, http.StatusOK, routingdecision.OutcomePage{SchemaVersion: routingdecision.OutcomeSchemaVersion, Items: []routingdecision.OutcomeRecord{}, Partial: false}), nil
 		default:
 			return routingCLIResponse(t, http.StatusNotFound, struct{}{}), nil
 		}
@@ -100,6 +105,7 @@ func TestRoutingCLIReadCommandsAreLiveAPIOnly(t *testing.T) {
 		{args: []string{"targets", "--json"}, wantKeys: []string{"items"}},
 		{args: []string{"eligible", "--json"}, wantKeys: []string{"observed_at"}},
 		{args: []string{"decisions", "--state", "claimed", "--limit", "7", "--cursor", "next", "--json"}, wantKeys: []string{"items", "total"}},
+		{args: []string{"outcomes", "--limit", "7", "--cursor", "next", "--json"}, wantKeys: []string{"schema_version", "items", "partial"}},
 	}
 	for _, test := range tests {
 		stdout, stderr, err := executeRoutingCommand(t, test.args...)

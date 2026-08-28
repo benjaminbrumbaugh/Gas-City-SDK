@@ -1,10 +1,12 @@
 package dolt_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +30,15 @@ func runDogScriptCommand(t *testing.T, scriptName, binDir, cityPath, dataDir str
 		"GC_BACKUP_DATABASES",
 		"GC_BACKUP_OFFSITE_PATH",
 		"GC_BACKUP_ARTIFACT_DIR",
+		"GC_DOLT_BACKUP_PRUNE_GRACE_PERIOD",
+		"GC_BACKUP_PRUNE_ALERT_STATE_FILE",
+		"GC_BACKUP_SIZE_WARN_BYTES",
+		"GC_BACKUP_SIZE_HIGH_BYTES",
+		"GC_BACKUP_SIZE_RECOVERY_BYTES",
+		"GC_BACKUP_SIZE_ALERT_RECIPIENT",
+		"GC_BACKUP_SIZE_ALERT_STATE_FILE",
+		"GC_TEST_BACKUP_URL",
+		"GC_TEST_BACKUP_SYNC_WARNING",
 		"GC_PHANTOM_DATA_DIR",
 		"GC_ESCALATE_SCRIPT",
 		"GC_ESCALATE_SEARCH_PACKS",
@@ -4634,9 +4645,11 @@ case "$*" in
     exit 0
     ;;
 esac
-if [ "${1:-}" = "backup" ] && [ "$#" -eq 1 ]; then
+if [ "${1:-} ${2:-}" = "backup -v" ]; then
   db="$(basename "$PWD")"
-  printf '%%s-backup file:///backups/%%s\n' "$db" "$db"
+  artifact_dir="${GC_BACKUP_ARTIFACT_DIR:-$GC_CITY_PATH/.dolt-backup}"
+  backup_url="${GC_TEST_BACKUP_URL:-file://$artifact_dir/$db}"
+  printf '%%s-backup %%s {}\n' "$db" "$backup_url"
   exit 0
 fi
 if [ "${1:-}" = "remote" ]; then
@@ -4644,6 +4657,9 @@ if [ "${1:-}" = "remote" ]; then
   exit 64
 fi
 if [ "${1:-} ${2:-}" = "backup sync" ]; then
+  if [ -n "${GC_TEST_BACKUP_SYNC_WARNING:-}" ]; then
+    printf '%%s\n' "$GC_TEST_BACKUP_SYNC_WARNING" >&2
+  fi
   exit %d
 fi
 exit 0
@@ -4658,12 +4674,13 @@ func writeBackupAlertFakeDolt(t *testing.T, binDir string) string {
 set -euo pipefail
 printf 'dolt %%s\n' "$*" >> %s
 if [ "${1:-}" = "version" ]; then
-  printf 'dolt version 2.1.0\n'
+  printf 'dolt version 2.3.1\n'
   exit 0
 fi
-if [ "${1:-}" = "backup" ] && [ "$#" -eq 1 ]; then
+if [ "${1:-} ${2:-}" = "backup -v" ]; then
   db="$(basename "$PWD")"
-  printf '%%s-backup file:///backups/%%s\n' "$db" "$db"
+  artifact_dir="${GC_BACKUP_ARTIFACT_DIR:-$GC_CITY_PATH/.dolt-backup}"
+  printf '%%s-backup file://%%s/%%s {}\n' "$db" "$artifact_dir" "$db"
   exit 0
 fi
 if [ "${1:-} ${2:-}" = "backup add" ]; then
@@ -4747,6 +4764,143 @@ func TestBackupScriptSkipsOldDoltBeforeSync(t *testing.T) {
 	}
 }
 
+func TestBackupScriptRequiresPruneCapableDolt(t *testing.T) {
+	cityPath := t.TempDir()
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	if err := os.MkdirAll(filepath.Join(dataDir, "prod", ".dolt"), 0o755); err != nil {
+		t.Fatalf("mkdir db: %v", err)
+	}
+	binDir := t.TempDir()
+	_ = writeDogFakeGC(t, binDir)
+	doltLogPath := writeBackupFakeDolt(t, binDir, "2.3.0", 0)
+
+	out, err := runDogScriptCommand(t, "mol-dog-backup.sh", binDir, cityPath, dataDir, "GC_BACKUP_DATABASES=prod")
+	if err == nil {
+		t.Fatalf("pre-prune Dolt succeeded; want failure\n%s", out)
+	}
+	if !strings.Contains(out, "dolt-too-old") || !strings.Contains(out, "required: 2.3.1") {
+		t.Fatalf("output missing prune-capable Dolt requirement:\n%s", out)
+	}
+	doltLog, err := os.ReadFile(doltLogPath)
+	if err != nil {
+		t.Fatalf("read dolt log: %v", err)
+	}
+	if strings.Contains(string(doltLog), "backup sync") {
+		t.Fatalf("pre-prune Dolt must not reach backup sync:\n%s", doltLog)
+	}
+}
+
+func TestBackupScriptPrunesUnreferencedArtifactsBeforeSync(t *testing.T) {
+	cityPath := filepath.Join(t.TempDir(), "Gas City")
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	if err := os.MkdirAll(filepath.Join(dataDir, "prod", ".dolt"), 0o755); err != nil {
+		t.Fatalf("mkdir db: %v", err)
+	}
+	binDir := t.TempDir()
+	_ = writeDogFakeGC(t, binDir)
+	doltLogPath := writeBackupFakeDolt(t, binDir, "2.3.1", 0)
+
+	runDogScript(t, "mol-dog-backup.sh", binDir, cityPath, dataDir,
+		"GC_BACKUP_DATABASES=prod",
+		"GC_DOLT_BACKUP_PRUNE_GRACE_PERIOD=45m",
+	)
+	doltLog, err := os.ReadFile(doltLogPath)
+	if err != nil {
+		t.Fatalf("read dolt log: %v", err)
+	}
+	want := "backup sync --prune-with-grace-period 45m prod-backup"
+	if !strings.Contains(string(doltLog), want) {
+		t.Fatalf("backup sync missing manifest-aware prune %q:\n%s", want, doltLog)
+	}
+}
+
+func TestBackupScriptRejectsExistingBackupOutsideManagedArtifactPath(t *testing.T) {
+	cityPath := t.TempDir()
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	if err := os.MkdirAll(filepath.Join(dataDir, "prod", ".dolt"), 0o755); err != nil {
+		t.Fatalf("mkdir db: %v", err)
+	}
+	binDir := t.TempDir()
+	gcLogPath := writeDogFakeGC(t, binDir)
+	doltLogPath := writeBackupFakeDolt(t, binDir, "2.3.1", 0)
+
+	out := runDogScript(t, "mol-dog-backup.sh", binDir, cityPath, dataDir,
+		"GC_BACKUP_DATABASES=prod",
+		"GC_TEST_BACKUP_URL=https://example.invalid/unmanaged",
+	)
+	if !strings.Contains(out, "synced: 0/1") {
+		t.Fatalf("unmanaged backup remote should not sync:\n%s", out)
+	}
+	doltLog, err := os.ReadFile(doltLogPath)
+	if err != nil {
+		t.Fatalf("read dolt log: %v", err)
+	}
+	if strings.Contains(string(doltLog), "backup sync") {
+		t.Fatalf("unmanaged backup remote must not reach sync:\n%s", doltLog)
+	}
+	gcLog, err := os.ReadFile(gcLogPath)
+	if err != nil {
+		t.Fatalf("read gc log: %v", err)
+	}
+	if !strings.Contains(string(gcLog), "backup destination mismatch") {
+		t.Fatalf("unmanaged backup remote must be reported:\n%s", gcLog)
+	}
+}
+
+func TestBackupScriptRejectsSymlinkedBackupPathsIntoLiveData(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		linkDBOnly bool
+	}{
+		{name: "artifact root alias"},
+		{name: "database destination alias", linkDBOnly: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cityPath := t.TempDir()
+			dataDir := filepath.Join(cityPath, "dolt-data")
+			artifactDir := filepath.Join(cityPath, ".dolt-backup")
+			if err := os.MkdirAll(filepath.Join(dataDir, "prod", ".dolt"), 0o755); err != nil {
+				t.Fatalf("mkdir db: %v", err)
+			}
+			if test.linkDBOnly {
+				if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+					t.Fatalf("mkdir artifact root: %v", err)
+				}
+				if err := os.Symlink(filepath.Join(dataDir, "prod"), filepath.Join(artifactDir, "prod")); err != nil {
+					t.Fatalf("symlink database destination: %v", err)
+				}
+			} else if err := os.Symlink(dataDir, artifactDir); err != nil {
+				t.Fatalf("symlink artifact root: %v", err)
+			}
+
+			binDir := t.TempDir()
+			gcLogPath := writeDogFakeGC(t, binDir)
+			doltLogPath := writeBackupFakeDolt(t, binDir, "2.3.1", 0)
+			out := runDogScript(t, "mol-dog-backup.sh", binDir, cityPath, dataDir,
+				"GC_BACKUP_DATABASES=prod",
+				"GC_BACKUP_ARTIFACT_DIR="+artifactDir,
+			)
+			if !strings.Contains(out, "synced: 0/1") {
+				t.Fatalf("unsafe backup alias should not sync:\n%s", out)
+			}
+			doltLog, err := os.ReadFile(doltLogPath)
+			if err != nil {
+				t.Fatalf("read dolt log: %v", err)
+			}
+			if strings.Contains(string(doltLog), "backup sync") {
+				t.Fatalf("unsafe backup alias must not reach sync:\n%s", doltLog)
+			}
+			gcLog, err := os.ReadFile(gcLogPath)
+			if err != nil {
+				t.Fatalf("read gc log: %v", err)
+			}
+			if !strings.Contains(string(gcLog), "unsafe backup artifact path") {
+				t.Fatalf("unsafe backup alias must be reported:\n%s", gcLog)
+			}
+		})
+	}
+}
+
 func TestBackupScriptAlertStateEdges(t *testing.T) {
 	cityPath := t.TempDir()
 	dataDir := filepath.Join(cityPath, "dolt-data")
@@ -4800,6 +4954,134 @@ func TestBackupScriptAlertStateEdges(t *testing.T) {
 	}
 }
 
+func TestBackupScriptSizeAlertStateEdgesGoToMayor(t *testing.T) {
+	cityPath := t.TempDir()
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	artifactDir := filepath.Join(cityPath, ".dolt-backup")
+	if err := os.MkdirAll(filepath.Join(dataDir, "prod", ".dolt"), 0o755); err != nil {
+		t.Fatalf("mkdir db: %v", err)
+	}
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	binDir := t.TempDir()
+	gcLogPath := writeDogFakeGC(t, binDir)
+	writeBackupFakeDolt(t, binDir, "2.3.1", 0)
+	writeExecutable(t, filepath.Join(binDir, "du"), `#!/bin/sh
+printf '%s	%s\n' "${GC_TEST_DU_KIB:-0}" "${3:-${2:-${1:-}}}"
+`)
+
+	run := func(sizeKiB, syncOutput string) {
+		t.Helper()
+		_, err := runDogScriptCommand(t, "mol-dog-backup.sh", binDir, cityPath, dataDir,
+			"GC_BACKUP_DATABASES=prod",
+			"GC_BACKUP_ARTIFACT_DIR="+artifactDir,
+			"GC_BACKUP_SIZE_WARN_BYTES=10240",
+			"GC_BACKUP_SIZE_HIGH_BYTES=20480",
+			"GC_BACKUP_SIZE_RECOVERY_BYTES=8192",
+			"GC_TEST_DU_KIB="+sizeKiB,
+			"GC_TEST_BACKUP_SYNC_WARNING="+syncOutput,
+		)
+		if err != nil {
+			t.Fatalf("backup run failed at %s KiB: %v", sizeKiB, err)
+		}
+	}
+	readLog := func() string {
+		t.Helper()
+		data, err := os.ReadFile(gcLogPath)
+		if err != nil {
+			t.Fatalf("read gc log: %v", err)
+		}
+		return string(data)
+	}
+
+	skipOutput := "Pruning file:///managed: deleted 0 file(s), reclaimed 0 bytes; skipped manifest lock is held"
+	run("15", skipOutput)
+	if got := strings.Count(readLog(), "mail send mayor -s Dolt backup size warning [MEDIUM]"); got != 1 {
+		t.Fatalf("first size warning mails = %d, want 1\n%s", got, readLog())
+	}
+	if !strings.Contains(readLog(), "request queued outside help through HCA") {
+		t.Fatalf("size warning must tell Mayor how to escalate for help:\n%s", readLog())
+	}
+	for _, want := range []string{
+		"Latest sync: 1/1 succeeded; failed=0",
+		"Prune result: completed=0, safely-skipped=1, failed=0, grace=1h",
+	} {
+		if !strings.Contains(readLog(), want) {
+			t.Fatalf("size warning missing operational context %q:\n%s", want, readLog())
+		}
+	}
+	run("15", skipOutput)
+	if got := strings.Count(readLog(), "Dolt backup size warning [MEDIUM]"); got != 1 {
+		t.Fatalf("repeated size warning mails = %d, want 1", got)
+	}
+	run("25", "")
+	if got := strings.Count(readLog(), "mail send mayor -s Dolt backup size high [HIGH]"); got != 1 {
+		t.Fatalf("high size mails = %d, want 1\n%s", got, readLog())
+	}
+	run("7", "")
+	if got := strings.Count(readLog(), "mail send mayor -s RECOVERY: Dolt backup size below warning threshold [MEDIUM]"); got != 1 {
+		t.Fatalf("size recovery mails = %d, want 1\n%s", got, readLog())
+	}
+	stateFile := filepath.Join(cityPath, ".gc", "runtime", "packs", "dolt", "backup-size-alert-state.json")
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Fatalf("backup size alert state should reset after recovery; stat err=%v", err)
+	}
+}
+
+func TestBackupScriptPruneFailureAlertsMayorAndRecovers(t *testing.T) {
+	cityPath := t.TempDir()
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	if err := os.MkdirAll(filepath.Join(dataDir, "prod", ".dolt"), 0o755); err != nil {
+		t.Fatalf("mkdir db: %v", err)
+	}
+	binDir := t.TempDir()
+	gcLogPath := writeDogFakeGC(t, binDir)
+	writeBackupFakeDolt(t, binDir, "2.3.1", 0)
+
+	run := func(warning, backupURL string) string {
+		t.Helper()
+		return runDogScript(t, "mol-dog-backup.sh", binDir, cityPath, dataDir,
+			"GC_BACKUP_DATABASES=prod",
+			"GC_TEST_BACKUP_SYNC_WARNING="+warning,
+			"GC_TEST_BACKUP_URL="+backupURL,
+		)
+	}
+	readLog := func() string {
+		t.Helper()
+		data, err := os.ReadFile(gcLogPath)
+		if err != nil {
+			t.Fatalf("read gc log: %v", err)
+		}
+		return string(data)
+	}
+
+	warning := "dolt_backup: pruning file:///managed failed, continuing with sync: permission denied"
+	if out := run(warning, ""); !strings.Contains(out, "synced: 1/1") {
+		t.Fatalf("prune warning must not erase successful backup coverage:\n%s", out)
+	}
+	if got := strings.Count(readLog(), "mail send mayor -s Dolt backup pruning failed [HIGH]"); got != 1 {
+		t.Fatalf("first prune failure mails = %d, want 1\n%s", got, readLog())
+	}
+	run(warning, "")
+	if got := strings.Count(readLog(), "Dolt backup pruning failed [HIGH]"); got != 1 {
+		t.Fatalf("repeated prune failure mails = %d, want 1", got)
+	}
+	stateFile := filepath.Join(cityPath, ".gc", "runtime", "packs", "dolt", "backup-prune-alert-state.json")
+	run("", "https://example.invalid/unverified")
+	if got := strings.Count(readLog(), "RECOVERY: Dolt backup pruning recovered"); got != 0 {
+		t.Fatalf("unverified destination must not recover prune alert; mails=%d\n%s", got, readLog())
+	}
+	if _, err := os.Stat(stateFile); err != nil {
+		t.Fatalf("unverified destination must preserve prune alert state: %v", err)
+	}
+
+	run("", "")
+	if got := strings.Count(readLog(), "mail send mayor -s RECOVERY: Dolt backup pruning recovered [MEDIUM]"); got != 1 {
+		t.Fatalf("prune recovery mails = %d, want 1\n%s", got, readLog())
+	}
+}
+
 func TestBackupOrderTimeoutCoversScriptBudget(t *testing.T) {
 	root := repoRoot(t)
 	data, err := os.ReadFile(filepath.Join(root, "orders", "mol-dog-backup.toml"))
@@ -4834,7 +5116,7 @@ func TestBackupScriptDiscoversNamedBackupsAndSyncsArtifactsOffsite(t *testing.T)
 	}
 	binDir := t.TempDir()
 	_ = writeDogFakeGC(t, binDir)
-	doltLogPath := writeBackupFakeDolt(t, binDir, "2.1.0", 0, "prod")
+	doltLogPath := writeBackupFakeDolt(t, binDir, "2.3.1", 0, "prod")
 	rsyncLogPath := writeBackupFakeRsync(t, binDir)
 
 	out := runDogScript(t, "mol-dog-backup.sh", binDir, cityPath, dataDir, "GC_BACKUP_OFFSITE_PATH="+offsiteDir)
@@ -4845,7 +5127,7 @@ func TestBackupScriptDiscoversNamedBackupsAndSyncsArtifactsOffsite(t *testing.T)
 	if err != nil {
 		t.Fatalf("read dolt log: %v", err)
 	}
-	for _, want := range []string{"SHOW DATABASES", "backup", "backup sync prod-backup"} {
+	for _, want := range []string{"SHOW DATABASES", "backup", "backup sync --prune-with-grace-period 1h prod-backup"} {
 		if !strings.Contains(string(doltLog), want) {
 			t.Fatalf("dolt log missing %q:\n%s", want, doltLog)
 		}
@@ -4885,7 +5167,7 @@ func TestBackupScriptSkipsConcurrentRunBeforeBackupSync(t *testing.T) {
 set -euo pipefail
 printf 'dolt %%s\n' "$*" >> %s
 if [ "${1:-}" = "version" ]; then
-  printf 'dolt version 2.1.0\n'
+  printf 'dolt version 2.3.1\n'
   exit 0
 fi
 case "$*" in
@@ -4894,9 +5176,10 @@ case "$*" in
     exit 0
     ;;
 esac
-if [ "${1:-}" = "backup" ] && [ "$#" -eq 1 ]; then
+if [ "${1:-} ${2:-}" = "backup -v" ]; then
   db="$(basename "$PWD")"
-  printf '%%s-backup file:///backups/%%s\n' "$db" "$db"
+  artifact_dir="${GC_BACKUP_ARTIFACT_DIR:-$GC_CITY_PATH/.dolt-backup}"
+  printf '%%s-backup file://%%s/%%s {}\n' "$db" "$artifact_dir" "$db"
   exit 0
 fi
 if [ "${1:-} ${2:-}" = "backup sync" ]; then
@@ -4968,7 +5251,7 @@ exit 0
 	if err != nil {
 		t.Fatalf("read dolt log: %v", err)
 	}
-	if got := strings.Count(string(doltLog), "backup sync prod-backup"); got != 1 {
+	if got := strings.Count(string(doltLog), "backup sync --prune-with-grace-period 1h prod-backup"); got != 1 {
 		t.Fatalf("backup sync count = %d, want 1 while concurrent run skipped:\n%s", got, doltLog)
 	}
 }
@@ -4984,7 +5267,7 @@ func TestBackupScriptIgnoresDocumentedSystemSchemasForAutoDiscoveryWithBSDGrep(t
 	binDir := t.TempDir()
 	_ = writeDogFakeGC(t, binDir)
 	writeBSDLikeGrep(t, binDir)
-	doltLogPath := writeBackupFakeDolt(t, binDir, "2.1.0", 0, "prod", "performance_schema", "sys")
+	doltLogPath := writeBackupFakeDolt(t, binDir, "2.3.1", 0, "prod", "performance_schema", "sys")
 
 	out := runDogScript(t, "mol-dog-backup.sh", binDir, cityPath, dataDir)
 	if !strings.Contains(out, "synced: 1/1") {
@@ -5009,7 +5292,7 @@ func TestBackupScriptCountsFailedDatabasesByDatabase(t *testing.T) {
 	}
 	binDir := t.TempDir()
 	gcLogPath := writeDogFakeGC(t, binDir)
-	_ = writeBackupFakeDolt(t, binDir, "2.1.0", 1)
+	_ = writeBackupFakeDolt(t, binDir, "2.3.1", 1)
 
 	out := runDogScript(t, "mol-dog-backup.sh", binDir, cityPath, dataDir, "GC_BACKUP_DATABASES=prod")
 	if !strings.Contains(out, "synced: 0/1") {
@@ -5037,7 +5320,7 @@ func writeAutoConfigureFakeDolt(t *testing.T, binDir string, addExit int) string
 set -euo pipefail
 printf 'dolt %%s\n' "$*" >> %s
 if [ "${1:-}" = "version" ]; then
-  printf 'dolt version 2.1.0\n'
+  printf 'dolt version 2.3.1\n'
   exit 0
 fi
 case "$*" in
@@ -5046,9 +5329,10 @@ case "$*" in
     exit 0
     ;;
 esac
-if [ "${1:-}" = "backup" ] && [ "$#" -eq 1 ]; then
+if [ "${1:-} ${2:-}" = "backup -v" ]; then
   if [ "$(basename "$PWD")" = "prod" ]; then
-    printf 'prod-backup file:///backups/prod\n'
+    artifact_dir="${GC_BACKUP_ARTIFACT_DIR:-$GC_CITY_PATH/.dolt-backup}"
+    printf 'prod-backup file://%%s/prod {}\n' "$artifact_dir"
   fi
   exit 0
 fi
@@ -5098,7 +5382,10 @@ func TestBackupScriptAutoConfiguresMissingBackupRemotes(t *testing.T) {
 	if strings.Contains(string(doltLog), "backup add prod-backup") {
 		t.Fatalf("prod already has a remote; backup add must not run for it:\n%s", doltLog)
 	}
-	for _, want := range []string{"backup sync prod-backup", "backup sync archive-backup"} {
+	for _, want := range []string{
+		"backup sync --prune-with-grace-period 1h prod-backup",
+		"backup sync --prune-with-grace-period 1h archive-backup",
+	} {
 		if !strings.Contains(string(doltLog), want) {
 			t.Fatalf("dolt log missing %q:\n%s", want, doltLog)
 		}
@@ -5131,7 +5418,7 @@ func TestBackupScriptCountsFailedRemoteAutoConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read dolt log: %v", err)
 	}
-	if strings.Contains(string(doltLog), "backup sync archive-backup") {
+	if strings.Contains(string(doltLog), "backup sync --prune-with-grace-period 1h archive-backup") {
 		t.Fatalf("sync must not run for a DB whose remote could not be configured:\n%s", doltLog)
 	}
 	gcLog, err := os.ReadFile(gcLogPath)
@@ -5143,6 +5430,177 @@ func TestBackupScriptCountsFailedRemoteAutoConfiguration(t *testing.T) {
 	}
 	if !strings.Contains(string(gcLog), "archive(backup add failed)") {
 		t.Fatalf("failure mail should name the failed auto-configuration, log:\n%s", gcLog)
+	}
+}
+
+// reaperBackupGateEpoch replays reaper.sh step 6's freshness parse against a
+// state file and returns the epoch seconds it derives, failing the test if that
+// parse cannot read the file.
+//
+// The gate does not decode JSON. It greps last_sync off a single line with sed,
+// truncates any fractional part, and feeds the result to a
+// %Y-%m-%dT%H:%M:%SZ strptime. A stamp that Go round-trips but that sed and
+// date cannot read is still a latched gate, so the format contract is asserted
+// through the consumer's own parser rather than restated in Go.
+func reaperBackupGateEpoch(t *testing.T, stateFile string) string {
+	t.Helper()
+	const gate = `
+set -u
+_BACKUP_TS=$(sed -n "s/.*\"last_sync\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1)
+[ -n "$_BACKUP_TS" ] || { echo "gate found no last_sync" >&2; exit 1; }
+case "$_BACKUP_TS" in *.*) _BACKUP_TS="${_BACKUP_TS%%.*}Z" ;; esac
+date -u -d "$_BACKUP_TS" '+%s' 2>/dev/null \
+	|| date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$_BACKUP_TS" '+%s' 2>/dev/null \
+	|| { echo "gate could not parse timestamp $_BACKUP_TS" >&2; exit 1; }
+`
+	out, err := exec.Command("bash", "-c", gate, "reaper-gate", stateFile).CombinedOutput()
+	if err != nil {
+		t.Fatalf("reaper gate rejected %s: %v\n%s", stateFile, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestBackupScriptStampsDoltBackupStateAfterCleanSync is the regression for a
+// permanently latched reaper bulk-prune gate (gc-3x5).
+//
+// reaper.sh judges a scope that has a registered Dolt destination on
+// .beads/dolt-backup-state.json, but the only writer of that file was
+// `bd backup sync` — which is inoperative when backup.enabled=false, the
+// documented default for shared-server mode. This script was the mechanism
+// actually keeping backups current and never touched the file, so the freshness
+// signal froze at whatever `bd` last wrote while real backups stayed healthy.
+// The gate therefore never reopened and closed session beads accumulated
+// forever, with no backup action available to clear it.
+func TestBackupScriptStampsDoltBackupStateAfterCleanSync(t *testing.T) {
+	cityPath := t.TempDir()
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	beadsDir := filepath.Join(cityPath, ".beads")
+	for _, path := range []string{filepath.Join(dataDir, "prod", ".dolt"), beadsDir} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	// The registered destination is what makes the gate read
+	// dolt-backup-state.json instead of the legacy embedded-store file.
+	if err := os.WriteFile(filepath.Join(beadsDir, "dolt-backup.json"),
+		[]byte(`{"backup_url":"file:///backups","backup_name":"default","created_at":"2026-08-17T02:15:02Z"}`),
+		0o600); err != nil {
+		t.Fatalf("write dolt-backup.json: %v", err)
+	}
+	binDir := t.TempDir()
+	_ = writeDogFakeGC(t, binDir)
+	_ = writeBackupFakeDolt(t, binDir, "2.3.1", 0, "prod")
+
+	started := time.Now().UTC()
+	out := runDogScript(t, "mol-dog-backup.sh", binDir, cityPath, dataDir)
+	if !strings.Contains(out, "synced: 1/1") || !strings.Contains(out, "state: ok") {
+		t.Fatalf("a clean sync should stamp the backup state:\n%s", out)
+	}
+
+	statePath := filepath.Join(beadsDir, "dolt-backup-state.json")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("clean sync must stamp %s: %v", statePath, err)
+	}
+	// Mirrors beads' doltBackupState: last_sync into a time.Time (so the value
+	// has to be RFC3339), duration as a free-form string. `bd backup status`
+	// and gc doctor's bd-backup-freshness both decode it this way.
+	var state struct {
+		LastSync time.Time `json:"last_sync"`
+		Duration string    `json:"duration"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("stamp must satisfy beads doltBackupState: %v\n%s", err, data)
+	}
+	if state.Duration == "" {
+		t.Fatalf("stamp should record the sync duration:\n%s", data)
+	}
+	// A wide window on purpose: this asserts the stamp is of THIS run rather
+	// than a copied-forward value, and must not race process startup the way
+	// doctorBackupStaleEnv documents.
+	if state.LastSync.Before(started.Add(-time.Minute)) || state.LastSync.After(time.Now().UTC().Add(time.Minute)) {
+		t.Fatalf("last_sync %s is not this run (started %s):\n%s", state.LastSync, started, data)
+	}
+
+	epoch := reaperBackupGateEpoch(t, statePath)
+	secs, err := strconv.ParseInt(epoch, 10, 64)
+	if err != nil {
+		t.Fatalf("reaper gate produced a non-numeric epoch %q: %v", epoch, err)
+	}
+	// 86400s is the gate's own default GC_REAPER_BACKUP_MAX_AGE.
+	if age := time.Since(time.Unix(secs, 0)); age > 24*time.Hour {
+		t.Fatalf("reaper gate would still skip bulk prune: backup age %s", age)
+	}
+	info, err := os.Stat(statePath)
+	if err != nil {
+		t.Fatalf("stat stamp: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("stamp should stay owner-only like bd's atomic write, got %o", perm)
+	}
+}
+
+// TestBackupScriptLeavesDoltBackupStateStaleWhenADatabaseFails guards the
+// reason the gate exists. Bulk deletion is withheld while backup coverage is
+// incomplete, so a partial sync must NOT refresh the freshness signal —
+// stamping on partial success would defeat exactly the protection the gate
+// provides.
+func TestBackupScriptLeavesDoltBackupStateStaleWhenADatabaseFails(t *testing.T) {
+	cityPath := t.TempDir()
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	beadsDir := filepath.Join(cityPath, ".beads")
+	for _, path := range []string{
+		filepath.Join(dataDir, "prod", ".dolt"),
+		filepath.Join(dataDir, "archive", ".dolt"),
+		beadsDir,
+	} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	statePath := filepath.Join(beadsDir, "dolt-backup-state.json")
+	stale := "{\n  \"last_sync\": \"2026-08-17T02:15:02.444816Z\",\n  \"duration\": \"340.104542ms\"\n}\n"
+	if err := os.WriteFile(statePath, []byte(stale), 0o600); err != nil {
+		t.Fatalf("write stale state: %v", err)
+	}
+	binDir := t.TempDir()
+	_ = writeDogFakeGC(t, binDir)
+	// archive's backup remote cannot be configured, so it never syncs.
+	_ = writeAutoConfigureFakeDolt(t, binDir, 1)
+
+	out := runDogScript(t, "mol-dog-backup.sh", binDir, cityPath, dataDir)
+	if !strings.Contains(out, "synced: 1/2") || !strings.Contains(out, "state: skipped") {
+		t.Fatalf("a partial sync must not stamp the backup state:\n%s", out)
+	}
+	got, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if string(got) != stale {
+		t.Fatalf("partial sync rewrote the freshness signal:\nwant %q\ngot  %q", stale, got)
+	}
+}
+
+// TestBackupScriptDoesNotCreateBeadsWorkspaceForStamp keeps the stamp from
+// fabricating a workspace. Creating .beads here would make
+// beads.FindBeadsDir() resolve a directory no one initialized, so a city
+// without one is reported rather than invented.
+func TestBackupScriptDoesNotCreateBeadsWorkspaceForStamp(t *testing.T) {
+	cityPath := t.TempDir()
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	if err := os.MkdirAll(filepath.Join(dataDir, "prod", ".dolt"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	binDir := t.TempDir()
+	_ = writeDogFakeGC(t, binDir)
+	_ = writeBackupFakeDolt(t, binDir, "2.3.1", 0, "prod")
+
+	out := runDogScript(t, "mol-dog-backup.sh", binDir, cityPath, dataDir)
+	if !strings.Contains(out, "synced: 1/1") || !strings.Contains(out, "state: no-workspace") {
+		t.Fatalf("a city without .beads should report no-workspace:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(cityPath, ".beads")); !os.IsNotExist(err) {
+		t.Fatalf("backup must not fabricate a beads workspace (stat err: %v)", err)
 	}
 }
 

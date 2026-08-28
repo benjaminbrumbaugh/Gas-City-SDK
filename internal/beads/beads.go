@@ -267,6 +267,10 @@ type AtomicConditionalCloser interface {
 	CloseWithMetadataIfMatch(id string, expectedRevision int64, metadata map[string]string) (Bead, error)
 }
 
+// ErrNotClosableForConditionalClose reports that the revision still matched but
+// the issue was not open or a live dependency made it ineligible to close.
+var ErrNotClosableForConditionalClose = errors.New("conditional close: issue is not closable")
+
 // AtomicConditionalCloserHandleProvider lets a wrapper expose the atomic
 // terminal-write capability of its resolved backing.
 type AtomicConditionalCloserHandleProvider interface {

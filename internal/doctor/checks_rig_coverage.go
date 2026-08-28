@@ -71,12 +71,11 @@ func (c *RigPackCoverageCheck) Run(_ *CheckContext) *CheckResult {
 			packName = filepath.Base(packDir)
 		}
 
+		// Coverage is a relation over active rigs. An HQ-only city (or one
+		// whose project rigs are all intentionally suspended) has no target
+		// to leave uncovered. Pack parsing above still reports malformed or
+		// unreadable metadata; only the vacuous coverage case is quiet.
 		if len(activeRigs) == 0 {
-			for _, s := range sessions {
-				issues = append(issues, fmt.Sprintf(
-					"pack %q declares rig-scoped named_session %q (mode=always) but no non-suspended rigs exist",
-					packName, s.template))
-			}
 			continue
 		}
 

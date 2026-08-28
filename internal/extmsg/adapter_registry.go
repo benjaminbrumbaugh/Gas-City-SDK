@@ -1,6 +1,13 @@
 package extmsg
 
-import "sync"
+import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"strings"
+	"sync"
+
+	"github.com/google/uuid"
+)
 
 // AdapterKey uniquely identifies a registered transport adapter.
 type AdapterKey struct {
@@ -8,34 +15,63 @@ type AdapterKey struct {
 	AccountID string
 }
 
+// AdapterRegistration is the ephemeral callback identity issued for one
+// adapter registration. Credential is returned only at registration time and
+// is stored as a hash by AdapterRegistry.
+type AdapterRegistration struct {
+	Credential string
+	Generation uint64
+	Instance   string
+}
+
+type adapterRegistration struct {
+	adapter        TransportAdapter
+	credentialHash [sha256.Size]byte
+	generation     uint64
+	instance       string
+}
+
 // AdapterRegistry is a concurrent-safe, ephemeral registry of transport
 // adapters keyed by (Provider, AccountID). Created once per controller
 // lifetime and not rebuilt on config hot-reload.
 //
 // Registrations are in-memory only and do not survive controller restarts.
-// Out-of-process adapters must re-register on reconnect. Unregister does
-// not drain in-flight operations; callers that hold adapter references may
-// see connection errors if the external service is torn down immediately.
+// Replacing a registration revokes its prior credential, generation, and
+// instance identity atomically.
 type AdapterRegistry struct {
 	mu       sync.RWMutex
-	adapters map[AdapterKey]TransportAdapter
+	adapters map[AdapterKey]adapterRegistration
 }
 
 // NewAdapterRegistry creates an empty adapter registry.
 func NewAdapterRegistry() *AdapterRegistry {
 	return &AdapterRegistry{
-		adapters: make(map[AdapterKey]TransportAdapter),
+		adapters: make(map[AdapterKey]adapterRegistration),
 	}
 }
 
-// Register adds or replaces an adapter for the given key.
-func (r *AdapterRegistry) Register(key AdapterKey, adapter TransportAdapter) {
+// Register adds or replaces an adapter for the given key and returns a new
+// ephemeral callback credential bound to this exact registration.
+func (r *AdapterRegistry) Register(key AdapterKey, adapter TransportAdapter) AdapterRegistration {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.adapters[key] = adapter
+	previous := r.adapters[key]
+	credential := uuid.NewString()
+	registration := adapterRegistration{
+		adapter:        adapter,
+		credentialHash: sha256.Sum256([]byte(credential)),
+		generation:     previous.generation + 1,
+		instance:       uuid.NewString(),
+	}
+	r.adapters[key] = registration
+	return AdapterRegistration{
+		Credential: credential,
+		Generation: registration.generation,
+		Instance:   registration.instance,
+	}
 }
 
-// Unregister removes an adapter by key.
+// Unregister removes an adapter by key and revokes its callback credential.
 func (r *AdapterRegistry) Unregister(key AdapterKey) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -46,7 +82,26 @@ func (r *AdapterRegistry) Unregister(key AdapterKey) {
 func (r *AdapterRegistry) Lookup(key AdapterKey) TransportAdapter {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.adapters[key]
+	return r.adapters[key].adapter
+}
+
+// Authenticate verifies that a callback was made by the current registration
+// for key. It rejects stale generations/instances and malformed credentials.
+func (r *AdapterRegistry) Authenticate(key AdapterKey, adapterName string, generation uint64, instance, authorization string) (TransportAdapter, bool) {
+	credential, ok := strings.CutPrefix(strings.TrimSpace(authorization), "Bearer ")
+	if !ok || strings.TrimSpace(credential) == "" {
+		return nil, false
+	}
+	candidate := sha256.Sum256([]byte(credential))
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	registration, ok := r.adapters[key]
+	if !ok || registration.adapter == nil || registration.adapter.Name() != strings.TrimSpace(adapterName) ||
+		registration.generation != generation || registration.instance != strings.TrimSpace(instance) ||
+		subtle.ConstantTimeCompare(candidate[:], registration.credentialHash[:]) != 1 {
+		return nil, false
+	}
+	return registration.adapter, true
 }
 
 // LookupByConversation finds the adapter for a ConversationRef by deriving

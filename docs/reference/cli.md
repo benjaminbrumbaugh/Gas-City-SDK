@@ -38,6 +38,7 @@ gc [flags]
 | [gc context](#gc-context) | Manage named remote cities (~/.gc/contexts.toml) |
 | [gc converge](#gc-converge) | Manage convergence loops (bounded iterative refinement) |
 | [gc convoy](#gc-convoy) | Manage convoys — graphs of related work |
+| [gc coordination](#gc-coordination) | Use the external coordination capability |
 | [gc costs](#gc-costs) | Show usage entities and estimated cost for this city |
 | [gc dashboard](#gc-dashboard) | Open the web dashboard in your browser |
 | [gc doctor](#gc-doctor) | Check workspace health |
@@ -49,7 +50,6 @@ gc [flags]
 | [gc github](#gc-github) | GitHub integration commands |
 | [gc graph](#gc-graph) | Show dependency graph for beads |
 | [gc handoff](#gc-handoff) | Send handoff mail and restart controller-managed sessions |
-| [gc hca](#gc-hca) | Use the Human Coordinator Agent affordance |
 | [gc help](#gc-help) | Help about any command |
 | [gc hook](#gc-hook) | Find routed work for an agent |
 | [gc import](#gc-import) | Manage pack imports |
@@ -1296,6 +1296,67 @@ gc convoy target <convoy-id> <branch> [flags]
 |------|------|---------|-------------|
 | `--json` | bool |  | emit JSONL result |
 
+## gc coordination
+
+Discover and enqueue causally linked requests through the configured external coordination adapter.
+
+```
+gc coordination
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| [gc coordination list](#gc-coordination-list) | List durable external coordination requests |
+| [gc coordination request](#gc-coordination-request) | Queue an external coordination request |
+| [gc coordination show](#gc-coordination-show) | Show the configured external coordination capability |
+
+## gc coordination list
+
+List durable external coordination requests
+
+```
+gc coordination list [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | bool |  | Output JSON |
+| `--state` | string |  | Filter by delivery state |
+
+## gc coordination request
+
+Queue an external coordination request
+
+```
+gc coordination request [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--allowed-tool` | stringSlice |  | Tool explicitly allowed for external coordination (repeatable) |
+| `--content-retention` | string | `ephemeral` | Content retention: ephemeral or durable |
+| `--correlation-id` | string |  | Stable causal correlation ID |
+| `--idempotency-key` | string |  | Stable retry key (required) |
+| `--json` | bool |  | Output JSON |
+| `--prompt` | string |  | Decision or assistance request for the external coordinator |
+| `--reason` | string | `escalation` | Why external coordination is needed |
+| `--repository` | string |  | Repository scope |
+| `--result-destination` | string |  | Where the correlated response should be recorded |
+| `--source-agent` | string |  | Authenticated orchestrator identity (default: GC_AGENT) |
+| `--work-ref` | string |  | Bead or work reference |
+
+## gc coordination show
+
+Show the configured external coordination capability
+
+```
+gc coordination show [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | bool |  | Output JSON |
+
 ## gc costs
 
 Aggregate recorded usage facts (model tokens and compute wall-seconds)
@@ -1941,67 +2002,6 @@ gc handoff [subject] [message] [flags]
 | `--hook-format` | string |  | format hook output for a provider |
 | `--json` | bool |  | emit JSON summary |
 | `--target` | string |  | Remote session alias or ID to handoff (kills only controller-restartable sessions) |
-
-## gc hca
-
-Discover and enqueue causally linked requests for the configured external Human Coordinator Agent.
-
-```
-gc hca
-```
-
-| Subcommand | Description |
-|------------|-------------|
-| [gc hca list](#gc-hca-list) | List durable HCA requests |
-| [gc hca request](#gc-hca-request) | Queue a request for the HCA |
-| [gc hca show](#gc-hca-show) | Show the configured HCA signifier |
-
-## gc hca list
-
-List durable HCA requests
-
-```
-gc hca list [flags]
-```
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--json` | bool |  | Output JSON |
-| `--state` | string |  | Filter by delivery state |
-
-## gc hca request
-
-Queue a request for the HCA
-
-```
-gc hca request [flags]
-```
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--allowed-tool` | stringSlice |  | Tool explicitly allowed to the HCA (repeatable) |
-| `--content-retention` | string | `ephemeral` | Content retention: ephemeral or durable |
-| `--correlation-id` | string |  | Stable causal correlation ID |
-| `--idempotency-key` | string |  | Stable retry key (required) |
-| `--json` | bool |  | Output JSON |
-| `--prompt` | string |  | Decision or assistance request for the HCA |
-| `--reason` | string | `escalation` | Why the HCA is needed |
-| `--repository` | string |  | Repository scope |
-| `--result-destination` | string |  | Where the correlated response should be recorded |
-| `--source-agent` | string |  | Authenticated orchestrator identity (default: GC_AGENT) |
-| `--work-ref` | string |  | Bead or work reference |
-
-## gc hca show
-
-Show the configured HCA signifier
-
-```
-gc hca show [flags]
-```
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--json` | bool |  | Output JSON |
 
 ## gc help
 
@@ -3799,6 +3799,7 @@ gc routing
 | [gc routing decisions](#gc-routing-decisions) | List durable routing decisions |
 | [gc routing eligible](#gc-routing-eligible) | Show deterministic eligible work and target inputs |
 | [gc routing ingest](#gc-routing-ingest) | Ingest one externally signed routing decision |
+| [gc routing outcomes](#gc-routing-outcomes) | List authoritative redacted recommendation outcomes |
 | [gc routing status](#gc-routing-status) | Show live routing authority and ledger status |
 | [gc routing targets](#gc-routing-targets) | List deterministic selection-safe targets |
 
@@ -3843,6 +3844,20 @@ gc routing ingest [flags]
 | `--idempotency-key` | string |  | Required stable retry key |
 | `--json` | bool |  | Output in JSON format |
 | `--write-grant-command` | string |  | Command that reads GrantBinding JSON on stdin and prints one city-write token |
+
+## gc routing outcomes
+
+List authoritative redacted recommendation outcomes
+
+```
+gc routing outcomes [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--cursor` | string |  | Opaque decision-ID cursor |
+| `--json` | bool |  | Output in JSON format |
+| `--limit` | int | `100` | Maximum rows to return (1-100) |
 
 ## gc routing status
 
@@ -4130,7 +4145,9 @@ gc session
 | Subcommand | Description |
 |------------|-------------|
 | [gc session attach](#gc-session-attach) | Attach to (or resume) a chat session |
+| [gc session clear-city-stop](#gc-session-clear-city-stop) | Value-fence removal of a stale city-stop latch |
 | [gc session close](#gc-session-close) | Close a session permanently |
+| [gc session close-stale](#gc-session-close-stale) | Revision-fence the close of a proven stale session |
 | [gc session kill](#gc-session-kill) | Force-kill session runtime (reconciler restarts) |
 | [gc session list](#gc-session-list) | List chat sessions |
 | [gc session logs](#gc-session-logs) | Show session logs for a session |
@@ -4161,6 +4178,23 @@ Accepts a session ID (e.g., gc-42) or session alias (e.g., mayor).
 gc session attach <session-id-or-alias>
 ```
 
+## gc session clear-city-stop
+
+Clear sleep_reason=city-stop on one exact future-held session.
+The command requires a direct bead ID and exact held_until value, observes runtime
+liveness, and uses metadata value-CAS. It never falls back to an unconditional
+write. --check validates the same predicates without writing.
+
+```
+gc session clear-city-stop <session-id> [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--check` | bool |  | validate every precondition without writing |
+| `--if-held-until` | string |  | required exact future held_until value |
+| `--json` | bool |  | emit JSONL |
+
 ## gc session close
 
 End a conversation. Stops the runtime if active and closes the bead.
@@ -4174,6 +4208,27 @@ gc session close <session-id-or-alias> [flags]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--json` | bool |  | emit JSONL |
+
+## gc session close-stale
+
+Close one proven stale session by exact bead ID. The command requires an
+exact opaque revision, lifecycle state, future hold value, and operator reason.
+It observes runtime liveness and fails closed if a runtime, session key, pending
+create claim, blocker, or any row revision change appears. --check performs all
+read-side checks without writing.
+
+```
+gc session close-stale <session-id> [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--check` | bool |  | validate every precondition without writing |
+| `--if-held-until` | string |  | required exact persisted held_until value |
+| `--if-revision` | int64 |  | required opaque bead revision |
+| `--if-state` | string |  | required exact persisted lifecycle state |
+| `--json` | bool |  | emit JSONL |
+| `--reason` | string |  | required operator reason recorded on the closed bead |
 
 ## gc session kill
 
