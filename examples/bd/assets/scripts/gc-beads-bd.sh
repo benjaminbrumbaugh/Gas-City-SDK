@@ -2476,8 +2476,49 @@ run_bd_pinned() {
         export GC_DOLT_PASSWORD="$DOLT_PASSWORD"
         export BEADS_DOLT_SERVER_USER="$DOLT_USER"
         export BEADS_DOLT_PASSWORD="$DOLT_PASSWORD"
-        bd "$@"
+        "${BD_BIN:-bd}" "$@"
     )
+}
+
+# bd_witness_is_current mirrors bd's currentVersionWitness: a clean X.Y.Z
+# whose numeric major is at least 1.
+bd_witness_is_current() {
+    local version major rest minor patch
+    version="${1#v}"
+    case "$version" in
+        ''|*[!0-9.]*) return 1 ;;
+    esac
+    major="${version%%.*}"
+    rest="${version#*.}"
+    [ "$rest" != "$version" ] || return 1
+    minor="${rest%%.*}"
+    patch="${rest#*.}"
+    [ "$patch" != "$rest" ] || return 1
+    case "$patch" in *.*) return 1 ;; esac
+    [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ] || return 1
+    [ "$major" -ge 1 ] 2>/dev/null || return 1
+}
+
+# seed_bd_current_era_witness distinguishes the managed Dolt root gc creates
+# immediately before server-mode init from a pre-1.0 workspace. Beads v63's
+# migration guard cannot otherwise distinguish those shapes and refuses the
+# fresh root. Existing witnesses remain untouched so Beads still classifies
+# legacy or malformed state itself.
+seed_bd_current_era_witness() {
+    local dir="$1"
+    local beads_dir="$dir/.beads"
+    local witness="$beads_dir/.local_version"
+    local version tmp
+    [ -d "$beads_dir" ] || return 0
+    [ ! -e "$witness" ] || return 0
+    version=$("${BD_BIN:-bd}" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+    bd_witness_is_current "$version" || die "selected bd did not report a current semantic version"
+    tmp="$witness.tmp.$$"
+    printf '%s\n' "$version" > "$tmp" || die "failed to write current-era witness for $dir"
+    if ! mv "$tmp" "$witness"; then
+        rm -f "$tmp"
+        die "failed to install current-era witness for $dir"
+    fi
 }
 
 run_bd_init_pinned() {
@@ -2486,6 +2527,7 @@ run_bd_init_pinned() {
     local dolt_database="$3"
     local host="$4"
     local force_init="${5:-false}"
+    seed_bd_current_era_witness "$dir"
     if [ "$force_init" = "true" ]; then
         run_bd_pinned "$dir" init --force --quiet --server -p "$prefix" --database "$dolt_database" --skip-hooks --skip-agents \
             --server-host "$host" --server-port "$DOLT_PORT" "$dir" || die "bd init failed for $dir"
@@ -2765,6 +2807,10 @@ op_init() {
         fi
         exit 0
     fi
+
+    # Direct provider-init callers must cross the same Go-owned canonical
+    # metadata boundary as initAndHookDir before bd inspects workspace era.
+    normalize_scope_after_init "$dir" "$prefix" "$dolt_database"
 
     # If already initialized on disk, ensure the database is also registered
     # with the running server. gc's normalizeCanonicalBdScopeFilesForInit
