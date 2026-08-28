@@ -17,10 +17,11 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/coordclass"
 	"github.com/gastownhall/gascity/internal/storebinding"
+	"github.com/gastownhall/gascity/internal/testutil"
 )
 
 func TestOpenLegacyCombinedSourceUsesOnlyHistoricalInfraPath(t *testing.T) {
-	city := t.TempDir()
+	city := testutil.CanonicalPath(t.TempDir())
 	other, err := beads.OpenSQLiteStore(filepath.Join(city, ".gc"), beads.WithSQLiteStoreIDPrefix("gcg"))
 	if err != nil {
 		t.Fatalf("opening non-historical source: %v", err)

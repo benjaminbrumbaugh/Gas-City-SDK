@@ -125,8 +125,8 @@ func TestAliveWithCmdline_NilMatchIsFalse(t *testing.T) {
 // caller then assumes no poller is running and starts one. A duplicate poller is
 // recoverable; a silently absent one is not.
 func TestCmdline_FailsClosedWhenUnreadable(t *testing.T) {
-	if runtime.GOOS == "linux" {
-		t.Skip("on linux /proc answers directly, so the ps stub cannot make argv unreadable")
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		t.Skip("on linux /proc and on darwin kern.procargs2 answer directly, so the ps stub cannot make argv unreadable")
 	}
 
 	binDir := t.TempDir()
