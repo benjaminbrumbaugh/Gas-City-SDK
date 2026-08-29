@@ -1699,7 +1699,7 @@ case "$*" in
     printf '[{"id":"hw-claim","status":"open","metadata":{"gc.routed_to":"worker","gc.root_bead_id":"root-1","gc.continuation_group":"body"}},{"id":"hw-next","status":"open","metadata":{"gc.routed_to":"worker","gc.root_bead_id":"root-1","gc.continuation_group":"body"}},{"id":"hw-other","status":"open","metadata":{"gc.routed_to":"other","gc.root_bead_id":"root-1","gc.continuation_group":"body"}}]'
     ;;
   *"update --json hw-next --assignee session-id-1"*)
-    printf '[{"id":"hw-next","status":"open","assignee":"worker-1","metadata":{"gc.routed_to":"worker"}}]'
+    printf '[{"id":"hw-next","status":"open","assignee":"session-id-1","metadata":{"gc.routed_to":"worker"}}]'
     ;;
   *"query --json ephemeral=true AND status=open --limit 0"*)
     printf '[]'
@@ -1720,6 +1720,7 @@ esac
 	t.Setenv("GC_CITY", cityDir)
 	t.Setenv("GC_TEMPLATE", "worker")
 	t.Setenv("GC_ALIAS", "worker-1")
+	t.Setenv("BEADS_ACTOR", "test-city--worker-1")
 	t.Setenv("GC_SESSION_ID", "session-id-1")
 	t.Setenv("GC_SESSION_NAME", "test-city--worker-1")
 	t.Setenv("GC_SESSION_ORIGIN", "ephemeral")
@@ -1733,7 +1734,7 @@ esac
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("stdout is not JSON: %v\nraw: %s", err, stdout.String())
 	}
-	if result.BeadID != "hw-claim" || result.Assignee != "worker-1" || result.Reason != "claimed" {
+	if result.BeadID != "hw-claim" || result.Assignee != "test-city--worker-1" || result.Reason != "claimed" {
 		t.Fatalf("unexpected claim result: %+v", result)
 	}
 	if result.RootBeadID != "root-1" || result.ContinuationGroup != "body" {
@@ -1748,16 +1749,15 @@ esac
 		t.Fatalf("ReadFile(%s): %v", logPath, err)
 	}
 	logText := string(logData)
-	if !strings.Contains(logText, "actor=worker-1 args=update hw-claim --claim --json") {
-		t.Fatalf("bd claim did not use canonical BEADS_ACTOR=worker-1; log:\n%s", logText)
+	if !strings.Contains(logText, "actor=test-city--worker-1 args=update hw-claim --claim --json") {
+		t.Fatalf("bd claim did not use durable BEADS_ACTOR=test-city--worker-1; log:\n%s", logText)
 	}
-	if !strings.Contains(logText, "actor=worker-1 args=show --json hw-claim") {
-		t.Fatalf("bd canonical read did not use BEADS_ACTOR=worker-1; log:\n%s", logText)
+	if !strings.Contains(logText, "actor=test-city--worker-1 args=show --json hw-claim") {
+		t.Fatalf("bd canonical read did not use durable BEADS_ACTOR=test-city--worker-1; log:\n%s", logText)
 	}
-	// The claim itself is actored and assigned as worker-1 (the alias read paths
-	// query through GC_AGENT), but the continuation pin is a session binding: the
-	// sibling must name GC_SESSION_ID so wake demand and the continuation
-	// backstop can both resolve it back to this session.
+	// The primary claim uses the durable actor, while the continuation pin is a
+	// session binding: the sibling must name GC_SESSION_ID so wake demand and
+	// the continuation backstop can both resolve it back to this session.
 	if !strings.Contains(logText, "args=update --json hw-next --assignee session-id-1") {
 		t.Fatalf("continuation sibling was not preassigned to the session id; log:\n%s", logText)
 	}
@@ -2038,6 +2038,76 @@ printf '[]'
 	// not run at all once the candidate is excluded from both the adoption
 	// and fresh-claim paths — that's an even stronger signal than an empty
 	// log, so a missing log file is not a failure.
+	logData, err := os.ReadFile(logPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ReadFile(%s): %v", logPath, err)
+	}
+	if strings.Contains(string(logData), "--claim") {
+		t.Fatalf("claim mutation ran for a foreign in_progress bead; bd log:\n%s", logData)
+	}
+}
+
+// TestCmdHookClaimPoolWorkerDoesNotAdoptRebindingAliasWork covers the durable
+// ownership boundary that is distinct from the bare-template collision above:
+// a new session incarnation must not adopt work left under a rebinding slot
+// alias when the session layer projects a canonical BEADS_ACTOR.
+func TestCmdHookClaimPoolWorkerDoesNotAdoptRebindingAliasWork(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	cityDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cityToml := `[workspace]
+name = "test-city"
+
+[[agent]]
+name = "builder"
+max_active_sessions = 3
+work_query = "printf '[{\"id\":\"ga-frpt4k\",\"status\":\"in_progress\",\"assignee\":\"builder-1\",\"metadata\":{\"gc.routed_to\":\"builder\"}}]'"
+
+[[named_session]]
+template = "builder"
+mode = "on_demand"
+`
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(cityToml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeBin := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "bd.log")
+	script := fmt.Sprintf(`#!/bin/sh
+printf '%%s\n' "$*" >> %q
+printf '[]'
+`, logPath)
+	if err := os.WriteFile(filepath.Join(fakeBin, "bd"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GC_CITY", cityDir)
+	t.Setenv("GC_TEMPLATE", "builder")
+	t.Setenv("GC_ALIAS", "builder-1")
+	t.Setenv("BEADS_ACTOR", "test-city--builder-1")
+	t.Setenv("GC_SESSION_NAME", "test-city--builder-1")
+	t.Setenv("GC_SESSION_ID", "session-builder-1")
+
+	var stdout, stderr bytes.Buffer
+	code := cmdHookWithOptions(nil, hookCommandOptions{Claim: true, JSON: true}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("cmdHookWithOptions(--claim, pool worker) = %d, want 1 (no_work drain); stdout=%q stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var result hookClaimJSONResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("stdout is not JSON: %v\nraw: %s", err, stdout.String())
+	}
+	if result.Action == "work" && result.Reason == "existing_assignment" {
+		t.Fatalf("pool worker %q adopted rebinding alias %q's in_progress bead %q (%+v)",
+			"test-city--builder-1", "builder-1", result.BeadID, result)
+	}
+	if result.Action != "drain" || result.Reason != "no_work" {
+		t.Fatalf("result = %+v, want action=drain reason=no_work", result)
+	}
 	logData, err := os.ReadFile(logPath)
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatalf("ReadFile(%s): %v", logPath, err)

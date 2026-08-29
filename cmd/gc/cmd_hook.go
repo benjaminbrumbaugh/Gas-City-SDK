@@ -447,7 +447,17 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 	sessionID := strings.TrimSpace(overrides["GC_SESSION_ID"])
 	sessionName := strings.TrimSpace(sessionForQuery)
 	alias := strings.TrimSpace(overrides["GC_ALIAS"])
-	assignee := hookClaimAssigneeIdentity(alias, sessionID, agentForQuery, resolvedAgentName, sessionName)
+	// The session layer projects its canonical durable ownership identity
+	// through BEADS_ACTOR. Pool aliases may rebind, so when that projection is
+	// present they remain routing/display identities rather than claim owners.
+	durableActor := ""
+	if sessionTemplateContext {
+		durableActor = strings.TrimSpace(os.Getenv("BEADS_ACTOR"))
+	}
+	assignee := firstNonEmptyHookValue(
+		durableActor,
+		hookClaimAssigneeIdentity(alias, sessionID, agentForQuery, resolvedAgentName, sessionName),
+	)
 	// IdentityCandidates governs ADOPTION of already-owned in_progress/open
 	// work (hookClaimExistingAssignment, claimFirstReadyHookAssignment, and
 	// the display path's hookCandidateVisible own-work check); it must be
@@ -457,16 +467,19 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 	// template, which is ALSO the [[named_session]] holder's identity —
 	// including it let a suffixed worker adopt the holder's in_progress bead
 	// (ga-80pen8). The bare template stays in RouteTargets, which governs
-	// FRESH claims of UNASSIGNED routed work. The canonical slot / named
-	// holder keep it via `alias` (GC_ALIAS == qualified bare name); only
-	// suffixed workers drop it.
-	identityCandidates := hookClaimIdentityCandidates(
-		assignee,
-		sessionID,
-		sessionName,
-		alias,
-		agentForQuery,
-	)
+	// FRESH claims of UNASSIGNED routed work. A projected durable actor
+	// excludes all rebinding aliases from adoption; compatibility contexts
+	// retain the alias/session fallback.
+	identityCandidates := hookClaimIdentityCandidates(assignee, sessionID, sessionName)
+	if durableActor == "" {
+		identityCandidates = hookClaimIdentityCandidates(
+			assignee,
+			sessionID,
+			sessionName,
+			alias,
+			agentForQuery,
+		)
+	}
 	routeTargets := hookClaimRouteTargets(hookClaimPrimaryRouteTarget(&a), resolvedAgentName, strings.TrimSpace(overrides["GC_TEMPLATE"]))
 	if opts.Claim {
 		claimOpts := hookClaimOptions{
