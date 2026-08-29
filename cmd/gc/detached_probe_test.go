@@ -93,7 +93,7 @@ func TestProbeDetachedWork_TmuxExitStatus(t *testing.T) {
 			installFakeTmux(t, `printf '%s\n' "$@" > "$FAKE_TMUX_ARGS"; exit `+tt.exitCode)
 			t.Setenv("FAKE_TMUX_ARGS", argsFile)
 
-			got := probeDetachedWork(context.Background(), "tmux:gascity:soak-loop")
+			got := probeDetachedWorkWithTimeout(context.Background(), "tmux:gascity:soak-loop", 5*time.Second)
 			if got.Status != tt.wantStatus {
 				t.Fatalf("Status = %q, want %q (err=%v)", got.Status, tt.wantStatus, got.Err)
 			}
