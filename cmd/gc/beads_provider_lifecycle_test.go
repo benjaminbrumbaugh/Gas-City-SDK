@@ -7872,6 +7872,10 @@ exit 1
 	if err := os.WriteFile(filepath.Join(fakeBin, "dolt"), []byte(fakeDolt), 0o755); err != nil {
 		t.Fatalf("write fake dolt: %v", err)
 	}
+	realMV, err := exec.LookPath("mv")
+	if err != nil {
+		t.Fatalf("look up mv: %v", err)
+	}
 	for _, tool := range []string{"awk", "basename", "cat", "dirname", "grep", "head", "mkdir", "mv", "ps", "rm", "rmdir", "sleep"} {
 		resolved, err := exec.LookPath(tool)
 		if err != nil {
@@ -7887,12 +7891,14 @@ exit 1
 		op                    string
 		preseedData           bool
 		createDataDuringProbe bool
+		createSiblingDuringMV bool
 		wantWitness           bool
 	}{
 		{name: "start creates fresh managed data root", op: "start", wantWitness: true},
 		{name: "ensure-ready creates fresh managed data root", op: "ensure-ready", wantWitness: true},
 		{name: "start preserves pre-existing managed data root", op: "start", preseedData: true},
 		{name: "start refuses root created during version probe", op: "start", createDataDuringProbe: true},
+		{name: "start retracts witness when legacy sibling arrives during publication", op: "start", createSiblingDuringMV: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cityPath := t.TempDir()
@@ -7912,6 +7918,17 @@ exit 1
 			}
 			if tt.createDataDuringProbe {
 				env = append(env, "BD_RACE_DATA_DIR="+dataDir)
+			}
+			if tt.createSiblingDuringMV {
+				mvPath := filepath.Join(fakeBin, "mv")
+				if err := os.Remove(mvPath); err != nil {
+					t.Fatalf("remove real mv link: %v", err)
+				}
+				fakeMV := fmt.Sprintf("#!/bin/sh\nmkdir -p \"$(dirname \"$BD_RACE_SIBLING\")\"\n: > \"$BD_RACE_SIBLING\"\nexec %q \"$@\"\n", realMV)
+				if err := os.WriteFile(mvPath, []byte(fakeMV), 0o755); err != nil {
+					t.Fatalf("write racing mv: %v", err)
+				}
+				env = append(env, "BD_RACE_SIBLING="+filepath.Join(cityPath, ".beads", "issues.db"))
 			}
 			cmd.Env = sanitizedBaseEnv(env...)
 			if out, err := cmd.CombinedOutput(); err == nil {

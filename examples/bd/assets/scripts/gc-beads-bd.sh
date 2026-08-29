@@ -2501,12 +2501,8 @@ bd_witness_is_current() {
     [ "$major" -ge 1 ] 2>/dev/null || return 1
 }
 
-# seed_bd_current_era_witness_for_fresh_root records the selected bd version
-# only before Gas City creates a new managed data root. Existing roots and
-# legacy artifacts remain unmarked so bd's migration guard classifies them.
-seed_bd_current_era_witness_for_fresh_root() {
-    local legacy witness version_output version tmp
-    [ ! -e "$DATA_DIR" ] || return 0
+bd_legacy_sibling_exists() {
+    local legacy
     for legacy in \
         "$BEADS_DIR_ROOT/dolt" \
         "$BEADS_DIR_ROOT/embeddeddolt" \
@@ -2514,8 +2510,19 @@ seed_bd_current_era_witness_for_fresh_root() {
         "$BEADS_DIR_ROOT/issues.db" \
         "$BEADS_DIR_ROOT/issues.jsonl"
     do
+        same_dir_path "$legacy" "$DATA_DIR" && continue
         [ ! -e "$legacy" ] || return 0
     done
+    return 1
+}
+
+# seed_bd_current_era_witness_for_fresh_root records the selected bd version
+# only before Gas City creates a new managed data root. Existing roots and
+# legacy artifacts remain unmarked so bd's migration guard classifies them.
+seed_bd_current_era_witness_for_fresh_root() {
+    local witness version_output version tmp
+    [ ! -e "$DATA_DIR" ] || return 0
+    bd_legacy_sibling_exists && return 0
     witness="$BEADS_DIR_ROOT/.local_version"
     [ ! -e "$witness" ] || return 0
 
@@ -2526,17 +2533,9 @@ seed_bd_current_era_witness_for_fresh_root() {
 
     # Recheck after version discovery, then atomically claim DATA_DIR. If any
     # other actor created the root, this is not a provably fresh workspace.
-    for legacy in \
-        "$DATA_DIR" \
-        "$BEADS_DIR_ROOT/dolt" \
-        "$BEADS_DIR_ROOT/embeddeddolt" \
-        "$BEADS_DIR_ROOT/beads.db" \
-        "$BEADS_DIR_ROOT/issues.db" \
-        "$BEADS_DIR_ROOT/issues.jsonl" \
-        "$witness"
-    do
-        [ ! -e "$legacy" ] || return 0
-    done
+    [ ! -e "$DATA_DIR" ] || return 0
+    [ ! -e "$witness" ] || return 0
+    bd_legacy_sibling_exists && return 0
     mkdir -p "$BEADS_DIR_ROOT" "$(dirname "$DATA_DIR")" || die "failed to create managed beads parent directory"
     if ! mkdir "$DATA_DIR" 2>/dev/null; then
         return 0
@@ -2551,6 +2550,13 @@ seed_bd_current_era_witness_for_fresh_root() {
         rm -f "$tmp"
         rmdir "$DATA_DIR" 2>/dev/null || true
         die "failed to install current-era witness"
+    fi
+    # A sibling can race the witness rename after DATA_DIR was atomically
+    # claimed. Retract the witness before any server starts so bd's migration
+    # guard, not Gas City, classifies that legacy state.
+    if bd_legacy_sibling_exists; then
+        rm -f "$witness" || die "failed to retract current-era witness"
+        rmdir "$DATA_DIR" 2>/dev/null || true
     fi
 }
 
