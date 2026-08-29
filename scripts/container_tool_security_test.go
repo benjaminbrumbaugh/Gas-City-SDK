@@ -8,13 +8,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestContainerCLIToolsRebuildWithPatchedGRPC(t *testing.T) {
+func TestContainerCLIToolsRebuildWithPatchedDependencies(t *testing.T) {
 	const (
-		ghVersion                 = "2.96.0"
-		ghSourceRef               = "b300f2ec7ec9dc9addc39b2ad88c54097ded7ca0"
+		ghVersion                 = "2.98.0"
+		ghSourceRef               = "a255baf71d13fe5947a4eb7ad521ffd412d64cee"
 		doltSourceRef             = "b15770fe588268027d799c11356af0ce24ba882a"
 		grpcVersion               = "1.82.1"
-		ghSourceSHA256            = "a0c18c98c73f7333f73e19b3a0bf5bd18673f3dc226193ab6478b3ea1ea18f03"
+		ghSourceSHA256            = "52e8e45fb5f5431dd269966c97bbf398fd5c8f1b6fafdc02af182ce4d7012c43"
+		ghSourceDateEpoch         = "1787263311"
+		ghXModVersion             = "0.40.0"
+		ghXTextVersion            = "0.41.0"
+		doltThriftVersion         = "0.23.0"
+		doltXNetVersion           = "0.56.0"
+		doltXTextVersion          = "0.39.0"
 		doltSourceSHA256          = "fbbbe1605399250a95621004c07cbf29a394b632fe05b0ca4bdcad642687daa8"
 		doltToolchainRelease      = "20260611_0.0.5_trixie"
 		doltOptcrossX8664SHA256   = "caf703fb1cbc0c9ff9a5b506f73da6c6f5233c04a455e638cdc50267a4d0c0c0"
@@ -27,8 +33,14 @@ func TestContainerCLIToolsRebuildWithPatchedGRPC(t *testing.T) {
 		"ARG GH_VERSION=" + ghVersion,
 		"ARG GH_SOURCE_REF=" + ghSourceRef,
 		"ARG GH_SOURCE_SHA256=" + ghSourceSHA256,
+		"ARG GH_SOURCE_DATE_EPOCH=" + ghSourceDateEpoch,
+		"ARG GH_X_MOD_VERSION=" + ghXModVersion,
+		"ARG GH_X_TEXT_VERSION=" + ghXTextVersion,
 		"ARG DOLT_SOURCE_REF=" + doltSourceRef,
 		"ARG DOLT_SOURCE_SHA256=" + doltSourceSHA256,
+		"ARG DOLT_THRIFT_VERSION=" + doltThriftVersion,
+		"ARG DOLT_X_NET_VERSION=" + doltXNetVersion,
+		"ARG DOLT_X_TEXT_VERSION=" + doltXTextVersion,
 		"ARG GRPC_VERSION=" + grpcVersion,
 		"ARG DOLT_TOOLCHAIN_RELEASE=" + doltToolchainRelease,
 		"ARG DOLT_OPTCROSS_X86_64_SHA256=" + doltOptcrossX8664SHA256,
@@ -40,6 +52,11 @@ func TestContainerCLIToolsRebuildWithPatchedGRPC(t *testing.T) {
 		"x86_64-linux-musl-gcc",
 		"aarch64-linux-musl-gcc",
 		`file /out/dolt | grep -Fq "statically linked"`,
+		`go get "golang.org/x/mod@v${GH_X_MOD_VERSION}"`,
+		`go get "golang.org/x/text@v${GH_X_TEXT_VERSION}"`,
+		`go get "github.com/apache/thrift@v${DOLT_THRIFT_VERSION}"`,
+		`go get "golang.org/x/net@v${DOLT_X_NET_VERSION}"`,
+		`go get "golang.org/x/text@v${DOLT_X_TEXT_VERSION}"`,
 		"COPY --from=tool-builder /out/gh /usr/bin/gh",
 		"COPY --from=tool-builder /out/dolt /usr/local/bin/dolt",
 	} {
@@ -158,19 +175,35 @@ func TestMCPMailImagePinsPatchedPythonDependencies(t *testing.T) {
 	}
 }
 
-// TestRebuiltToolsAssertPatchedGRPCArtifact guards the artifact-level proof that
-// each rebuilt CLI actually embeds the patched grpc module. Text-level ARG/recipe
-// checks confirm the build inputs; these `go version -m` assertions are the only
-// evidence the produced binary links grpc v${GRPC_VERSION}, so they must not be
-// silently removable. bd already had one; gh and dolt now mirror it.
-func TestRebuiltToolsAssertPatchedGRPCArtifact(t *testing.T) {
+// TestRebuiltToolsAssertPatchedDependencyArtifacts guards the artifact-level
+// proof that each rebuilt CLI embeds its patched modules. Text-level ARG/recipe
+// checks confirm build inputs; these `go version -m` assertions prove the final
+// binaries carry the intended versions.
+func TestRebuiltToolsAssertPatchedDependencyArtifacts(t *testing.T) {
 	root := repoRoot(t)
 
 	base := readFile(t, root, "contrib/k8s/Dockerfile.base")
+	tabEscape := string([]byte{92, 't'})
 	for _, bin := range []string{"/out/gh", "/out/dolt"} {
-		want := `go version -m ` + bin + ` | tr '\t' ' ' | grep -Fq "dep google.golang.org/grpc v${GRPC_VERSION} "`
+		want := `go version -m ` + bin + ` | tr '` + tabEscape + `' ' ' | grep -Fq "dep google.golang.org/grpc v${GRPC_VERSION} "`
 		if !strings.Contains(base, want) {
 			t.Errorf("contrib/k8s/Dockerfile.base must assert %s embeds patched grpc; missing %q", bin, want)
+		}
+	}
+	for _, dependency := range []struct {
+		binary  string
+		module  string
+		version string
+	}{
+		{binary: "/out/gh", module: "golang.org/x/mod", version: "${GH_X_MOD_VERSION}"},
+		{binary: "/out/gh", module: "golang.org/x/text", version: "${GH_X_TEXT_VERSION}"},
+		{binary: "/out/dolt", module: "github.com/apache/thrift", version: "${DOLT_THRIFT_VERSION}"},
+		{binary: "/out/dolt", module: "golang.org/x/net", version: "${DOLT_X_NET_VERSION}"},
+		{binary: "/out/dolt", module: "golang.org/x/text", version: "${DOLT_X_TEXT_VERSION}"},
+	} {
+		want := `go version -m ` + dependency.binary + ` | tr '` + tabEscape + `' ' ' | grep -Fq "dep ` + dependency.module + ` v` + dependency.version + ` "`
+		if !strings.Contains(base, want) {
+			t.Errorf("contrib/k8s/Dockerfile.base must assert %s embeds %s v%s; missing %q", dependency.binary, dependency.module, dependency.version, want)
 		}
 	}
 
