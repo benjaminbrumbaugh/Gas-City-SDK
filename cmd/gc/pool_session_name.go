@@ -399,6 +399,10 @@ func assignedWorkOwnerStore(cfg *config.City, cityStore beads.Store, rigStores m
 	return storeForPoolAssignment(cfg, cityStore, rigStores, wb)
 }
 
+// detachedWorkProbeHook keeps release-policy tests on the policy boundary.
+// Dedicated detached-probe tests cover the external tmux process contract.
+var detachedWorkProbeHook = probeDetachedWork
+
 func detachedProbeAllowsOrphanRelease(wb beads.Bead) (bool, bool) {
 	spec := strings.TrimSpace(wb.Metadata[detachedProbeMetadataKey])
 	if spec == "" {
@@ -406,7 +410,7 @@ func detachedProbeAllowsOrphanRelease(wb beads.Bead) (bool, bool) {
 		return true, false
 	}
 
-	result := probeDetachedWork(context.Background(), spec)
+	result := detachedWorkProbeHook(context.Background(), spec)
 	switch result.Status {
 	case detachedProbeAlive:
 		clearDetachedProbeErrorCount(wb.ID)
