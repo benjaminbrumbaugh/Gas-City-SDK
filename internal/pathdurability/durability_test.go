@@ -274,6 +274,9 @@ func TestClassifyFailsOpen(t *testing.T) {
 // fake mount table, so a bug in the platform file cannot hide behind the double.
 func TestClassifyOnRealFilesystem(t *testing.T) {
 	cityRoot := t.TempDir()
+	if _, err := deviceID(cityRoot); err != nil {
+		t.Skipf("real filesystem durability probe unavailable: %v", err)
+	}
 
 	t.Run("same device as the city root", func(t *testing.T) {
 		rigPath := filepath.Join(cityRoot, "rigs", "project")

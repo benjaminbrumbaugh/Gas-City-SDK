@@ -582,6 +582,7 @@ while :; do
     # timed-out read still assigns whatever partial line arrived, so take it
     # before breaking — otherwise the tail of the last line is silently lost.
     while :; do
+        more=""
         IFS= read -r -t "$DRAIN_TIMEOUT" more
         drain_rc=$?
         if (( drain_rc == 0 )); then
