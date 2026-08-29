@@ -87,6 +87,7 @@ func TestAgentImageRebuildsBDAndGCWithPatchedGRPC(t *testing.T) {
 		bdBuild        = "869020c221"
 		bdBranch       = "HEAD"
 		grpcVersion    = "1.83.0"
+		gcXModVersion  = "0.40.0"
 	)
 
 	root := repoRoot(t)
@@ -137,6 +138,10 @@ func TestAgentImageRebuildsBDAndGCWithPatchedGRPC(t *testing.T) {
 	wantGRPCModule := "google.golang.org/grpc v" + grpcVersion
 	if got := strings.Count(goMod, wantGRPCModule); got != 1 {
 		t.Errorf("go.mod contains %q %d times, want exactly 1 so the gc binary embeds the patched grpc", wantGRPCModule, got)
+	}
+	wantXModModule := "golang.org/x/mod v" + gcXModVersion
+	if got := strings.Count(goMod, wantXModModule); got != 1 {
+		t.Errorf("go.mod contains %q %d times, want exactly 1 so the gc binary embeds the patched x/mod", wantXModModule, got)
 	}
 
 	workflow := readFile(t, root, ".github/workflows/container-scan.yml")
