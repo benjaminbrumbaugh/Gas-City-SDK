@@ -91,12 +91,17 @@ func TestSweepStaleIsolatedSupervisorLaunchdRemovesOnlyStale(t *testing.T) {
 	}
 
 	oldRun := supervisorLaunchctlRun
+	oldRegistered := supervisorLaunchdRegistered
 	var calls []string
 	supervisorLaunchctlRun = func(args ...string) error {
 		calls = append(calls, strings.Join(args, " "))
 		return nil
 	}
-	t.Cleanup(func() { supervisorLaunchctlRun = oldRun })
+	supervisorLaunchdRegistered = func(label string) bool { return label == staleLabel }
+	t.Cleanup(func() {
+		supervisorLaunchctlRun = oldRun
+		supervisorLaunchdRegistered = oldRegistered
+	})
 
 	var stderr bytes.Buffer
 	sweepStaleIsolatedSupervisorServices(&stderr)

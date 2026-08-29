@@ -3,13 +3,16 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -334,7 +337,7 @@ func TestRunStartDriftCheck_RestartReturnsContinue(t *testing.T) {
 // macOS production upgrade path: launchd owns the supervisor lifecycle, so
 // binary drift restart must delegate to launchctl even though /proc/<pid>/exe
 // is unavailable on Darwin.
-func TestRunStartDriftCheck_DarwinLaunchdRestartDoesNotRequireProcExe(t *testing.T) {
+func TestRunStartDriftCheck_DarwinRegisteredLaunchdRestartDoesNotRequireProcExe(t *testing.T) {
 	cityPath, setCommit := driftCheckEnv(t, "old-build-id")
 	setCommit("new-build-id")
 
@@ -344,17 +347,48 @@ func TestRunStartDriftCheck_DarwinLaunchdRestartDoesNotRequireProcExe(t *testing
 
 	oldGOOS := supervisorRuntimeGOOS
 	oldLaunchdActive := supervisorLaunchdActive
+	oldLaunchdRegistered := supervisorLaunchdRegistered
+	oldLaunchdPID := supervisorLaunchdPID
 	oldReadExe := readSupervisorExePathHook
 	oldHelpers := restartHelpersHook
 	t.Cleanup(func() {
 		supervisorRuntimeGOOS = oldGOOS
 		supervisorLaunchdActive = oldLaunchdActive
+		supervisorLaunchdRegistered = oldLaunchdRegistered
+		supervisorLaunchdPID = oldLaunchdPID
 		readSupervisorExePathHook = oldReadExe
 		restartHelpersHook = oldHelpers
 	})
 
 	supervisorRuntimeGOOS = "darwin"
-	supervisorLaunchdActive = func(label string) bool {
+	var stateMu sync.RWMutex
+	servedBuild := "old-build-id"
+	currentPID := os.Getpid()
+	replacementPID := currentPID + 1000
+	replacementServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		stateMu.RLock()
+		buildID := servedBuild
+		stateMu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"status":"ok","version":"v0","build_id":%q,"uptime_sec":1,"cities_total":0,"cities_running":0}`, buildID)
+	}))
+	t.Cleanup(replacementServer.Close)
+	supervisorAPIBaseURLHook = func() (string, error) { return replacementServer.URL, nil }
+	supervisorAliveHook = func() int {
+		stateMu.RLock()
+		defer stateMu.RUnlock()
+		return currentPID
+	}
+	supervisorLaunchdPID = func(string) int {
+		stateMu.RLock()
+		defer stateMu.RUnlock()
+		return currentPID
+	}
+	// A loaded launchd job remains the lifecycle owner while its child is
+	// stopped or crash-looping. That is exactly when an active-only probe would
+	// incorrectly fall through to the direct /proc restart path on macOS.
+	supervisorLaunchdActive = func(string) bool { return false }
+	supervisorLaunchdRegistered = func(label string) bool {
 		return label == supervisorLaunchdLabel()
 	}
 	readSupervisorExePathHook = func(pid int) (string, error) {
@@ -365,6 +399,10 @@ func TestRunStartDriftCheck_DarwinLaunchdRestartDoesNotRequireProcExe(t *testing
 		return restartHelpers{
 			Launchctl: func(args ...string) error {
 				launchctlArgs = append([]string(nil), args...)
+				stateMu.Lock()
+				currentPID = replacementPID
+				servedBuild = "new-build-id"
+				stateMu.Unlock()
 				return nil
 			},
 			Systemctl: func(...string) error {
@@ -402,6 +440,173 @@ func TestRunStartDriftCheck_DarwinLaunchdRestartDoesNotRequireProcExe(t *testing
 	}
 	if strings.Contains(stderr.String(), "/proc/") {
 		t.Fatalf("stderr leaked /proc restart failure despite launchd management:\n%s", stderr.String())
+	}
+}
+
+func TestRunStartDriftCheck_DarwinLegacyLaunchdOwnerUsesLegacyService(t *testing.T) {
+	cityPath, setCommit := driftCheckEnv(t, "old-build-id")
+	setCommit("new-build-id")
+	t.Setenv("HOME", t.TempDir())
+
+	oldDry, oldNoAR := dryRunMode, noAutoRestartMode
+	dryRunMode, noAutoRestartMode = false, false
+	t.Cleanup(func() { dryRunMode, noAutoRestartMode = oldDry, oldNoAR })
+	oldGOOS := supervisorRuntimeGOOS
+	oldRegistered := supervisorLaunchdRegistered
+	oldPID := supervisorLaunchdPID
+	oldReadExe := readSupervisorExePathHook
+	oldHelpers := restartHelpersHook
+	t.Cleanup(func() {
+		supervisorRuntimeGOOS = oldGOOS
+		supervisorLaunchdRegistered = oldRegistered
+		supervisorLaunchdPID = oldPID
+		readSupervisorExePathHook = oldReadExe
+		restartHelpersHook = oldHelpers
+	})
+
+	legacyPath := legacySupervisorLaunchdPlistPath()
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyContent, err := renderSupervisorTemplate(supervisorLaunchdTemplate, &supervisorServiceData{
+		GCPath: "/tmp/gc-legacy", LogPath: filepath.Join(os.Getenv("GC_HOME"), "supervisor.log"),
+		GCHome: os.Getenv("GC_HOME"), LaunchdLabel: defaultSupervisorLaunchdLabel, Path: "/usr/local/bin:/usr/bin:/bin",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(legacyContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	supervisorRuntimeGOOS = "darwin"
+	currentPID := os.Getpid()
+	supervisorLaunchdRegistered = func(label string) bool {
+		return label == supervisorLaunchdLabel() || label == defaultSupervisorLaunchdLabel
+	}
+	supervisorLaunchdPID = func(label string) int {
+		if label == defaultSupervisorLaunchdLabel {
+			return currentPID
+		}
+		return 0
+	}
+	readSupervisorExePathHook = func(pid int) (string, error) {
+		return "", fmt.Errorf("readlink /proc/%d/exe: no such file or directory", pid)
+	}
+	var launchctlArgs []string
+	restartHelpersHook = func() restartHelpers {
+		return restartHelpers{
+			Launchctl: func(args ...string) error {
+				launchctlArgs = append([]string(nil), args...)
+				return errors.New("stop after routing assertion")
+			},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	exitCode, cont := runStartDriftCheck(cityPath, &stdout, &stderr)
+	if exitCode != 1 || cont {
+		t.Fatalf("runStartDriftCheck = (%d, %v), want routed restart failure; stdout=%q stderr=%q", exitCode, cont, stdout.String(), stderr.String())
+	}
+	want := []string{"kickstart", "-k", supervisorLaunchdServiceTarget(defaultSupervisorLaunchdLabel)}
+	if !slices.Equal(launchctlArgs, want) {
+		t.Fatalf("launchctl args = %v, want legacy service restart %v", launchctlArgs, want)
+	}
+	if strings.Contains(stderr.String(), "/proc/") {
+		t.Fatalf("stderr leaked direct restart discovery despite legacy launchd ownership: %q", stderr.String())
+	}
+}
+
+func TestRunStartDriftCheck_DarwinLaunchdRejectsOwnershipMismatchBeforeRestart(t *testing.T) {
+	cityPath, setCommit := driftCheckEnv(t, "old-build-id")
+	setCommit("new-build-id")
+	shrinkDriftReadyTimeout(t)
+
+	oldDry, oldNoAR := dryRunMode, noAutoRestartMode
+	dryRunMode, noAutoRestartMode = false, false
+	t.Cleanup(func() { dryRunMode, noAutoRestartMode = oldDry, oldNoAR })
+
+	oldGOOS := supervisorRuntimeGOOS
+	oldRegistered := supervisorLaunchdRegistered
+	oldPID := supervisorLaunchdPID
+	oldReadExe := readSupervisorExePathHook
+	oldHelpers := restartHelpersHook
+	t.Cleanup(func() {
+		supervisorRuntimeGOOS = oldGOOS
+		supervisorLaunchdRegistered = oldRegistered
+		supervisorLaunchdPID = oldPID
+		readSupervisorExePathHook = oldReadExe
+		restartHelpersHook = oldHelpers
+	})
+
+	supervisorRuntimeGOOS = "darwin"
+	supervisorLaunchdRegistered = func(string) bool { return true }
+	supervisorLaunchdPID = func(string) int { return 7777 }
+	readSupervisorExePathHook = func(pid int) (string, error) {
+		return "", fmt.Errorf("readlink /proc/%d/exe: no such file or directory", pid)
+	}
+	launchctlCalls := 0
+	restartHelpersHook = func() restartHelpers {
+		return restartHelpers{Launchctl: func(...string) error {
+			launchctlCalls++
+			return nil
+		}}
+	}
+
+	var stdout, stderr bytes.Buffer
+	exitCode, cont := runStartDriftCheck(cityPath, &stdout, &stderr)
+	if exitCode != 1 || cont {
+		t.Fatalf("runStartDriftCheck = (%d, %v), want (1, false); stdout=%q stderr=%q", exitCode, cont, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "launchd ownership conflict") {
+		t.Fatalf("stderr = %q, want launchd ownership conflict", stderr.String())
+	}
+	if launchctlCalls != 0 {
+		t.Fatalf("launchctl calls = %d, want 0 before ownership is verified", launchctlCalls)
+	}
+}
+
+func TestPollLaunchdRestartVerifiedRejectsDriftedReplacementBuild(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"status":"ok","version":"v0","build_id":"old-build-id","uptime_sec":1,"cities_total":0,"cities_running":0}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	oldAlive := supervisorAliveHook
+	oldPID := supervisorLaunchdPID
+	t.Cleanup(func() {
+		supervisorAliveHook = oldAlive
+		supervisorLaunchdPID = oldPID
+	})
+	supervisorAliveHook = func() int { return 200 }
+	supervisorLaunchdPID = func(string) int { return 200 }
+
+	msg := pollLaunchdRestartVerified(srv.URL, 100, "old-build-id", "new-build-id", "com.gascity.supervisor", 0)
+	if !strings.Contains(msg, "still serves drifted build") {
+		t.Fatalf("pollLaunchdRestartVerified() = %q, want drifted build error", msg)
+	}
+}
+
+func TestPollLaunchdRestartVerifiedRejectsMissingReplacementBuild(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"status":"ok","version":"v0","build_id":"","uptime_sec":1,"cities_total":0,"cities_running":0}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	oldAlive := supervisorAliveHook
+	oldPID := supervisorLaunchdPID
+	t.Cleanup(func() {
+		supervisorAliveHook = oldAlive
+		supervisorLaunchdPID = oldPID
+	})
+	supervisorAliveHook = func() int { return 200 }
+	supervisorLaunchdPID = func(string) int { return 200 }
+
+	msg := pollLaunchdRestartVerified(srv.URL, 100, "old-build-id", "new-build-id", "com.gascity.supervisor", 0)
+	if !strings.Contains(msg, "missing build identity") {
+		t.Fatalf("pollLaunchdRestartVerified() = %q, want missing build identity error", msg)
 	}
 }
 

@@ -109,6 +109,11 @@ func configureSupervisorHooksForTests() {
 	ensureSupervisorRunningHook = func(_, _ io.Writer) int { return 0 }
 	reloadSupervisorHook = func(_, _ io.Writer) int { return 0 }
 	supervisorAliveHook = func() int { return 0 }
+	// Install mechanics tests do not launch a real service. Dedicated
+	// ownership tests override this hook with the production poller.
+	supervisorLaunchdInstallOwnership = func(string) (int, int) { return 4242, 4242 }
+	supervisorLaunchdInstalledBuildID = func() string { return commit }
+	supervisorLaunchdRegistered = func(string) bool { return false }
 	// Neutralize systemd lingering so install tests never spawn loginctl
 	// or mutate the test runner's real linger state. Reporting linger as
 	// already enabled makes ensureSupervisorLinger a silent no-op, keeping

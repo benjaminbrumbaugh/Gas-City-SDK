@@ -13,13 +13,17 @@ import (
 )
 
 func TestProductMetricsServiceChildEnvSupervisorStart(t *testing.T) {
-	// This test clears the systemd delegation env below, so the start path runs
-	// non-delegated and reaches the HOME-override guard. Present the real HOME.
+	// Direct supervisor spawning is intentionally unavailable on macOS because
+	// launchd owns that lifecycle. Exercise the still-supported non-delegated
+	// direct path as Linux so this test remains scoped to child-env scrubbing.
 	pinRealHome(t)
 	t.Setenv("GC_HOME", t.TempDir())
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv(supervisorSystemdUnitEnv, "")
 	t.Setenv(supervisorSystemdScopeEnv, "")
+	previousGOOS := supervisorRuntimeGOOS
+	supervisorRuntimeGOOS = "linux"
+	t.Cleanup(func() { supervisorRuntimeGOOS = previousGOOS })
 
 	previousAlive := supervisorAliveHook
 	supervisorAliveHook = func() int { return 4242 }

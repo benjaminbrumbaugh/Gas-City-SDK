@@ -92,9 +92,17 @@ func sweepStaleIsolatedSupervisorLaunchd(stderr io.Writer) {
 		if !ok || !supervisorServiceGCHomeMissing(gcHome) {
 			continue
 		}
-		_ = supervisorLaunchctlRun("unload", path)
-		_ = supervisorLaunchctlRun("disable", supervisorLaunchdServiceTarget(label))
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if supervisorLaunchdRegistered(label) {
+			if err := supervisorLaunchctlRun("unload", path); err != nil {
+				fmt.Fprintf(stderr, "gc supervisor: preserving stale isolated supervisor plist %s because unload failed: %v\n", path, err) //nolint:errcheck // best-effort stderr
+				continue
+			}
+		}
+		if err := supervisorLaunchctlRun("disable", supervisorLaunchdServiceTarget(label)); err != nil {
+			fmt.Fprintf(stderr, "gc supervisor: preserving stale isolated supervisor plist %s because disable failed: %v\n", path, err) //nolint:errcheck // best-effort stderr
+			continue
+		}
+		if err := removeSupervisorServiceFile(path); err != nil {
 			fmt.Fprintf(stderr, "gc supervisor: removing stale isolated supervisor plist %s: %v\n", path, err) //nolint:errcheck // best-effort stderr
 			continue
 		}

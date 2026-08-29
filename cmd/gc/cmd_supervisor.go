@@ -73,7 +73,10 @@ func newSupervisorStartCmd(stdout, stderr io.Writer) *cobra.Command {
 		Short: "Start the machine-wide supervisor in the background",
 		Long: `Start the machine-wide supervisor in the background.
 
-This forks "gc supervisor run", verifies it became ready, and returns.`,
+On macOS this delegates to the registered launchd service; run "gc supervisor
+install" first when the service is not registered. On other platforms this
+starts "gc supervisor run" in the background. The command verifies that the
+supervisor became ready before returning.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if doSupervisorStartJSON(stdout, stderr, jsonOut) != 0 {
@@ -657,7 +660,7 @@ func handleSupervisorConn(conn net.Conn, requestShutdown func(supervisorShutdown
 	defer conn.Close()                                     //nolint:errcheck
 	conn.SetReadDeadline(time.Now().Add(60 * time.Second)) //nolint:errcheck
 	scanner := bufio.NewScanner(conn)
-	if scanner.Scan() {
+	for scanner.Scan() {
 		switch scanner.Text() {
 		case "stop":
 			peer := ""
@@ -820,20 +823,36 @@ func stopSupervisorViaSocket(stdout, stderr io.Writer, wait bool, waitTimeout ti
 }
 
 func stopSupervisorViaSocketJSON(stdout, stderr io.Writer, wait bool, waitTimeout time.Duration, jsonOut bool) int {
-	sockPath, _ := runningSupervisorSocket()
+	sockPath, pid := runningSupervisorSocket()
 	if sockPath == "" {
 		fmt.Fprintln(stderr, "gc supervisor stop: supervisor is not running") //nolint:errcheck
 		return 1
 	}
+	return stopSupervisorViaVerifiedSocketJSON(sockPath, pid, stdout, stderr, wait, waitTimeout, jsonOut)
+}
+
+func stopSupervisorViaVerifiedSocketJSON(sockPath string, expectedPID int, stdout, stderr io.Writer, wait bool, waitTimeout time.Duration, jsonOut bool) int {
 	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
 	if err != nil {
 		fmt.Fprintln(stderr, "gc supervisor stop: supervisor is not running") //nolint:errcheck
 		return 1
 	}
-	defer conn.Close()                                     //nolint:errcheck
+	defer conn.Close()                                //nolint:errcheck
+	conn.SetDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
+	if _, err := conn.Write([]byte("ping\n")); err != nil {
+		fmt.Fprintln(stderr, "gc supervisor stop: supervisor is not running") //nolint:errcheck
+		return 1
+	}
+	reader := bufio.NewReader(conn)
+	pidLine, err := reader.ReadString('\n')
+	verifiedPID, parseErr := strconv.Atoi(strings.TrimSpace(pidLine))
+	if err != nil || parseErr != nil || verifiedPID <= 0 || verifiedPID != expectedPID {
+		fmt.Fprintf(stderr, "gc supervisor stop: control socket ownership changed: expected PID %d but verified PID %d\n", expectedPID, verifiedPID) //nolint:errcheck
+		return 1
+	}
+	conn.SetDeadline(time.Time{})                          //nolint:errcheck
 	conn.Write([]byte("stop\n"))                           //nolint:errcheck
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second)) //nolint:errcheck
-	reader := bufio.NewReader(conn)
 	ackLine, err := reader.ReadString('\n')
 	if err != nil || strings.TrimSpace(ackLine) != "ok" {
 		fmt.Fprintln(stderr, "gc supervisor stop: no acknowledgment from supervisor") //nolint:errcheck
@@ -950,6 +969,56 @@ func supervisorStatusWithOptions(stdout, stderr io.Writer, asJSON bool) int {
 	if pid > 0 {
 		pidSource = "control_socket"
 	}
+	lifecycleManager := ""
+	serviceLabel := ""
+	managerPID := 0
+	ownershipStatus := ""
+	if supervisorRuntimeGOOS == "darwin" {
+		currentLabel := supervisorLaunchdLabel()
+		legacyLabel := defaultSupervisorLaunchdLabel
+		currentRegistered := supervisorLaunchdRegistered(currentLabel)
+		legacyRegistered := legacySupervisorTargetsCurrentHome(legacySupervisorLaunchdPlistPath()) && supervisorLaunchdRegistered(legacyLabel)
+		currentPID := 0
+		legacyPID := 0
+		if currentRegistered {
+			currentPID = supervisorLaunchdPID(currentLabel)
+		}
+		if legacyRegistered {
+			legacyPID = supervisorLaunchdPID(legacyLabel)
+		}
+		currentOwns := pid > 0 && currentPID == pid
+		legacyOwns := pid > 0 && legacyPID == pid
+		switch {
+		case currentOwns && !legacyOwns:
+			serviceLabel, managerPID = currentLabel, currentPID
+		case legacyOwns && !currentOwns:
+			serviceLabel, managerPID = legacyLabel, legacyPID
+		case pid == 0 && currentPID > 0 && legacyPID <= 0:
+			serviceLabel, managerPID = currentLabel, currentPID
+		case pid == 0 && legacyPID > 0 && currentPID <= 0:
+			serviceLabel, managerPID = legacyLabel, legacyPID
+		case currentRegistered:
+			serviceLabel, managerPID = currentLabel, currentPID
+		case legacyRegistered:
+			serviceLabel, managerPID = legacyLabel, legacyPID
+		}
+		if serviceLabel != "" {
+			lifecycleManager = "launchd"
+			switch {
+			case (currentOwns && legacyOwns) || (pid > 0 && managerPID != pid) || (pid == 0 && currentPID > 0 && legacyPID > 0):
+				ownershipStatus = "conflict"
+			case pid > 0 && managerPID == pid:
+				ownershipStatus = "matched"
+			case managerPID > 0:
+				ownershipStatus = "socket_unreachable"
+			default:
+				ownershipStatus = "manager_not_running"
+			}
+		} else if pid > 0 {
+			lifecycleManager = "direct"
+			ownershipStatus = "unmanaged"
+		}
+	}
 	// A broken delegation env (e.g. a GC_SUPERVISOR_SYSTEMD_SCOPE typo) must
 	// surface here: status is the first command operators and monitoring run
 	// against a delegated supervisor, every mutating lifecycle sibling
@@ -965,6 +1034,8 @@ func supervisorStatusWithOptions(stdout, stderr io.Writer, asJSON bool) int {
 	// CLI environment does not resolve. Trust the service manager, then the API.
 	if !running {
 		switch {
+		case lifecycleManager == "launchd" && managerPID > 0:
+			running, pidSource = true, "service_manager"
 		case supervisorServiceManagerActive():
 			running, pidSource = true, "service_manager"
 		case supervisorAPIReachable():
@@ -982,6 +1053,12 @@ func supervisorStatusWithOptions(stdout, stderr io.Writer, asJSON bool) int {
 		if pidSource != "" {
 			payload["pid_source"] = pidSource
 		}
+		if lifecycleManager != "" {
+			payload["lifecycle_manager"] = lifecycleManager
+			payload["service_label"] = serviceLabel
+			payload["manager_pid"] = managerPID
+			payload["ownership_status"] = ownershipStatus
+		}
 		if running && pid == 0 {
 			// Distinct diagnostic state (gascity#2984): running per service
 			// manager / API, but pid discovery via the socket failed.
@@ -998,6 +1075,12 @@ func supervisorStatusWithOptions(stdout, stderr io.Writer, asJSON bool) int {
 	switch {
 	case pid > 0:
 		fmt.Fprintf(stdout, "Supervisor is running (PID %d)\n", pid) //nolint:errcheck
+		switch ownershipStatus {
+		case "conflict":
+			fmt.Fprintf(stdout, "Warning: supervisor ownership conflict: %s is registered but does not own PID %d\n", serviceLabel, pid) //nolint:errcheck
+		case "unmanaged":
+			fmt.Fprintln(stdout, "Warning: supervisor is not owned by a registered launchd service") //nolint:errcheck
+		}
 		return 0
 	case running:
 		fmt.Fprintf(stdout, "Supervisor is running (pid unavailable: control socket unreachable; liveness confirmed via %s)\n", pidSource) //nolint:errcheck

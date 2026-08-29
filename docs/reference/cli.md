@@ -4933,7 +4933,10 @@ gc supervisor run
 
 Start the machine-wide supervisor in the background.
 
-This forks "gc supervisor run", verifies it became ready, and returns.
+On macOS this delegates to the registered launchd service; run "gc supervisor
+install" first when the service is not registered. On other platforms this
+starts "gc supervisor run" in the background. The command verifies that the
+supervisor became ready before returning.
 
 ```
 gc supervisor start [flags]

@@ -298,7 +298,30 @@ func runStartDriftCheck(cityPath string, stdout, stderr io.Writer) (int, bool) {
 		serviceName := supervisorSystemdServiceName()
 		systemdManaged := !delegated && supervisorSystemctlActive(serviceName)
 		launchdLabel := supervisorLaunchdLabel()
-		launchdManaged := !delegated && supervisorRuntimeGOOS == "darwin" && supervisorLaunchdActive(launchdLabel)
+		launchdManaged := false
+		if !delegated && supervisorRuntimeGOOS == "darwin" {
+			currentRegistered := supervisorLaunchdRegistered(launchdLabel)
+			legacyRegistered := legacySupervisorTargetsCurrentHome(legacySupervisorLaunchdPlistPath()) && supervisorLaunchdRegistered(defaultSupervisorLaunchdLabel)
+			currentOwns := currentRegistered && supervisorLaunchdPID(launchdLabel) == pid
+			legacyOwns := legacyRegistered && supervisorLaunchdPID(defaultSupervisorLaunchdLabel) == pid
+			switch {
+			case currentOwns && !legacyOwns:
+				launchdManaged = true
+			case legacyOwns && !currentOwns:
+				launchdLabel = defaultSupervisorLaunchdLabel
+				launchdManaged = true
+			case currentRegistered || legacyRegistered:
+				fmt.Fprintf(stderr, "error: cannot auto-restart supervisor: launchd ownership conflict: current and legacy registrations do not identify a unique owner for supervisor API PID %d\n", pid) //nolint:errcheck // best-effort stderr
+				return 1, false
+			}
+		}
+		if launchdManaged {
+			managerPID := supervisorLaunchdPID(launchdLabel)
+			if managerPID <= 0 || managerPID != pid {
+				fmt.Fprintf(stderr, "error: cannot auto-restart supervisor: launchd ownership mismatch: service %s reports PID %d but the supervisor API reports PID %d\n", launchdLabel, managerPID, pid) //nolint:errcheck // best-effort stderr
+				return 1, false
+			}
+		}
 		if exeErr != nil && !delegated && !systemdManaged && !launchdManaged {
 			// We can't safely auto-restart a supervisor whose
 			// /proc/<pid>/exe we can't read — the kernel readlink is
@@ -356,7 +379,8 @@ func runStartDriftCheck(cityPath string, stdout, stderr io.Writer) (int, bool) {
 			fmt.Fprintf(stderr, "error: supervisor restart failed: %v\n", restartErr) //nolint:errcheck // best-effort stderr
 			return 1, false
 		}
-		if delegated {
+		switch {
+		case delegated:
 			// A delegated try-restart can fall through a bounded CLI timeout
 			// (or restart the unit asynchronously) with systemd's restart job
 			// still in flight, so the OLD supervisor may keep answering
@@ -370,8 +394,14 @@ func runStartDriftCheck(cityPath string, stdout, stderr io.Writer) (int, bool) {
 				fmt.Fprintf(stderr, "%s\n", msg) //nolint:errcheck // best-effort stderr
 				return 1, false
 			}
-		} else {
-			// Wait for the new supervisor to come up.
+		case launchdManaged:
+			if msg := pollLaunchdRestartVerified(baseURL, pid, status.BuildID, commit, launchdLabel, driftReadyTimeout); msg != "" {
+				fmt.Fprintln(stdout)             //nolint:errcheck // best-effort stdout
+				fmt.Fprintf(stderr, "%s\n", msg) //nolint:errcheck // best-effort stderr
+				return 1, false
+			}
+		default:
+			// Wait for the new direct supervisor to come up.
 			if err := PollReady(newHTTPSupervisorClient(baseURL), driftReadyTimeout); err != nil {
 				fmt.Fprintln(stdout)                                                                                                                                                  //nolint:errcheck // best-effort stdout
 				fmt.Fprintf(stderr, "error: supervisor restart timed out after %s; check '%s' for details. Last known pid=%d.\n", driftReadyTimeout, supervisorStatusGuidance(), pid) //nolint:errcheck // best-effort stderr
@@ -448,6 +478,40 @@ func pollDelegatedRestartVerified(baseURL string, oldPID int, oldBuildID, localB
 				lastMsg = fmt.Sprintf("error: supervisor restarted by '%s' but still serves drifted build %s (local build %s); unit %s's ExecStart does not launch the updated gc binary — point the unit at the new binary, or fix the delegation env", d.commandHint("try-restart"), verifyStatus.BuildID, localBuildID, d.Unit)
 			default:
 				// Replaced and drift cleared.
+				return ""
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return lastMsg
+		}
+		time.Sleep(supervisorReadyPollInterval)
+	}
+}
+
+func pollLaunchdRestartVerified(baseURL string, oldPID int, oldBuildID, localBuildID, label string, readyTimeout time.Duration) string {
+	client := newHTTPSupervisorClient(baseURL)
+	deadline := time.Now().Add(readyTimeout)
+	var lastMsg string
+	for {
+		vctx, vcancel := context.WithTimeout(context.Background(), driftVerifyProbeTimeout)
+		verifyStatus, verifyErr := client.Status(vctx)
+		vcancel()
+		switch {
+		case verifyErr != nil:
+			lastMsg = fmt.Sprintf("error: cannot verify supervisor after launchd restart: %v; check '%s'", verifyErr, supervisorStatusGuidance())
+		default:
+			verifyPID := supervisorAliveHook()
+			managerPID := supervisorLaunchdPID(label)
+			switch {
+			case verifyPID <= 0 || managerPID != verifyPID:
+				lastMsg = fmt.Sprintf("error: launchd ownership mismatch after supervisor restart: service %s reports PID %d but the supervisor API reports PID %d", label, managerPID, verifyPID)
+			case strings.TrimSpace(localBuildID) == "" || strings.TrimSpace(verifyStatus.BuildID) == "":
+				lastMsg = fmt.Sprintf("error: missing build identity after launchd restart: service %s reported build %q while local build is %q", label, verifyStatus.BuildID, localBuildID)
+			case verifyPID == oldPID && verifyStatus.BuildID == oldBuildID:
+				lastMsg = fmt.Sprintf("error: supervisor was not replaced by launchd: PID %d still serving build %s", verifyPID, verifyStatus.BuildID)
+			case DetectBinaryDrift(localBuildID, verifyStatus):
+				lastMsg = fmt.Sprintf("error: supervisor restarted by launchd but still serves drifted build %s (local build %s); service %s must launch the updated gc binary", verifyStatus.BuildID, localBuildID, label)
+			default:
 				return ""
 			}
 		}
