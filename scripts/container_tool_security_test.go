@@ -158,6 +158,27 @@ func TestAgentImageRebuildsBDAndGCWithPatchedGRPC(t *testing.T) {
 
 func TestMCPMailImagePinsPatchedPythonDependencies(t *testing.T) {
 	root := repoRoot(t)
+	dockerfile := readFile(t, root, "contrib/k8s/Dockerfile.mail")
+	for _, packageName := range []string{
+		"bsdutils",
+		"libblkid1",
+		"liblastlog2-2",
+		"libmount1",
+		"libsmartcols1",
+		"libuuid1",
+		"login",
+		"mount",
+		"util-linux",
+	} {
+		want := "\n    " + packageName + " \\"
+		if !strings.Contains(dockerfile, want) {
+			t.Errorf("contrib/k8s/Dockerfile.mail missing exact util-linux security upgrade line %q", want)
+		}
+	}
+	versionGuard := `dpkg --compare-versions "$(dpkg-query -W -f='${Version}' util-linux)" ge '2.41.5-0+deb13u1'`
+	if !strings.Contains(dockerfile, versionGuard) {
+		t.Errorf("contrib/k8s/Dockerfile.mail missing util-linux artifact version guard %q", versionGuard)
+	}
 	input := readFile(t, root, ".github/requirements/mcp-agent-mail.in")
 	for _, want := range []string{
 		"gitpython>=3.1.57",
@@ -225,11 +246,10 @@ func TestRebuiltToolsAssertPatchedDependencyArtifacts(t *testing.T) {
 	}
 }
 
-// TestTrivyIgnoreDoesNotWaiveCleanContainerTools prevents the image scan from
-// masking regressions in source-rebuilt gh, Dolt, and bd or in the current
-// checksum-verified kubectl release. gc's module-version-sensitive waivers are
-// enforced separately by TestTrivyIgnoreDropsGCModuleWaiversPastThreshold.
-func TestTrivyIgnoreDoesNotWaiveCleanContainerTools(t *testing.T) {
+// TestTrivyIgnoreRemainsEmpty prevents unscoped or globbed waivers from
+// masking regressions in any image layer. Add a narrower policy test before
+// introducing a future reviewed exception.
+func TestTrivyIgnoreRemainsEmpty(t *testing.T) {
 	root := repoRoot(t)
 
 	var doc struct {
@@ -242,19 +262,8 @@ func TestTrivyIgnoreDoesNotWaiveCleanContainerTools(t *testing.T) {
 		t.Fatalf("parsing .trivyignore.yaml: %v", err)
 	}
 
-	cleanPaths := map[string]bool{
-		"usr/local/bin/bd":      true,
-		"usr/local/bin/dolt":    true,
-		"usr/local/bin/kubectl": true,
-		"usr/bin/gh":            true,
-	}
-
-	for _, v := range doc.Vulnerabilities {
-		for _, p := range v.Paths {
-			if cleanPaths[p] {
-				t.Errorf("%s still waives clean container tool %q; drop the path so the image scan proves the binary remains clean", v.ID, p)
-			}
-		}
+	if len(doc.Vulnerabilities) != 0 {
+		t.Fatalf(".trivyignore.yaml contains %d vulnerability waiver(s), want none", len(doc.Vulnerabilities))
 	}
 }
 
