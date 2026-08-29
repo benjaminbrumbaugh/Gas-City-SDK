@@ -86,6 +86,42 @@ func TestContainerCLIToolsRebuildWithPatchedDependencies(t *testing.T) {
 	}
 }
 
+func TestContainerToolBuildersUsePinnedGoCompiler(t *testing.T) {
+	const goVersion = "1.26.6"
+
+	root := repoRoot(t)
+	base := readFile(t, root, "contrib/k8s/Dockerfile.base")
+	for _, want := range []string{
+		"ARG GO_VERSION=" + goVersion,
+		"FROM golang:${GO_VERSION}-bookworm@sha256:",
+		"ENV GOTOOLCHAIN=local",
+		`go version -m /out/gh | grep -Fq "/out/gh: go${GO_VERSION}"`,
+		`go version -m /out/dolt | grep -Fq "/out/dolt: go${GO_VERSION}"`,
+	} {
+		if !strings.Contains(base, want) {
+			t.Errorf("contrib/k8s/Dockerfile.base does not bind rebuilt tools to the pinned Go compiler; missing %q", want)
+		}
+	}
+	if got := strings.Count(base, "ARG GO_VERSION"); got != 2 {
+		t.Errorf("contrib/k8s/Dockerfile.base declares GO_VERSION %d times, want global pin plus tool-builder redeclaration", got)
+	}
+
+	agent := readFile(t, root, "contrib/k8s/Dockerfile.agent")
+	for _, want := range []string{
+		"ARG GO_VERSION=" + goVersion,
+		"FROM golang:${GO_VERSION}-bookworm@sha256:",
+		"ENV GOTOOLCHAIN=local",
+		`go version -m /out/bd | grep -Fq "/out/bd: go${GO_VERSION}"`,
+	} {
+		if !strings.Contains(agent, want) {
+			t.Errorf("contrib/k8s/Dockerfile.agent does not bind bd to the pinned Go compiler; missing %q", want)
+		}
+	}
+	if got := strings.Count(agent, "ARG GO_VERSION"); got != 2 {
+		t.Errorf("contrib/k8s/Dockerfile.agent declares GO_VERSION %d times, want global pin plus bd-builder redeclaration", got)
+	}
+}
+
 func TestAgentImageRebuildsBDAndGCWithPatchedGRPC(t *testing.T) {
 	const (
 		bdSourceRef    = "869020c2213db2bfd9e1ba0aa54c7e60d52e5f2c"
