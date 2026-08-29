@@ -18,6 +18,7 @@ func TestContainerCLIToolsRebuildWithPatchedDependencies(t *testing.T) {
 		ghSourceDateEpoch         = "1787263311"
 		ghXModVersion             = "0.40.0"
 		ghXTextVersion            = "0.41.0"
+		kubectlVersion            = "v1.37.0"
 		doltThriftVersion         = "0.23.0"
 		doltXNetVersion           = "0.56.0"
 		doltXTextVersion          = "0.39.0"
@@ -28,7 +29,8 @@ func TestContainerCLIToolsRebuildWithPatchedDependencies(t *testing.T) {
 		doltICUStaticSHA256       = "8b0234f16da73b9c8d47f86eeef98928879611149e3ee1bb560dddb0ffdd95a1"
 	)
 
-	dockerfile := readFile(t, repoRoot(t), "contrib/k8s/Dockerfile.base")
+	root := repoRoot(t)
+	dockerfile := readFile(t, root, "contrib/k8s/Dockerfile.base")
 	for _, want := range []string{
 		"ARG GH_VERSION=" + ghVersion,
 		"ARG GH_SOURCE_REF=" + ghSourceRef,
@@ -66,6 +68,10 @@ func TestContainerCLIToolsRebuildWithPatchedDependencies(t *testing.T) {
 	}
 	if got := strings.Count(dockerfile, `go get "google.golang.org/grpc@v${GRPC_VERSION}"`); got != 2 {
 		t.Errorf("contrib/k8s/Dockerfile.base applies the grpc override %d times, want exactly 2 (gh and Dolt)", got)
+	}
+	controller := readFile(t, root, "contrib/k8s/Dockerfile.controller")
+	if !strings.Contains(controller, "ARG KUBECTL_VERSION="+kubectlVersion) {
+		t.Errorf("contrib/k8s/Dockerfile.controller must pin kubectl %s", kubectlVersion)
 	}
 
 	for _, forbidden := range []string{
@@ -219,17 +225,11 @@ func TestRebuiltToolsAssertPatchedDependencyArtifacts(t *testing.T) {
 	}
 }
 
-// TestTrivyIgnoreDropsStdlibWaiversForRebuiltTools enforces that the rebuilt-from-
-// source tools (bd, dolt, gh) carry no Go-stdlib CVE waiver. The image build rebuilds
-// them with the Go 1.26.5 toolchain, which fixes every stdlib CVE listed, so a waiver
-// on those paths would let the scan gate keep masking a regressed rebuild instead of
-// proving the fix holds. CVE-2026-56852 is the one explicit non-stdlib exception:
-// the pinned gh and Dolt sources, plus external kubectl, still select vulnerable x/text
-// versions. The residual
-// x/net / x/crypto module waivers that bd and dolt legitimately keep (external binaries
-// the grpc-only rebuild does not touch) are out of scope here; gc's x/net / x/crypto
-// module waivers are enforced separately by TestTrivyIgnoreDropsGCModuleWaiversPastThreshold.
-func TestTrivyIgnoreDropsStdlibWaiversForRebuiltTools(t *testing.T) {
+// TestTrivyIgnoreDoesNotWaiveCleanContainerTools prevents the image scan from
+// masking regressions in source-rebuilt gh, Dolt, and bd or in the current
+// checksum-verified kubectl release. gc's module-version-sensitive waivers are
+// enforced separately by TestTrivyIgnoreDropsGCModuleWaiversPastThreshold.
+func TestTrivyIgnoreDoesNotWaiveCleanContainerTools(t *testing.T) {
 	root := repoRoot(t)
 
 	var doc struct {
@@ -242,47 +242,17 @@ func TestTrivyIgnoreDropsStdlibWaiversForRebuiltTools(t *testing.T) {
 		t.Fatalf("parsing .trivyignore.yaml: %v", err)
 	}
 
-	rebuiltPaths := map[string]bool{
-		"usr/local/bin/bd":   true,
-		"usr/local/bin/dolt": true,
-		"usr/bin/gh":         true,
+	cleanPaths := map[string]bool{
+		"usr/local/bin/bd":      true,
+		"usr/local/bin/dolt":    true,
+		"usr/local/bin/kubectl": true,
+		"usr/bin/gh":            true,
 	}
-	stdlibCVEs := map[string]bool{
-		"CVE-2026-33811": true, "CVE-2026-33814": true, "CVE-2026-39820": true,
-		"CVE-2026-39822": true, "CVE-2026-39823": true, "CVE-2026-39825": true,
-		"CVE-2026-39826": true, "CVE-2026-39836": true, "CVE-2026-42499": true,
-		"CVE-2026-42504": true, "CVE-2026-27145": true,
-	}
-	allowedXTextWaivers := map[string]map[string]bool{
-		"CVE-2026-56852": {
-			"usr/bin/gh":            true,
-			"usr/local/bin/dolt":    true,
-			"usr/local/bin/kubectl": true,
-		},
-	}
-	foundAllowed := map[string]map[string]bool{}
 
 	for _, v := range doc.Vulnerabilities {
 		for _, p := range v.Paths {
-			if stdlibCVEs[v.ID] && rebuiltPaths[p] {
-				t.Errorf("%s still waives rebuilt tool %q for a Go-stdlib CVE the 1.26.5 rebuild clears; drop the path so the scan proves the fix stays effective", v.ID, p)
-			}
-			if allowedPaths, ok := allowedXTextWaivers[v.ID]; ok && allowedPaths[p] {
-				if foundAllowed[v.ID] == nil {
-					foundAllowed[v.ID] = map[string]bool{}
-				}
-				foundAllowed[v.ID][p] = true
-				continue
-			}
-			if p == "usr/bin/gh" {
-				t.Errorf("%s waives rebuilt gh without a reviewed module-specific exception", v.ID)
-			}
-		}
-	}
-	for cve, paths := range allowedXTextWaivers {
-		for path := range paths {
-			if !foundAllowed[cve][path] {
-				t.Errorf(".trivyignore.yaml must retain the reviewed %s waiver for %s until that source updates golang.org/x/text", cve, path)
+			if cleanPaths[p] {
+				t.Errorf("%s still waives clean container tool %q; drop the path so the image scan proves the binary remains clean", v.ID, p)
 			}
 		}
 	}
