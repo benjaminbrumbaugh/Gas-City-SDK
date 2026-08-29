@@ -36,6 +36,7 @@ service-secrets-perms
 skill-collision
 skill-dangling-sink
 order-firing-current
+order-outcome-healthy
 codex-hooks-drift
 rig-pack-coverage
 pack-runtimes
@@ -64,6 +65,7 @@ session-hold-stall
 run-target-routed-to-backfill
 route-recovery-quarantine
 hold-label-routed-to
+pool-idle-routed-work
 work-option-metadata-migration
 backlog-depth
 order-tracking-retention

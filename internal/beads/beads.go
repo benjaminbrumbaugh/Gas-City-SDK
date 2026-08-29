@@ -207,36 +207,6 @@ type ConditionalWriter interface {
 	CompareAndSetMetadataKey(id, key, expected, next string) (bool, error)
 }
 
-// ConditionalCloseWriter is the narrow capability for an atomic terminal close
-// that is fenced by the bead's opaque revision and can stamp terminal metadata
-// in the same backend transaction. It is deliberately separate from
-// ConditionalWriter: a backend may be able to fence this close without safely
-// claiming every update/delete/CAS verb in the broader interface.
-type ConditionalCloseWriter interface {
-	CloseWithMetadataIfMatch(id string, expectedRevision int64, metadata map[string]string) error
-}
-
-// ErrNotClosableForConditionalClose reports that the revision still matched but
-// a live blocker/dependency made the issue ineligible for terminal close.
-var ErrNotClosableForConditionalClose = errors.New("conditional close: issue is not closable")
-
-// ConditionalCloseWriterFor returns the narrow guarded-close capability from a
-// store or wrapper-declared resolution target. It never falls back to an
-// unconditional close.
-func ConditionalCloseWriterFor(store Store) (ConditionalCloseWriter, bool) {
-	if store == nil {
-		return nil, false
-	}
-	if writer, ok := store.(ConditionalCloseWriter); ok {
-		return writer, true
-	}
-	resolved := followConditionalWritesResolveTarget(store)
-	if writer, ok := resolved.(ConditionalCloseWriter); ok {
-		return writer, true
-	}
-	return nil, false
-}
-
 // ReadyConditionalWriter atomically evaluates controller readiness and applies
 // opts only when the bead is still ready and at expectedRevision. Unlike
 // ConditionalWriter, it covers dependency/defer/block projections that may
@@ -290,12 +260,73 @@ func readyConditionalWriterFrom(value any) (ReadyConditionalWriter, bool) {
 	return nil, false
 }
 
+// AtomicConditionalCloser closes a bead and merges metadata only when the
+// bead's revision still equals expectedRevision. Implementations commit the
+// metadata and close together, or neither change persists.
+type AtomicConditionalCloser interface {
+	CloseWithMetadataIfMatch(id string, expectedRevision int64, metadata map[string]string) (Bead, error)
+}
+
+// ErrNotClosableForConditionalClose reports that the revision still matched but
+// the issue was not open or a live dependency made it ineligible to close.
+var ErrNotClosableForConditionalClose = errors.New("conditional close: issue is not closable")
+
+// AtomicConditionalCloserHandleProvider lets a wrapper expose the atomic
+// terminal-write capability of its resolved backing.
+type AtomicConditionalCloserHandleProvider interface {
+	AtomicConditionalCloserHandle() (AtomicConditionalCloser, bool)
+}
+
+// AtomicConditionalCloserFor returns the atomic terminal-write capability when
+// the resolved backing store implements it.
+func AtomicConditionalCloserFor(store Store) (AtomicConditionalCloser, bool) {
+	if store == nil {
+		return nil, false
+	}
+	store = followConditionalWritesResolveTarget(store)
+	if provider, ok := store.(AtomicConditionalCloserHandleProvider); ok {
+		return provider.AtomicConditionalCloserHandle()
+	}
+	closer, ok := store.(AtomicConditionalCloser)
+	return closer, ok
+}
+
 // ErrEmptyConditionalUpdate reports an UpdateIfMatch with no fields to apply.
 // The three in-tree implementations diverged here (bd cannot express an empty
 // fenced update; the native stores validated-and-bumped), so the contract is
 // pinned as invalid input: an empty fenced update neither evaluates the fence
 // nor bumps the revision on ANY store.
 var ErrEmptyConditionalUpdate = errors.New("conditional update: empty UpdateOpts (nothing to apply)")
+
+// ConditionalUpdateFieldUnsupportedError reports an UpdateIfMatch option that
+// is not row-backed across every ConditionalWriter implementation.
+type ConditionalUpdateFieldUnsupportedError struct {
+	Field string
+}
+
+func (e *ConditionalUpdateFieldUnsupportedError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("conditional update: %s is not supported with revision matching", e.Field)
+}
+
+// validateConditionalUpdateOpts rejects fields that cannot be persisted within
+// the same revision-fenced mutation.
+func validateConditionalUpdateOpts(o UpdateOpts) error {
+	switch {
+	case o.ParentID != nil:
+		return &ConditionalUpdateFieldUnsupportedError{Field: "parent_id"}
+	case len(o.Labels) > 0:
+		return &ConditionalUpdateFieldUnsupportedError{Field: "labels"}
+	case len(o.RemoveLabels) > 0:
+		return &ConditionalUpdateFieldUnsupportedError{Field: "remove_labels"}
+	case isEmptyUpdateOpts(o):
+		return ErrEmptyConditionalUpdate
+	default:
+		return nil
+	}
+}
 
 // isEmptyUpdateOpts reports whether opts carries no mutation at all.
 func isEmptyUpdateOpts(o UpdateOpts) bool {

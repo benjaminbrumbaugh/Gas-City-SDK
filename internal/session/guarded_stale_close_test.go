@@ -13,15 +13,18 @@ type guardedCloseTestStore struct {
 	*beads.MemStore
 }
 
-func (s *guardedCloseTestStore) CloseWithMetadataIfMatch(id string, revision int64, metadata map[string]string) error {
+func (s *guardedCloseTestStore) CloseWithMetadataIfMatch(id string, revision int64, metadata map[string]string) (beads.Bead, error) {
 	if err := s.UpdateIfMatch(id, revision, beads.UpdateOpts{Metadata: metadata}); err != nil {
-		return err
+		return beads.Bead{}, err
 	}
 	updated, err := s.Get(id)
 	if err != nil {
-		return err
+		return beads.Bead{}, err
 	}
-	return s.CloseIfMatch(id, updated.Revision)
+	if err := s.CloseIfMatch(id, updated.Revision); err != nil {
+		return beads.Bead{}, err
+	}
+	return s.Get(id)
 }
 
 func TestDecideGuardedStaleCloseRequiresExactStaleSnapshot(t *testing.T) {

@@ -3983,7 +3983,7 @@ source = "../shared"
 transitive = false
 `)
 
-	names := resolvedPackNames([]string{"packs/wrapper"}, map[string]Import{
+	names := mustResolvedPackNames(t, []string{"packs/wrapper"}, map[string]Import{
 		"shared": {Source: "packs/shared"},
 	}, fsys.OSFS{}, dir)
 
@@ -4010,7 +4010,7 @@ source = "../maintenance"
 `)
 
 	transitiveFalse := false
-	names := resolvedPackNames(nil, map[string]Import{
+	names := mustResolvedPackNames(t, nil, map[string]Import{
 		"shared": {Source: "packs/shared", Transitive: &transitiveFalse},
 	}, fsys.OSFS{}, dir)
 
@@ -4048,7 +4048,7 @@ source = "../middle"
 transitive = false
 `)
 
-	names := resolvedPackNames([]string{"packs/root"}, nil, fsys.OSFS{}, dir)
+	names := mustResolvedPackNames(t, []string{"packs/root"}, nil, fsys.OSFS{}, dir)
 	if !names["middle"] {
 		t.Fatalf("middle pack was not recorded: names=%v", names)
 	}
@@ -4095,7 +4095,7 @@ source = "../middle"
 		{"packs/shallow", "packs/deep"},
 		{"packs/deep", "packs/shallow"},
 	} {
-		names := resolvedPackNames(includes, nil, fsys.OSFS{}, dir)
+		names := mustResolvedPackNames(t, includes, nil, fsys.OSFS{}, dir)
 		if !names["maintenance"] {
 			t.Fatalf("includes %v did not resolve transitive maintenance after shallow visit: names=%v", includes, names)
 		}
@@ -4114,7 +4114,7 @@ schema = 2
 
 		transitiveFalse := false
 		countingFS := newReadCountingFS()
-		names := resolvedPackNames(nil, map[string]Import{
+		names := mustResolvedPackNames(t, nil, map[string]Import{
 			"shared_a": {Source: "packs/shared", Transitive: &transitiveFalse},
 			"shared_b": {Source: "packs/shared", Transitive: &transitiveFalse},
 		}, countingFS, dir)
@@ -4164,7 +4164,7 @@ source = "../right"
 `)
 
 		countingFS := newReadCountingFS()
-		names := resolvedPackNames([]string{"packs/root"}, nil, countingFS, dir)
+		names := mustResolvedPackNames(t, []string{"packs/root"}, nil, countingFS, dir)
 
 		for _, name := range []string{"root", "left", "right", "shared"} {
 			if !names[name] {
@@ -5975,4 +5975,19 @@ source = "../roles"
 	if !found {
 		t.Fatalf("warnings = %#v, want one containing %q", loaded.Warnings, wantSubstring)
 	}
+}
+
+// mustResolvedPackNames is resolvedPackNames for the blocking callers above.
+// They wait out contention, so the only error class they can hit is a new one
+// the walk grows later. Asserting that here keeps such an error from being
+// silently discarded and turning those assertions into claims about a
+// half-walked graph. The non-blocking mode has its own tests, which care about
+// the error rather than the names.
+func mustResolvedPackNames(t *testing.T, includes []string, imports map[string]Import, sysFS fsys.FS, cityRoot string) map[string]bool {
+	t.Helper()
+	names, err := resolvedPackNames(includes, imports, sysFS, cityRoot, false)
+	if err != nil {
+		t.Fatalf("resolvedPackNames: %v", err)
+	}
+	return names
 }

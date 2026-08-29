@@ -7,15 +7,15 @@ import (
 	"github.com/gastownhall/gascity/internal/rollout/gate"
 )
 
-func TestNativeDoltStoreConditionalCloseIsNarrowAndRevisionFenced(t *testing.T) {
+func TestNativeDoltStoreAtomicConditionalCloseIsRevisionFenced(t *testing.T) {
 	store := newNativeDoltStoreForTest(newNativeDoltMemStorage())
 	store.stampConditionalWritesMode(gate.Require, false)
-	closer, ok := ConditionalCloseWriterFor(store)
+	closer, ok := AtomicConditionalCloserFor(store)
 	if !ok {
-		t.Fatal("NativeDoltStore does not resolve ConditionalCloseWriter")
+		t.Fatal("NativeDoltStore does not resolve AtomicConditionalCloser")
 	}
-	if _, ok := ConditionalWriterFor(store); ok {
-		t.Fatal("NativeDoltStore unexpectedly resolves broader ConditionalWriter")
+	if _, ok := ConditionalWriterFor(store); !ok {
+		t.Fatal("NativeDoltStore does not resolve ConditionalWriter")
 	}
 
 	created, err := store.Create(Bead{
@@ -33,7 +33,7 @@ func TestNativeDoltStoreConditionalCloseIsNarrowAndRevisionFenced(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if err := closer.CloseWithMetadataIfMatch(current.ID, current.Revision, map[string]string{
+	if _, err := closer.CloseWithMetadataIfMatch(current.ID, current.Revision, map[string]string{
 		"state":      "operator-stale",
 		"held_until": "",
 	}); err != nil {
@@ -54,9 +54,9 @@ func TestNativeDoltStoreConditionalCloseIsNarrowAndRevisionFenced(t *testing.T) 
 func TestNativeDoltStoreConditionalCloseRejectsStaleOrBlocked(t *testing.T) {
 	store := newNativeDoltStoreForTest(newNativeDoltMemStorage())
 	store.stampConditionalWritesMode(gate.Require, false)
-	closer, ok := ConditionalCloseWriterFor(store)
+	closer, ok := AtomicConditionalCloserFor(store)
 	if !ok {
-		t.Fatal("NativeDoltStore does not resolve ConditionalCloseWriter")
+		t.Fatal("NativeDoltStore does not resolve AtomicConditionalCloser")
 	}
 
 	stale, err := store.Create(Bead{Title: "stale revision", Metadata: map[string]string{"state": "asleep"}})
@@ -71,7 +71,7 @@ func TestNativeDoltStoreConditionalCloseRejectsStaleOrBlocked(t *testing.T) {
 	if err := store.Update(stale.ID, UpdateOpts{Title: &changed}); err != nil {
 		t.Fatalf("Update stale: %v", err)
 	}
-	if err := closer.CloseWithMetadataIfMatch(stale.ID, snapshot.Revision, map[string]string{"state": "operator-stale"}); err == nil {
+	if _, err := closer.CloseWithMetadataIfMatch(stale.ID, snapshot.Revision, map[string]string{"state": "operator-stale"}); err == nil {
 		t.Fatal("stale revision close succeeded")
 	} else {
 		var pfe *PreconditionFailedError
@@ -102,7 +102,7 @@ func TestNativeDoltStoreConditionalCloseRejectsStaleOrBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get blocked: %v", err)
 	}
-	if err := closer.CloseWithMetadataIfMatch(blocked.ID, blockedCurrent.Revision, map[string]string{"state": "operator-stale"}); !errors.Is(err, ErrNotClosableForConditionalClose) {
+	if _, err := closer.CloseWithMetadataIfMatch(blocked.ID, blockedCurrent.Revision, map[string]string{"state": "operator-stale"}); !errors.Is(err, ErrNotClosableForConditionalClose) {
 		t.Fatalf("blocked close error = %v, want ErrNotClosableForConditionalClose", err)
 	}
 	blockedFinal, err := store.Get(blocked.ID)
@@ -125,7 +125,7 @@ func TestNativeDoltStoreConditionalCloseRejectsStaleOrBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get non-open: %v", err)
 	}
-	if err := closer.CloseWithMetadataIfMatch(nonOpen.ID, nonOpenCurrent.Revision, map[string]string{"state": "operator-stale"}); !errors.Is(err, ErrNotClosableForConditionalClose) {
+	if _, err := closer.CloseWithMetadataIfMatch(nonOpen.ID, nonOpenCurrent.Revision, map[string]string{"state": "operator-stale"}); !errors.Is(err, ErrNotClosableForConditionalClose) {
 		t.Fatalf("non-open close error = %v, want ErrNotClosableForConditionalClose", err)
 	}
 	nonOpenFinal, err := store.Get(nonOpen.ID)

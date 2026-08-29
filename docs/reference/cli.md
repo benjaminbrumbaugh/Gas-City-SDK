@@ -823,7 +823,10 @@ gc context add <name> [flags]
 |------|------|---------|-------------|
 | `--ca-file` | string |  | PEM CA bundle to verify the server certificate |
 | `--city` | string |  | remote city name (default: &lt;name&gt;) |
+| `--credential-audience` | string |  | credential provider audience (provider mode) |
 | `--credential-command` | string |  | command that mints a transport bearer (edge/proxy fronted) |
+| `--credential-org` | string |  | optional credential provider organization (provider mode) |
+| `--credential-required-scopes` | string |  | JSON array of required credential scopes (provider mode) |
 | `--grant-command` | string |  | command that mints an X-GC-City-Write grant (direct hardened self-host) |
 | `--insecure-skip-verify` | bool |  | skip TLS verification (dev only) |
 | `--timeout` | string |  | REST request timeout, e.g. 120s (never applied to SSE streams) |
@@ -2040,10 +2043,14 @@ gc hook [agent] [flags]
 Prints the work bead this session most recently claimed with gc hook --claim.
 
 The claim protocol stamps the claimed bead id onto the calling session's own
-bead, because a pool session's shell never receives $GC_BEAD_ID or
-$GC_TRIGGER_BEAD_ID — those exist only in the controller's dispatch condition
-environment. A formula step that must close the bead it is running reads it back
-here:
+bead, because the environment alone cannot reliably name it: $GC_BEAD_ID exists
+only in the controller's dispatch condition environment, never in a session
+shell, and $GC_TRIGGER_BEAD_ID — exported to demand-spawned pool seats as a
+pool-level spawn marker — is absent on other seats (e.g. a warm seat bound
+after start) and never decides what a session claims; the pool is pull. It
+appears in the chain below only as a name fallback for work already claimed:
+for a vapor wisp the trigger IS the work bead. A formula step that must close
+the bead it is running reads the stamp back here:
 
     BEAD_ID="$&#123;GC_BEAD_ID:-$&#123;GC_TRIGGER_BEAD_ID:-$(gc hook current --id-only)&#125;&#125;"
 
@@ -3598,9 +3605,11 @@ same name.
 Use --name to set the rig name explicitly (default: directory basename).
 Use --prefix to set the bead ID prefix explicitly (default: derived from name).
 Use --default-branch to set the rig's mainline branch explicitly. By default,
-gc rig add probes the repo's origin/HEAD (and falls back to the currently
-checked-out branch) and stores the result in city.toml so polecats and the
-refinery target the right branch without manual metadata patching.
+gc rig add probes the repo's remote HEADs — origin first, then any other
+configured remote — and falls back to the currently checked-out branch, then
+stores the result in city.toml so polecats and the refinery target the right
+branch without manual metadata patching. The banner reports which remote
+answered, or says the branch was inferred when no remote HEAD is set.
 Use --start-suspended to add the rig in a suspended state (dormant-by-default).
 The rig's agents won't spawn until explicitly resumed with "gc rig resume".
 
@@ -3631,7 +3640,8 @@ gc rig add /path/to/existing --adopt
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--adopt` | bool |  | adopt existing .beads/ directory (skip init) |
-| `--default-branch` | string |  | mainline branch (default: auto-detect from origin/HEAD or current branch) |
+| `--allow-ephemeral` | bool |  | register the rig even though its path is on a filesystem that does not survive a restart |
+| `--default-branch` | string |  | mainline branch (default: auto-detect from a remote HEAD — origin preferred — or the current branch) |
 | `--git-url` | string |  | git URL to clone into a new rig on a REMOTE city (server-side provisioning) |
 | `--include` | stringArray |  | pack source or pack name for rig agents (repeatable; writes canonical rig imports) |
 | `--json` | bool |  | Output in JSONL format |

@@ -10,18 +10,18 @@ import (
 	beadslib "github.com/steveyegge/beads"
 )
 
-// TestNativeDoltStoreDeclaresReadyConditionalWriter pins the narrow capability
-// needed by routing admission: an atomic readiness-and-row-version update. It
-// remains deliberately distinct from ConditionalWriter because the upstream
-// row version has a narrower mutation coverage than that broader contract.
+// TestNativeDoltStoreDeclaresReadyConditionalWriter pins the readiness-specific
+// capability needed by routing admission. NativeDoltStore also implements the
+// broader row-version ConditionalWriter contract now that upstream validates
+// and rejects mutations that cannot be fenced atomically.
 func TestNativeDoltStoreDeclaresReadyConditionalWriter(t *testing.T) {
 	store := newNativeDoltStoreForTest(newNativeDoltMemStorage())
 	store.stampConditionalWritesMode(gate.Require, false)
 	if _, ok := ReadyConditionalWriterFor(store); !ok {
 		t.Fatal("NativeDoltStore does not resolve ReadyConditionalWriter")
 	}
-	if _, ok := ConditionalWriterFor(store); ok {
-		t.Fatal("NativeDoltStore unexpectedly resolves broader ConditionalWriter")
+	if _, ok := ConditionalWriterFor(store); !ok {
+		t.Fatal("NativeDoltStore does not resolve ConditionalWriter")
 	}
 }
 

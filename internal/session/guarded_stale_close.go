@@ -110,10 +110,11 @@ func (s *Store) CloseGuardedStaleSession(id string, req GuardedStaleCloseRequest
 	}
 	metadata["state_reason"] = "operator-stale"
 	metadata["operator_close_reason"] = strings.TrimSpace(req.Reason)
-	return writer.CloseWithMetadataIfMatch(id, req.ExpectedRevision, metadata)
+	_, err = writer.CloseWithMetadataIfMatch(id, req.ExpectedRevision, metadata)
+	return err
 }
 
-func (s *Store) guardedStaleCloseWriter(id string, req GuardedStaleCloseRequest) (beads.ConditionalCloseWriter, error) {
+func (s *Store) guardedStaleCloseWriter(id string, req GuardedStaleCloseRequest) (beads.AtomicConditionalCloser, error) {
 	if s == nil || !s.Backed() {
 		return nil, errors.New("guarded stale close session store unavailable")
 	}
@@ -147,7 +148,7 @@ func (s *Store) guardedStaleCloseWriter(id string, req GuardedStaleCloseRequest)
 	if err := DecideGuardedStaleClose(facts); err != nil {
 		return nil, err
 	}
-	writer, ok := beads.ConditionalCloseWriterFor(s.store.Store)
+	writer, ok := beads.AtomicConditionalCloserFor(s.store.Store)
 	if !ok {
 		return nil, beads.ErrConditionalWriteUnsupported
 	}
