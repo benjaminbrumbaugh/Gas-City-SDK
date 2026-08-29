@@ -86,9 +86,7 @@ var hostSystemctlDirs = []string{
 }
 
 // delegatedSystemctlPath resolves the systemctl binary the delegated
-// paths exec. Delegated paths intentionally bypass the
-// supervisorSystemctlRun hook (see delegatedUnitActive), so the PATH
-// shim is the only test seam; this resolver backstops it by refusing —
+// paths exec. This resolver backstops the explicit test hook by refusing —
 // in test binaries only — to return the host's real systemctl. Same
 // must-defend hazard class as guardSupervisorSocketDir: a test that
 // reaches a delegated exec without the shim installed would stop or
@@ -103,6 +101,11 @@ func delegatedSystemctlPath() string {
 	guardDelegatedSystemctlPath(resolved)
 	return resolved
 }
+
+// delegatedSystemctlPathHook lets tests bind delegated lifecycle calls to
+// their exact argv-recording shim instead of relying on process-global PATH.
+// Production retains delegatedSystemctlPath and its host-systemctl guard.
+var delegatedSystemctlPathHook = delegatedSystemctlPath
 
 // guardDelegatedSystemctlPath panics when a test binary resolved
 // systemctl into a host system directory instead of a test-installed
@@ -210,7 +213,7 @@ func delegatedUnitActive(d systemdDelegation) bool {
 		ctx, cancel = context.WithTimeout(ctx, delegatedIsActiveTimeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, delegatedSystemctlPath(), d.systemctlIsActiveArgs()...)
+	cmd := exec.CommandContext(ctx, delegatedSystemctlPathHook(), d.systemctlIsActiveArgs()...)
 	// Don't let an inherited pipe from a systemctl child stretch the wait
 	// past the kill the context deadline triggers.
 	cmd.WaitDelay = time.Second
@@ -264,7 +267,7 @@ func runDelegatedSystemctlTimeout(d systemdDelegation, verb string, timeout time
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, delegatedSystemctlPath(), args...)
+	cmd := exec.CommandContext(ctx, delegatedSystemctlPathHook(), args...)
 	// Don't let an inherited pipe from a systemctl child stretch the wait
 	// past the kill triggered by the context deadline.
 	cmd.WaitDelay = time.Second

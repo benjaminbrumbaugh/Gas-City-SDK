@@ -18,6 +18,13 @@ import (
 	"time"
 )
 
+func bindDelegatedSystemctlPath(t *testing.T, path string) {
+	t.Helper()
+	old := delegatedSystemctlPathHook
+	delegatedSystemctlPathHook = func() string { return path }
+	t.Cleanup(func() { delegatedSystemctlPathHook = old })
+}
+
 // installFakeDelegatedSystemctl writes an executable `systemctl` shim into a fresh
 // temp dir, prepends that dir to PATH, and returns the path of the file
 // the shim appends its argv into (one line per invocation). The shim
@@ -44,9 +51,11 @@ func installFakeDelegatedSystemctlWithUnitState(t *testing.T, exitCode int, stde
 		script += fmt.Sprintf("echo %q >&2\n", stderrMsg)
 	}
 	script += fmt.Sprintf("exit %d\n", exitCode)
-	if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte(script), 0o755); err != nil {
+	systemctlPath := filepath.Join(dir, "systemctl")
+	if err := os.WriteFile(systemctlPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("writing fake systemctl: %v", err)
 	}
+	bindDelegatedSystemctlPath(t, systemctlPath)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return argsFile
 }
@@ -70,9 +79,11 @@ func installFakeDelegatedSystemctlHangingVerbWithUnitState(t *testing.T, verb st
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "systemctl-args")
 	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %q\ncase \" $* \" in *\" is-active \"*) exit %d ;; *\" %s \"*) exec sleep 5 ;; esac\nexit 0\n", argsFile, isActiveExit, verb)
-	if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte(script), 0o755); err != nil {
+	systemctlPath := filepath.Join(dir, "systemctl")
+	if err := os.WriteFile(systemctlPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("writing fake systemctl: %v", err)
 	}
+	bindDelegatedSystemctlPath(t, systemctlPath)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return argsFile
 }
@@ -87,9 +98,11 @@ func installFakeDelegatedSystemctlHangingStartAndIsActive(t *testing.T) {
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "systemctl-args")
 	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %q\ncase \" $* \" in *\" is-active \"*) exec sleep 5 ;; *\" start \"*) exec sleep 5 ;; esac\nexit 0\n", argsFile)
-	if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte(script), 0o755); err != nil {
+	systemctlPath := filepath.Join(dir, "systemctl")
+	if err := os.WriteFile(systemctlPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("writing fake systemctl: %v", err)
 	}
+	bindDelegatedSystemctlPath(t, systemctlPath)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
