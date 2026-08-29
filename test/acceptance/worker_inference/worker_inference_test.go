@@ -3512,7 +3512,7 @@ func runFreshNamedSessionTurn(t *testing.T, provider, identity, prompt, outputRe
 	nudgeTimedOut := isRunTimeout(err)
 	outputPath := filepath.Join(c.Dir, outputRel)
 	if err != nil && !nudgeTimedOut {
-		return inferenceSessionRun{
+		failedRun := inferenceSessionRun{
 			CityDir:      c.Dir,
 			Identity:     identity,
 			SessionID:    sessionInfo.ID,
@@ -3521,7 +3521,8 @@ func runFreshNamedSessionTurn(t *testing.T, provider, identity, prompt, outputRe
 			SessionKey:   sessionInfo.SessionKey,
 			OutputPath:   outputPath,
 			LastStatus:   strings.TrimSpace(statusOut),
-		}, map[string]string{
+		}
+		sessionContext := map[string]string{
 			"city_dir":              c.Dir,
 			"provider":              provider,
 			"identity":              identity,
@@ -3535,7 +3536,8 @@ func runFreshNamedSessionTurn(t *testing.T, provider, identity, prompt, outputRe
 			"start_out":             strings.TrimSpace(startOut),
 			"status":                strings.TrimSpace(statusOut),
 			"output_rel":            outputRel,
-		}, map[string]string{
+		}
+		failureDetails := map[string]string{
 			"city_dir":              c.Dir,
 			"provider":              provider,
 			"identity":              identity,
@@ -3547,7 +3549,8 @@ func runFreshNamedSessionTurn(t *testing.T, provider, identity, prompt, outputRe
 			"bootstrap_entry_count": strconv.Itoa(len(bootstrapSnapshot.Entries)),
 			"nudge_out":             strings.TrimSpace(nudgeOut),
 			"output_path":           outputPath,
-		}, "task", fmt.Errorf("gc session nudge failed: %w", err)
+		}
+		return failedRun, sessionContext, failureDetails, "task", fmt.Errorf("gc session nudge failed: %w", err)
 	}
 	if nudgeTimedOut {
 		if blocked, blockErr := detectLiveBlockedInteraction(c.Dir, sessionInfo.SessionName); blockErr == nil && blocked != nil {
