@@ -1733,6 +1733,14 @@ func TestRunStartDriftCheck_DelegatedTryRestartTimeoutThenReplacementSucceeds(t 
 	oldJob := delegatedSystemctlJobTimeout
 	delegatedSystemctlJobTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { delegatedSystemctlJobTimeout = oldJob })
+	// This case proves that the verification poll observes a late
+	// replacement. Give that poll scheduling margin under the highly
+	// parallel local gate; the sibling BoundsSystemctl test owns the
+	// systemctl wall-clock bound, and production keeps its five-second
+	// readiness budget.
+	oldReady := driftReadyTimeout
+	driftReadyTimeout = 15 * time.Second
+	t.Cleanup(func() { driftReadyTimeout = oldReady })
 
 	// Model a unit that replaces the supervisor binary only after the CLI's
 	// bounded try-restart wait has elapsed: once the fake systemctl has run
@@ -1759,20 +1767,16 @@ func TestRunStartDriftCheck_DelegatedTryRestartTimeoutThenReplacementSucceeds(t 
 	t.Cleanup(func() { supervisorAPIBaseURLHook = oldURL })
 
 	var stdout, stderr bytes.Buffer
-	start := time.Now()
 	exitCode, cont := runStartDriftCheck(cityPath, &stdout, &stderr)
-	elapsed := time.Since(start)
 	if exitCode != 0 {
-		t.Fatalf("exitCode = %d, want 0; stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+		args, _ := os.ReadFile(argsFile)
+		t.Fatalf("exitCode = %d, want 0; probes=%d systemctl=%q stdout=%q stderr=%q", exitCode, postTimeoutProbes.Load(), args, stdout.String(), stderr.String())
 	}
 	if !cont {
 		t.Fatalf("cont = false after a verified late replacement; stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 	if postTimeoutProbes.Load() <= oldBuildProbesBeforeReplace {
 		t.Fatalf("verification made %d post-timeout probes; want > %d (the poll must retry past the early old-build probes to the late replacement)", postTimeoutProbes.Load(), oldBuildProbesBeforeReplace)
-	}
-	if elapsed > 3*time.Second {
-		t.Fatalf("delegated try-restart took %s; the job timeout did not bound the systemctl invocation", elapsed)
 	}
 	if !strings.Contains(stdout.String(), " ready (") {
 		t.Errorf("stdout = %q, want ready line after verified late replacement", stdout.String())
