@@ -1929,8 +1929,14 @@ func unloadRegisteredLegacySupervisorLaunchd() error {
 }
 
 func cleanupLegacySupervisorLaunchd() error {
-	if err := unloadRegisteredLegacySupervisorLaunchd(); err != nil {
-		return err
+	return cleanupLegacySupervisorLaunchdAfterOwnerUnload(false)
+}
+
+func cleanupLegacySupervisorLaunchdAfterOwnerUnload(alreadyUnloaded bool) error {
+	if !alreadyUnloaded {
+		if err := unloadRegisteredLegacySupervisorLaunchd(); err != nil {
+			return err
+		}
 	}
 	return removeLegacySupervisorLaunchd()
 }
@@ -2223,6 +2229,7 @@ func uninstallSupervisorLaunchd(_ *supervisorServiceData, stdout, stderr io.Writ
 	legacyRegistered := legacySupervisorTargetsCurrentHome(legacySupervisorLaunchdPlistPath()) && supervisorLaunchdRegistered(defaultSupervisorLaunchdLabel)
 	active := supervisorLaunchdActive(label)
 	legacyActive := legacyRegistered && supervisorLaunchdActive(defaultSupervisorLaunchdLabel)
+	legacyOwnerUnloaded := false
 	if sockPath, apiPID := runningSupervisorSocket(); sockPath != "" {
 		currentOwned := currentRegistered && supervisorLaunchdPID(label) == apiPID
 		legacyOwned := legacyRegistered && supervisorLaunchdPID(defaultSupervisorLaunchdLabel) == apiPID
@@ -2245,6 +2252,7 @@ func uninstallSupervisorLaunchd(_ *supervisorServiceData, stdout, stderr io.Writ
 				currentRegistered = false
 			} else {
 				legacyRegistered = false
+				legacyOwnerUnloaded = true
 			}
 			return nil
 		}
@@ -2269,7 +2277,7 @@ func uninstallSupervisorLaunchd(_ *supervisorServiceData, stdout, stderr io.Writ
 		fmt.Fprintf(stderr, "gc supervisor uninstall: disabling service: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
-	if err := cleanupLegacySupervisorLaunchd(); err != nil {
+	if err := cleanupLegacySupervisorLaunchdAfterOwnerUnload(legacyOwnerUnloaded); err != nil {
 		fmt.Fprintf(stderr, "gc supervisor uninstall: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}

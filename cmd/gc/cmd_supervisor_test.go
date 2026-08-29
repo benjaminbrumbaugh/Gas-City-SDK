@@ -4627,6 +4627,93 @@ func TestUninstallSupervisorLaunchdUsesControlSocketWhenSupervisorRunning(t *tes
 	}
 }
 
+func TestUninstallSupervisorLaunchdUnloadsLegacyOwnerExactlyOnce(t *testing.T) {
+	homeDir := t.TempDir()
+	gcHome := shortTempDir(t, "gc-home-")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", gcHome)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	currentPath := supervisorLaunchdPlistPath()
+	legacyPath := legacySupervisorLaunchdPlistPath()
+	for _, item := range []struct {
+		path, label string
+	}{{currentPath, supervisorLaunchdLabel()}, {legacyPath, defaultSupervisorLaunchdLabel}} {
+		if err := os.MkdirAll(filepath.Dir(item.path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content, err := renderSupervisorTemplate(supervisorLaunchdTemplate, &supervisorServiceData{
+			GCPath: "/tmp/gc", LogPath: filepath.Join(gcHome, "supervisor.log"),
+			GCHome: gcHome, LaunchdLabel: item.label, Path: "/usr/local/bin:/usr/bin:/bin",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(item.path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stopped atomic.Bool
+	startTestSupervisorSocket(t, supervisorSocketPath(), func(cmd string) string {
+		if cmd == "ping" {
+			if stopped.Load() {
+				return ""
+			}
+			return "4242\n"
+		}
+		if cmd == "stop" {
+			stopped.Store(true)
+			return "ok\ndone:ok\n"
+		}
+		return ""
+	})
+
+	oldRun := supervisorLaunchctlRun
+	oldRegistered := supervisorLaunchdRegistered
+	oldPID := supervisorLaunchdPID
+	var legacyUnloadCalls, currentUnloadCalls int
+	supervisorLaunchctlRun = func(args ...string) error {
+		if len(args) == 2 && args[0] == "unload" {
+			switch args[1] {
+			case legacyPath:
+				legacyUnloadCalls++
+				if legacyUnloadCalls > 1 {
+					return errors.New("legacy service already unloaded")
+				}
+			case currentPath:
+				currentUnloadCalls++
+			}
+		}
+		return nil
+	}
+	supervisorLaunchdRegistered = func(label string) bool {
+		return label == supervisorLaunchdLabel() || label == defaultSupervisorLaunchdLabel
+	}
+	supervisorLaunchdPID = func(label string) int {
+		if label == defaultSupervisorLaunchdLabel {
+			return 4242
+		}
+		return 0
+	}
+	t.Cleanup(func() {
+		supervisorLaunchctlRun = oldRun
+		supervisorLaunchdRegistered = oldRegistered
+		supervisorLaunchdPID = oldPID
+	})
+
+	var stdout, stderr bytes.Buffer
+	if code := uninstallSupervisorLaunchd(&supervisorServiceData{}, &stdout, &stderr); code != 0 {
+		t.Fatalf("uninstallSupervisorLaunchd code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if legacyUnloadCalls != 1 || currentUnloadCalls != 1 {
+		t.Fatalf("unload calls current=%d legacy=%d, want exactly one each", currentUnloadCalls, legacyUnloadCalls)
+	}
+	for _, path := range []string{currentPath, legacyPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("plist %q should be removed; err=%v", path, err)
+		}
+	}
+}
+
 func TestUninstallSupervisorLaunchdRejectsOwnershipMismatchBeforeSocketStop(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
