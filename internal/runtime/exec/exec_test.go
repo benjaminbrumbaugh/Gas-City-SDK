@@ -1528,12 +1528,10 @@ esac
 
 // TestProvider_StartCancellationInterruptsForegroundChild proves cooperative
 // cancellation reaches a foreground child of the adapter, not just the shell
-// leader. The adapter shell blocks in a foreground `sleep` far longer than the
-// provider's WaitDelay (mimicking a `ready_delay_ms` readiness delay). A
-// process-only interrupt would be deferred by the shell until the child
-// returned, so WaitDelay would force-kill the shell before its rollback trap
-// ran and the resource the adapter created would leak. Signaling the process
-// group unblocks the child so the trap runs inside the grace window.
+// leader. The adapter shell blocks on a foreground child far longer than the
+// provider's WaitDelay. A process-only interrupt would leave the child running.
+// The marker is written by the child itself, so it proves signal delivery at
+// the process-group layer rather than inferring it from parent-shell timing.
 func TestProvider_StartCancellationInterruptsForegroundChild(t *testing.T) {
 	dir := t.TempDir()
 	readyFile := filepath.Join(dir, "ready")
@@ -1541,9 +1539,7 @@ func TestProvider_StartCancellationInterruptsForegroundChild(t *testing.T) {
 	script := writeScript(t, dir, fmt.Sprintf(`
 case "$1" in
   start)
-    trap 'printf "%%s\n" interrupted > "%s"; exit 0' INT
-    : > "%s"
-    sleep 30
+    /bin/sh -c "trap 'printf \"%%s\\n\" interrupted > \"\$1\"; exit 0' INT; : > \"\$2\"; while :; do :; done" sh "%s" "%s"
     ;;
   *) exit 2 ;;
 esac
@@ -1584,12 +1580,12 @@ esac
 			t.Fatalf("Start error = %v, want context.Canceled", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("Start did not return after cancellation; foreground child blocked the rollback trap")
+		t.Fatal("Start did not return after cancellation; foreground child remained alive")
 	}
 
 	data, err := os.ReadFile(interruptFile)
 	if err != nil {
-		t.Fatalf("read interrupt marker (rollback trap never ran): %v", err)
+		t.Fatalf("read interrupt marker (foreground child never handled INT): %v", err)
 	}
 	if got := strings.TrimSpace(string(data)); got != "interrupted" {
 		t.Fatalf("interrupt marker = %q, want %q", got, "interrupted")
