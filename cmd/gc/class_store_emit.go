@@ -480,6 +480,33 @@ func (s *emittingClassStore) CreateWithForeignID(bead beads.Bead) (beads.Bead, e
 	return created, err
 }
 
+// ConditionalWritesResolveTarget lets the beads resolver validate the backing
+// store's unforgeable conditional-write policy stamp before returning this
+// wrapper's emitting ready-write handle.
+func (s *emittingClassStore) ConditionalWritesResolveTarget() beads.Store { return s.Store }
+
+func (s *emittingClassStore) UpdateIfReadyAndMatch(id string, revision int64, opts beads.UpdateOpts) error {
+	writer, ok := beads.ReadyConditionalWriterFor(s.Store)
+	if !ok {
+		return beads.ErrConditionalWriteUnsupported
+	}
+	wasClosed := s.closedBefore(id)
+	if err := writer.UpdateIfReadyAndMatch(id, revision, opts); err != nil {
+		return err
+	}
+	s.emitAfterUpdate(id, opts, wasClosed)
+	return nil
+}
+
+// ReadyConditionalWriterHandle keeps ReadyConditionalWriterFor on the emitting
+// wrapper after it validates the resolved backing's policy and capability.
+func (s *emittingClassStore) ReadyConditionalWriterHandle() (beads.ReadyConditionalWriter, bool) {
+	if _, ok := beads.ReadyConditionalWriterFor(s.Store); !ok {
+		return nil, false
+	}
+	return s, true
+}
+
 func (s *emittingClassStore) UpdateIfMatch(id string, revision int64, opts beads.UpdateOpts) error {
 	writer, ok := beads.ConditionalWriterFor(s.Store)
 	if !ok {

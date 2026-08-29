@@ -26,9 +26,11 @@ func TestRuntimeEnvWithSessionContextAlignsAgentAndBeadsActor(t *testing.T) {
 		configuredIdentity   string
 		sessionName          string
 		persistedSessionName string
+		poolManaged          bool
 		want                 string
 	}{
 		{name: "canonical alias", alias: "rig/worker", sessionName: "rig--worker", persistedSessionName: "rig--worker", want: "rig/worker"},
+		{name: "pool alias is public only", alias: "rig/nux", sessionName: "rig--nux-session", persistedSessionName: "rig--nux-session", poolManaged: true, want: "rig--nux-session"},
 		{name: "configured named identity fallback", configuredIdentity: "rig/worker", sessionName: "rig--worker", persistedSessionName: "rig--worker", want: "rig/worker"},
 		{name: "session name fallback", sessionName: "rig--worker", persistedSessionName: "rig--worker", want: "rig--worker"},
 		{name: "bead id fallback", sessionName: "s-session-id", want: "session-id"},
@@ -40,6 +42,7 @@ func TestRuntimeEnvWithSessionContextAlignsAgentAndBeadsActor(t *testing.T) {
 				SessionNameMetadata:     tc.persistedSessionName,
 				Alias:                   tc.alias,
 				ConfiguredNamedIdentity: tc.configuredIdentity,
+				PoolManaged:             tc.poolManaged,
 				Template:                "rig/template",
 				SessionOrigin:           "ephemeral",
 			}
@@ -52,6 +55,11 @@ func TestRuntimeEnvWithSessionContextAlignsAgentAndBeadsActor(t *testing.T) {
 
 			if got := env["GC_SESSION_NAME"]; got != tc.sessionName {
 				t.Fatalf("GC_SESSION_NAME = %q, want %q", got, tc.sessionName)
+			}
+			if tc.poolManaged {
+				if got := env["GC_ALIAS"]; got != tc.alias {
+					t.Fatalf("GC_ALIAS = %q, want public alias %q", got, tc.alias)
+				}
 			}
 			for _, key := range []string{"GC_AGENT", "BEADS_ACTOR"} {
 				if got := env[key]; got != tc.want {

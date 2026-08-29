@@ -298,7 +298,7 @@ func TestOrderRunGraphResidentRunIsVisibleToTheOrderReaders(t *testing.T) {
 func oneShotCookCity(t *testing.T) string {
 	t.Helper()
 	enableFormulaV2ForOneShotTest(t)
-	cityDir := t.TempDir()
+	cityDir := canonicalTestPath(t.TempDir())
 	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(withBuiltinProviderAliasesTOMLForTest(`
 [workspace]
 name = "cook-city"

@@ -31,7 +31,12 @@ func TestDefaultRunNetworkGitKillsDescendants(t *testing.T) {
 	wedged := wedgedGit(t)
 
 	restore := networkGitTimeout
-	networkGitTimeout = 300 * time.Millisecond
+	// The child must run long enough to publish at least one heartbeat before
+	// cancellation, otherwise the test cannot distinguish process-group cleanup
+	// from a shim that never started. Give startup scheduling margin under the
+	// highly parallel local gate; this is a test override, not the production
+	// network timeout.
+	networkGitTimeout = 5 * time.Second
 	t.Cleanup(func() { networkGitTimeout = restore })
 	restoreWait := networkGitWaitDelay
 	networkGitWaitDelay = time.Second

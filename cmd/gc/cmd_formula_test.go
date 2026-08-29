@@ -358,7 +358,7 @@ func TestResolveFormulaScope_RigFlagOverridesGCRIGEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveFormulaScope: %v", err)
 	}
-	if scope.storeRoot != rigPath {
+	if canonicalTestPath(scope.storeRoot) != canonicalTestPath(rigPath) {
 		t.Errorf("storeRoot = %q, want %q (--rig must win over GC_RIG)", scope.storeRoot, rigPath)
 	}
 }

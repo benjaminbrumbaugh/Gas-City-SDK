@@ -232,6 +232,7 @@ func ReadyConditionalWriterFor(store Store) (ReadyConditionalWriter, bool) {
 	if store == nil {
 		return nil, false
 	}
+	outer := store
 	resolved := followConditionalWritesResolveTarget(store)
 	carrier, ok := resolved.(conditionalWritesModeCarrier)
 	if !ok {
@@ -240,6 +241,11 @@ func ReadyConditionalWriterFor(store Store) (ReadyConditionalWriter, bool) {
 	mode, _ := carrier.conditionalWritesMode()
 	switch mode {
 	case gate.Require, gate.Auto:
+		if outer != resolved {
+			if provider, ok := outer.(ReadyConditionalWriterHandleProvider); ok {
+				return provider.ReadyConditionalWriterHandle()
+			}
+		}
 		// A ready-admission fence is deliberately narrower than the full
 		// ConditionalWriter trio. Resolve it directly so a backend can expose
 		// safe routing admission without claiming it can fence every update,
@@ -283,7 +289,13 @@ func AtomicConditionalCloserFor(store Store) (AtomicConditionalCloser, bool) {
 	if store == nil {
 		return nil, false
 	}
+	outer := store
 	store = followConditionalWritesResolveTarget(store)
+	if outer != store {
+		if provider, ok := outer.(AtomicConditionalCloserHandleProvider); ok {
+			return provider.AtomicConditionalCloserHandle()
+		}
+	}
 	if provider, ok := store.(AtomicConditionalCloserHandleProvider); ok {
 		return provider.AtomicConditionalCloserHandle()
 	}

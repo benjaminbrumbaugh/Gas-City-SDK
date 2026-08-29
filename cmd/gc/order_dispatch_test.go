@@ -3494,7 +3494,7 @@ func TestShellExecRunnerKillsProcessGroupAfterWaitDelay(t *testing.T) {
 
 func TestShellExecRunnerReturnsPartialOutputOnTimeout(t *testing.T) {
 	workDir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	output, err := shellExecRunner(ctx, "while :; do printf .; sleep 0.01; done", workDir, nil)

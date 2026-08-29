@@ -4779,9 +4779,10 @@ func TestGcBeadsBdStartUsesRootBeadsDataDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitConfig := filepath.Join(homeDir, ".gitconfig")
-	if err := os.WriteFile(gitConfig, []byte("[user]\n\tname = Test User\n\temail = test@example.com\n"), 0o644); err != nil {
+	if err := os.WriteFile(gitConfig, []byte("[user]\n	name = Test User\n	email = test@example.com\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	fakeBD := writeFakeCurrentBDVersion(t, t.TempDir())
 
 	poisonRuntimeDir := filepath.Join(t.TempDir(), "poison-runtime")
 	poisonPackStateDir := filepath.Join(poisonRuntimeDir, "packs", "dolt")
@@ -4791,6 +4792,7 @@ func TestGcBeadsBdStartUsesRootBeadsDataDir(t *testing.T) {
 	t.Setenv("GC_DOLT_STATE_FILE", poisonStateFile)
 
 	scriptEnv := sanitizedBaseEnv(
+		"BD_BIN="+fakeBD,
 		"HOME="+homeDir,
 		"GIT_CONFIG_GLOBAL="+gitConfig,
 		"GC_CITY_PATH="+cityPath,
@@ -4907,6 +4909,10 @@ case "$cmd" in
 esac
 `, attemptsFile, portsFile)
 	if err := os.WriteFile(fakeDolt, []byte(fakeDoltScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeBD := filepath.Join(binDir, "bd")
+	if err := os.WriteFile(fakeBD, []byte("#!/bin/sh\nprintf 'bd version 1.1.1 (test)\\n'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	fakeNC := filepath.Join(binDir, "nc")
@@ -7839,6 +7845,119 @@ func TestGcBeadsBdInitDoltliteRejectsUnsafeCustomTypes(t *testing.T) {
 	}
 }
 
+func TestGcBeadsBdStartSeedsVersionWitnessOnlyForFreshManagedDataRoot(t *testing.T) {
+	script := filepath.Join(repoRootForLint(t), "examples", "bd", "assets", "scripts", "gc-beads-bd.sh")
+	fakeBin := t.TempDir()
+	bdPath := filepath.Join(fakeBin, "bd")
+	fakeBD := `#!/bin/sh
+if [ -n "${BD_RACE_DATA_DIR:-}" ]; then
+    mkdir -p "$BD_RACE_DATA_DIR"
+fi
+printf 'bd version 1.1.1 (test)\n'
+`
+	if err := os.WriteFile(bdPath, []byte(fakeBD), 0o755); err != nil {
+		t.Fatalf("write fake bd: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake flock: %v", err)
+	}
+	fakeDolt := `#!/bin/sh
+if [ "$1" = "config" ]; then
+    case "$*" in
+        *user.name*) printf 'gc-test\n' ;;
+        *user.email*) printf 'gc-test@example.invalid\n' ;;
+    esac
+    exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(fakeBin, "dolt"), []byte(fakeDolt), 0o755); err != nil {
+		t.Fatalf("write fake dolt: %v", err)
+	}
+	realMV, err := exec.LookPath("mv")
+	if err != nil {
+		t.Fatalf("look up mv: %v", err)
+	}
+	for _, tool := range []string{"awk", "basename", "cat", "dirname", "grep", "head", "mkdir", "mv", "ps", "rm", "rmdir", "sleep"} {
+		resolved, err := exec.LookPath(tool)
+		if err != nil {
+			t.Fatalf("look up %s: %v", tool, err)
+		}
+		if err := os.Symlink(resolved, filepath.Join(fakeBin, tool)); err != nil {
+			t.Fatalf("link %s: %v", tool, err)
+		}
+	}
+
+	for _, tt := range []struct {
+		name                  string
+		op                    string
+		preseedData           bool
+		createDataDuringProbe bool
+		createSiblingDuringMV bool
+		wantWitness           bool
+	}{
+		{name: "start creates fresh managed data root", op: "start", wantWitness: true},
+		{name: "ensure-ready creates fresh managed data root", op: "ensure-ready", wantWitness: true},
+		{name: "start preserves pre-existing managed data root", op: "start", preseedData: true},
+		{name: "start refuses root created during version probe", op: "start", createDataDuringProbe: true},
+		{name: "start retracts witness when legacy sibling arrives during publication", op: "start", createSiblingDuringMV: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cityPath := t.TempDir()
+			dataDir := filepath.Join(cityPath, ".beads", "dolt")
+			if tt.preseedData {
+				if err := os.MkdirAll(dataDir, 0o755); err != nil {
+					t.Fatalf("preseed data root: %v", err)
+				}
+			}
+
+			cmd := exec.Command(script, tt.op)
+			env := []string{
+				"BD_BIN=" + bdPath,
+				"GC_CITY_PATH=" + cityPath,
+				"GC_DOLT_PORT=" + freeLoopbackPort(t),
+				"PATH=" + fakeBin,
+			}
+			if tt.createDataDuringProbe {
+				env = append(env, "BD_RACE_DATA_DIR="+dataDir)
+			}
+			if tt.createSiblingDuringMV {
+				mvPath := filepath.Join(fakeBin, "mv")
+				if err := os.Remove(mvPath); err != nil {
+					t.Fatalf("remove real mv link: %v", err)
+				}
+				fakeMV := fmt.Sprintf("#!/bin/sh\nmkdir -p \"$(dirname \"$BD_RACE_SIBLING\")\"\n: > \"$BD_RACE_SIBLING\"\nexec %q \"$@\"\n", realMV)
+				if err := os.WriteFile(mvPath, []byte(fakeMV), 0o755); err != nil {
+					t.Fatalf("write racing mv: %v", err)
+				}
+				env = append(env, "BD_RACE_SIBLING="+filepath.Join(cityPath, ".beads", "issues.db"))
+			}
+			cmd.Env = sanitizedBaseEnv(env...)
+			if out, err := cmd.CombinedOutput(); err == nil {
+				t.Fatalf("start unexpectedly succeeded without flock/dolt:\n%s", out)
+			}
+
+			witnessPath := filepath.Join(cityPath, ".beads", ".local_version")
+			witness, err := os.ReadFile(witnessPath)
+			if tt.wantWitness {
+				if err != nil {
+					t.Fatalf("read fresh witness: %v", err)
+				}
+				if got := strings.TrimSpace(string(witness)); got != "1.1.1" {
+					t.Fatalf("fresh witness = %q, want 1.1.1", got)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("pre-existing data root received witness %q", strings.TrimSpace(string(witness)))
+			}
+			if !os.IsNotExist(err) {
+				t.Fatalf("stat pre-existing-root witness: %v", err)
+			}
+		})
+	}
+}
+
 // ── isExternalDolt tests ──────────────────────────────────────────────
 
 func TestIsExternalDoltEnvFallback(t *testing.T) {
@@ -8163,6 +8282,7 @@ esac
 	}
 	invocationFile := filepath.Join(t.TempDir(), "gc-invocations.log")
 	fakeGC := writeFakeManagedConfigWriterGC(t, binDir, invocationFile)
+	writeFakeCurrentBDVersion(t, binDir)
 
 	compatPort := reserveRandomTCPPort(t)
 	compatListener := startTCPListenerProcess(t, compatPort)
@@ -8224,6 +8344,15 @@ esac
 	if state.Port != providerPort || state.PID != providerListener.Process.Pid {
 		t.Fatalf("provider state = %+v, want existing provider listener port=%d pid=%d", state, providerPort, providerListener.Process.Pid)
 	}
+}
+
+func writeFakeCurrentBDVersion(t *testing.T, binDir string) string {
+	t.Helper()
+	path := filepath.Join(binDir, "bd")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf 'bd version 1.1.1 (test)\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func writeFakeManagedConfigWriterGC(t *testing.T, binDir, invocationFile string) string {
@@ -8646,6 +8775,10 @@ esac
 
 func writeFakeManagedConfigWriterDolt(t *testing.T, binDir string) {
 	t.Helper()
+	fakeBD := filepath.Join(binDir, "bd")
+	if err := os.WriteFile(fakeBD, []byte("#!/bin/sh\nprintf 'bd version 1.1.1 (test)\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	fakeDolt := filepath.Join(binDir, "dolt")
 	fakeDoltScript := `#!/bin/sh
 set -eu
@@ -10007,6 +10140,7 @@ esac
 	if err := os.WriteFile(fakeDolt, []byte(fakeDoltScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeFakeCurrentBDVersion(t, binDir)
 	env := sanitizedBaseEnv(
 		"GC_CITY_PATH="+cityPath,
 		"GC_DOLT_PORT=3311",
@@ -10255,6 +10389,7 @@ esac
 	if err := os.WriteFile(fakeDolt, []byte(fakeScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeFakeCurrentBDVersion(t, binDir)
 
 	env := sanitizedBaseEnv(
 		"GC_CITY_PATH="+cityPath,
@@ -11293,7 +11428,14 @@ esac
 	}
 
 	fakeDolt := filepath.Join(binDir, "dolt")
-	if err := os.WriteFile(fakeDolt, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	fakeDoltScript := fmt.Sprintf(`#!/bin/sh
+schema_marker=%q
+case "$*" in
+  *"SELECT 1 FROM config"*) [ -f "$schema_marker" ] ;;
+  *) exit 0 ;;
+esac
+`, bdInitLog)
+	if err := os.WriteFile(fakeDolt, []byte(fakeDoltScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
 

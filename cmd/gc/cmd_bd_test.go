@@ -549,13 +549,13 @@ dolt.auto-start: false
 	if got := env["BEADS_DOLT_SERVER_PORT"]; got != wantPort {
 		t.Fatalf("BEADS_DOLT_SERVER_PORT = %q, want %q", got, wantPort)
 	}
-	if got := env["BEADS_DIR"]; got != filepath.Join(rigDir, ".beads") {
+	if got := env["BEADS_DIR"]; canonicalTestPath(got) != canonicalTestPath(filepath.Join(rigDir, ".beads")) {
 		t.Fatalf("BEADS_DIR = %q, want %q", got, filepath.Join(rigDir, ".beads"))
 	}
 	if got := env["GC_RIG"]; got != "repo" {
 		t.Fatalf("GC_RIG = %q, want %q", got, "repo")
 	}
-	if got := env["GC_STORE_ROOT"]; got != rigDir {
+	if got := env["GC_STORE_ROOT"]; canonicalTestPath(got) != canonicalTestPath(rigDir) {
 		t.Fatalf("GC_STORE_ROOT = %q, want %q", got, rigDir)
 	}
 	if got := env["GC_STORE_SCOPE"]; got != "rig" {
@@ -1819,7 +1819,7 @@ func managedDoltTestSetup(t *testing.T, fakeBdScript string) {
 	cityFlag = ""
 	rigFlag = ""
 
-	cityDir := t.TempDir()
+	cityDir := canonicalTestPath(t.TempDir())
 	port := strconv.Itoa(writeReachableManagedDoltState(t, cityDir))
 
 	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]

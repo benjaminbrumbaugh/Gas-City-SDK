@@ -22,6 +22,11 @@ import (
 // never mask a real reap failure, and short enough to self-clear.
 const fixtureLifetimeSeconds = 300
 
+// fixtureStartupTimeout allows the nested runner to reach its scripted product
+// phase even when the full push gate is compiling and running every command
+// shard concurrently. It remains well below the fixture's self-cleaning bound.
+const fixtureStartupTimeout = 90 * time.Second
+
 // reapFixture builds a repo-shaped environment for driving
 // scripts/test-go-test-shard with a fake `go` whose run phase is scripted by
 // the caller. It mirrors newGoTestShardFixture's shape (fake bin dir ahead of
@@ -153,7 +158,7 @@ func waitWithin(t *testing.T, cmd *exec.Cmd, within time.Duration) error {
 
 // waitForPIDFile blocks until the scripted run body has recorded the PID of
 // the descendant it spawned, so the test signals only after the tree exists.
-func waitForPIDFile(t *testing.T, path string, within time.Duration) int {
+func waitForPIDFile(t *testing.T, path string, within time.Duration, runnerOutput func() string) int {
 	t.Helper()
 	deadline := time.Now().Add(within)
 	for time.Now().Before(deadline) {
@@ -166,7 +171,7 @@ func waitForPIDFile(t *testing.T, path string, within time.Duration) int {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("descendant never recorded its pid at %s within %s", path, within)
+	t.Fatalf("descendant never recorded its pid at %s within %s; runner output:\n%s", path, within, runnerOutput())
 	return 0
 }
 
@@ -208,7 +213,7 @@ exec sleep %d
 `, pidFile, fixtureLifetimeSeconds))
 
 	cmd := fixture.start(t)
-	descendant := waitForPIDFile(t, pidFile, 30*time.Second)
+	descendant := waitForPIDFile(t, pidFile, fixtureStartupTimeout, fixture.output)
 
 	// Kill only the runner, the way a dead driver, a closed session, or a
 	// killed parent chain does. Its descendants must not survive it.
@@ -241,12 +246,12 @@ func TestGoTestShardWatchdogKillsARunThatDefeatsGoTimeout(t *testing.T) {
     while [ "$(date +%%s)" -lt "$end" ] ; do sleep 1 ; done
 `, pidFile, fixtureLifetimeSeconds))
 
-	start := time.Now()
 	cmd := fixture.start(t,
 		"GO_TEST_TIMEOUT=2s",
 		"GO_TEST_WATCHDOG_GRACE=2s",
 	)
-	wedged := waitForPIDFile(t, pidFile, 30*time.Second)
+	wedged := waitForPIDFile(t, pidFile, fixtureStartupTimeout, fixture.output)
+	start := time.Now()
 
 	err := waitWithin(t, cmd, 90*time.Second)
 	elapsed := time.Since(start)

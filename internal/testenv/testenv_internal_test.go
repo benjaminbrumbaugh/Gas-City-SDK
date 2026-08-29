@@ -44,6 +44,21 @@ func TestIsLocalDoltHost(t *testing.T) {
 	}
 }
 
+func TestCanonicalizeTempDirResolvesAlias(t *testing.T) {
+	realDir := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "temp-alias")
+	if err := os.Symlink(realDir, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv("TMPDIR", alias)
+
+	canonicalizeTempDir()
+
+	if got := os.Getenv("TMPDIR"); got != realDir {
+		t.Fatalf("TMPDIR = %q, want canonical %q", got, realDir)
+	}
+}
+
 // TestIsLocalDoltHostMatchesCanonicalClassifier pins isLocalDoltHost to the
 // canonical contract.DoltHostIsLocal semantics. isLocalDoltHost is a
 // stdlib-only copy — this package is blank-imported by every test binary and

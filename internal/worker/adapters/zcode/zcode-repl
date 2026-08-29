@@ -227,13 +227,13 @@ cleanup() {
     if [[ -n "$stty_saved" ]]; then stty "$stty_saved" 2>/dev/null || true; fi
     rm -rf "$workdir"
 }
-# TERM ends the session; INT must not. gc's Provider.Interrupt sends C-c to
-# interrupt the *turn*: stop the turn, let the rc!=0 branch report it, and keep
-# looping with the sid intact. Exiting here would kill the pane on every
-# interrupt.
+# TERM ends the session; INT must not. Ignore INT while idle instead of trapping
+# it through Bash 3's blocking read: an interrupted read can corrupt the tail of
+# the next buffered prompt. run_turn installs the active interrupt handler only
+# while there is a child process to stop.
 interrupted=0
 trap 'cleanup; exit 0' TERM
-trap 'interrupted=1; stop_turn' INT
+trap '' INT
 trap cleanup EXIT
 
 # Canonical tty input truncates at 4095 bytes, which silently mangles long
@@ -513,6 +513,8 @@ clear_turn_announcement() {
 # starts with a dash ("Option '--prompt' argument is ambiguous") — markdown
 # bullets and diff lines hit this constantly.
 run_turn() {
+    trap 'interrupted=1; stop_turn' INT
+
     # set -m puts the turn in its own process group, so stop_turn can take down
     # the whole subtree and the pane's ^C reaches only this shell — we forward
     # it deliberately instead of hoping the CLI honors it.
@@ -540,6 +542,7 @@ run_turn() {
         break
     done
     turn_pid=""
+    trap '' INT
     clear_turn_announcement
     return "$rc"
 }
@@ -571,19 +574,29 @@ while :; do
     interrupted=0
     IFS= read -r line
     read_rc=$?
-    if (( read_rc != 0 )); then
-        # A trapped INT interrupts read; that is an interrupt, not end of input.
-        if (( interrupted )) || (( read_rc > 128 )); then continue; fi
-        break
-    fi
+    if (( read_rc != 0 )); then break; fi
 
     # Coalesce the rest of a pasted burst: gc sends the body, waits, then
     # Enter, so a 1s idle window closes the paste without splitting it. A
-    # timed-out read still assigns whatever partial line arrived, so take it
-    # before breaking — otherwise the tail of the last line is silently lost.
+    # Bash 3.2 can return nonzero from a timed read while still assigning the
+    # final byte. Read one byte at a time and retain that nonzero-path byte so
+    # a partial trailing line is never silently truncated.
     while :; do
-        IFS= read -r -t "$DRAIN_TIMEOUT" more
-        drain_rc=$?
+        more=""
+        drain_rc=1
+        while :; do
+            unset char
+            if IFS= read -r -t "$DRAIN_TIMEOUT" -n 1 char; then
+                if [[ -n "$char" ]]; then
+                    more+="$char"
+                    continue
+                fi
+                drain_rc=0
+                break
+            fi
+            if [[ -n "${char-}" ]]; then more+="$char"; fi
+            break
+        done
         if (( drain_rc == 0 )); then
             # A blank interior line reads as empty and must be kept: paragraph
             # breaks are part of the prompt.

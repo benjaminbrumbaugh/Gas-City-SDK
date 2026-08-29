@@ -510,7 +510,7 @@ func TestRouteRecoveryMarkedRouteRequiresDecisionAuthorization(t *testing.T) {
 		},
 	}}, nil)
 	lane := newRouteRecoveryLane()
-	report := lane.backstopLegWithAuthorization(planeLeg{label: "rig gascity", store: store}, func(rig string, bead beads.Bead) bool {
+	report := lane.backstopLegWithAuthorization(planeLeg{label: "rig gascity", store: store}, func(_ string, _ beads.Bead) bool {
 		return false
 	})
 	if report.restored != 0 {

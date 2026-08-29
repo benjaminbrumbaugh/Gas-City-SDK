@@ -210,7 +210,7 @@ func importLegacyRoutingDecisions(ctx context.Context, cityPath string) (routing
 		}
 		alternatives := make([]routingdecision.Alternative, 0, len(legacy.Fallbacks))
 		for _, fallback := range legacy.Fallbacks {
-			alternatives = append(alternatives, routingdecision.Alternative{Target: fallback.Target, Model: fallback.Model, Source: fallback.Source, Account: fallback.Account, ServeAs: fallback.ServeAs, Provider: fallback.Provider, Endpoint: fallback.Endpoint, Reason: fallback.Reason})
+			alternatives = append(alternatives, routingdecision.Alternative(fallback))
 		}
 		payload := routingdecision.DecisionPayload{
 			Schema: routingdecision.SchemaVersion, DecisionID: "legacy-" + legacy.ID + "-" + source.Digest[:12], WorkBeadID: work.ID,

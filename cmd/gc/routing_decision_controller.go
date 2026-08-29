@@ -47,11 +47,11 @@ func (cr *CityRuntime) routingDecisionScopes() []routingDecisionScope {
 	return scopes
 }
 
-func (cr *CityRuntime) decisionStoreForPass() (*routingdecision.Store, bool, error) {
+func (cr *CityRuntime) decisionStoreForPass() (*routingdecision.Store, error) {
 	if cr.routingDecisionStore != nil {
-		return cr.routingDecisionStore, false, nil
+		return cr.routingDecisionStore, nil
 	}
-	return nil, false, errors.New("routing decision ledger unavailable")
+	return nil, errors.New("routing decision ledger unavailable")
 }
 
 // applyApprovedRoutingDecisions coordinates the signed local ledger with one
@@ -64,12 +64,9 @@ func (cr *CityRuntime) applyApprovedRoutingDecisions() (int, error) {
 	if cr.routingDecisionVerifier == nil {
 		return 0, routingdecision.ErrAuthorizationRequired
 	}
-	decisionStore, owned, err := cr.decisionStoreForPass()
+	decisionStore, err := cr.decisionStoreForPass()
 	if err != nil {
 		return 0, err
-	}
-	if owned {
-		defer decisionStore.Close() //nolint:errcheck
 	}
 	now := cr.routingDecisionNow()
 	if _, err := decisionStore.ExpireDue(now, routingDecisionAdmissionLimit, func(decisionID string) string {

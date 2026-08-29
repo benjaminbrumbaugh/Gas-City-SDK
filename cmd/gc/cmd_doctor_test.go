@@ -324,7 +324,7 @@ suspended = true
 	if len(registeredBackup) != 1 {
 		t.Fatalf("registered dolt-backup checks = %#v, want only active managed rig", registeredBackup)
 	}
-	if got := registeredBackup["managed"]; got != doltDataDir {
+	if got := registeredBackup["managed"]; canonicalTestPath(got) != canonicalTestPath(doltDataDir) {
 		t.Fatalf("managed rig data dir = %q, want runtime layout data dir %q", got, doltDataDir)
 	}
 	if _, ok := registeredBackup["filebacked"]; ok {
@@ -336,7 +336,7 @@ suspended = true
 	if len(registeredLocalOnly) != 1 {
 		t.Fatalf("registered dolt-local-only checks = %#v, want only active managed rig", registeredLocalOnly)
 	}
-	if got := registeredLocalOnly["managed"]; got != doltDataDir {
+	if got := registeredLocalOnly["managed"]; canonicalTestPath(got) != canonicalTestPath(doltDataDir) {
 		t.Fatalf("managed rig local-only data dir = %q, want runtime layout data dir %q", got, doltDataDir)
 	}
 	if _, ok := registeredLocalOnly["filebacked"]; ok {

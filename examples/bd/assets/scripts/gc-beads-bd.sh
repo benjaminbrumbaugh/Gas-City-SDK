@@ -2168,8 +2168,9 @@ op_start() {
         die "dolt is required but not installed. Install: https://github.com/dolthub/dolt/releases"
     fi
 
-    # Create data dir and runtime state dir if needed.
-    mkdir -p "$DATA_DIR" "$(dirname "$LOCK_FILE")"
+    # Create the runtime state directory before acquiring the start lock. The
+    # managed data root is created only after the lock and fresh-root check.
+    mkdir -p "$(dirname "$LOCK_FILE")"
 
     # Acquire exclusive start lock (prevents concurrent starts).
     # Use fd 9 for the lock and keep retrying on the same inode. Deleting and
@@ -2193,6 +2194,9 @@ op_start() {
         fi
         die "could not acquire dolt start lock ($LOCK_FILE)"
     fi
+
+    seed_bd_current_era_witness_for_fresh_root
+    mkdir -p "$DATA_DIR" || die "failed to create managed dolt data root"
 
     # Check if a dolt process is already serving our data dir (any port).
     # This prevents starting a second server that dies on database locks.
@@ -2476,8 +2480,84 @@ run_bd_pinned() {
         export GC_DOLT_PASSWORD="$DOLT_PASSWORD"
         export BEADS_DOLT_SERVER_USER="$DOLT_USER"
         export BEADS_DOLT_PASSWORD="$DOLT_PASSWORD"
-        bd "$@"
+        "${BD_BIN:-bd}" "$@"
     )
+}
+
+bd_witness_is_current() {
+    local version major rest minor patch
+    version="${1#v}"
+    case "$version" in
+        ''|*[!0-9.]*) return 1 ;;
+    esac
+    major="${version%%.*}"
+    rest="${version#*.}"
+    [ "$rest" != "$version" ] || return 1
+    minor="${rest%%.*}"
+    patch="${rest#*.}"
+    [ "$patch" != "$rest" ] || return 1
+    case "$patch" in *.*) return 1 ;; esac
+    [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ] || return 1
+    [ "$major" -ge 1 ] 2>/dev/null || return 1
+}
+
+bd_legacy_sibling_exists() {
+    local legacy
+    for legacy in \
+        "$BEADS_DIR_ROOT/dolt" \
+        "$BEADS_DIR_ROOT/embeddeddolt" \
+        "$BEADS_DIR_ROOT/beads.db" \
+        "$BEADS_DIR_ROOT/issues.db" \
+        "$BEADS_DIR_ROOT/issues.jsonl"
+    do
+        same_dir_path "$legacy" "$DATA_DIR" && continue
+        [ ! -e "$legacy" ] || return 0
+    done
+    return 1
+}
+
+# seed_bd_current_era_witness_for_fresh_root records the selected bd version
+# only before Gas City creates a new managed data root. Existing roots and
+# legacy artifacts remain unmarked so bd's migration guard classifies them.
+seed_bd_current_era_witness_for_fresh_root() {
+    local witness version_output version tmp
+    [ ! -e "$DATA_DIR" ] || return 0
+    bd_legacy_sibling_exists && return 0
+    witness="$BEADS_DIR_ROOT/.local_version"
+    [ ! -e "$witness" ] || return 0
+
+    version_output=$("${BD_BIN:-bd}" version 2>/dev/null) || die "selected bd did not report its version"
+    set -- $version_output
+    version="${3:-}"
+    bd_witness_is_current "$version" || die "selected bd did not report a current semantic version"
+
+    # Recheck after version discovery, then atomically claim DATA_DIR. If any
+    # other actor created the root, this is not a provably fresh workspace.
+    [ ! -e "$DATA_DIR" ] || return 0
+    [ ! -e "$witness" ] || return 0
+    bd_legacy_sibling_exists && return 0
+    mkdir -p "$BEADS_DIR_ROOT" "$(dirname "$DATA_DIR")" || die "failed to create managed beads parent directory"
+    if ! mkdir "$DATA_DIR" 2>/dev/null; then
+        return 0
+    fi
+
+    tmp="$witness.tmp.$$"
+    if ! printf '%s\n' "${version#v}" > "$tmp"; then
+        rmdir "$DATA_DIR" 2>/dev/null || true
+        die "failed to write current-era witness"
+    fi
+    if ! mv "$tmp" "$witness"; then
+        rm -f "$tmp"
+        rmdir "$DATA_DIR" 2>/dev/null || true
+        die "failed to install current-era witness"
+    fi
+    # A sibling can race the witness rename after DATA_DIR was atomically
+    # claimed. Retract the witness before any server starts so bd's migration
+    # guard, not Gas City, classifies that legacy state.
+    if bd_legacy_sibling_exists; then
+        rm -f "$witness" || die "failed to retract current-era witness"
+        rmdir "$DATA_DIR" 2>/dev/null || true
+    fi
 }
 
 run_bd_init_pinned() {
@@ -2765,6 +2845,10 @@ op_init() {
         fi
         exit 0
     fi
+
+    # Direct provider-init callers must cross the same Go-owned canonical
+    # metadata boundary as initAndHookDir before bd inspects workspace era.
+    normalize_scope_after_init "$dir" "$prefix" "$dolt_database"
 
     # If already initialized on disk, ensure the database is also registered
     # with the running server. gc's normalizeCanonicalBdScopeFilesForInit
@@ -3219,11 +3303,7 @@ if ! load_runtime_layout_from_gc; then
     LOCK_FILE="${GC_DOLT_LOCK_FILE:-$PACK_STATE_DIR/dolt.lock}"
     CONFIG_FILE="${GC_DOLT_CONFIG_FILE:-$PACK_STATE_DIR/dolt-config.yaml}"
 fi
-if is_doltlite_backend; then
-    mkdir -p "$PACK_STATE_DIR"
-else
-    mkdir -p "$DATA_DIR" "$PACK_STATE_DIR"
-fi
+mkdir -p "$PACK_STATE_DIR"
 
 # Resolve DOLT_PORT now that STATE_FILE is set.
 DOLT_PORT=$(allocate_port)

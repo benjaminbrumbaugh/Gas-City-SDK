@@ -10,10 +10,11 @@ import (
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/storebinding"
+	"github.com/gastownhall/gascity/internal/testutil"
 )
 
 func TestGraphPathCanonicalizesRootSymlink(t *testing.T) {
-	root := t.TempDir()
+	root := testutil.CanonicalPath(t.TempDir())
 	alias := root + "-alias"
 	if err := os.Symlink(root, alias); err != nil {
 		t.Fatalf("creating Graph root symlink: %v", err)

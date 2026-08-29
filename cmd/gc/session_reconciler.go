@@ -4680,7 +4680,7 @@ func filterDetachedStrandedDiagnosticWork(work []strandedAssignedWork) []strande
 			out = append(out, item)
 			continue
 		}
-		result := probeDetachedWork(context.Background(), spec)
+		result := detachedWorkProbeHook(context.Background(), spec)
 		switch result.Status {
 		case detachedProbeAlive:
 			log.Printf("session reconciler: suppressing session.stranded for %s: detached probe alive: %s", item.bead.ID, spec)

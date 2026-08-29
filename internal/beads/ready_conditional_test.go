@@ -7,6 +7,23 @@ import (
 	"github.com/gastownhall/gascity/internal/rollout/gate"
 )
 
+type readyConditionalWriterFunc func(string, int64, UpdateOpts) error
+
+func (f readyConditionalWriterFunc) UpdateIfReadyAndMatch(id string, revision int64, opts UpdateOpts) error {
+	return f(id, revision, opts)
+}
+
+type readyConditionalHandleWrapper struct {
+	Store
+	handle ReadyConditionalWriter
+}
+
+func (w *readyConditionalHandleWrapper) ConditionalWritesResolveTarget() Store { return w.Store }
+
+func (w *readyConditionalHandleWrapper) ReadyConditionalWriterHandle() (ReadyConditionalWriter, bool) {
+	return w.handle, w.handle != nil
+}
+
 func TestMemStoreUpdateIfReadyAndMatchRejectsUnreadyWithoutWorkRevisionChange(t *testing.T) {
 	const (
 		blockerID = "GC-BLOCKER"
@@ -63,5 +80,32 @@ func TestReadyConditionalWriterForHonorsStampedConditionalWritesMode(t *testing.
 	store.stampConditionalWritesMode(gate.Require, false)
 	if _, ok := ReadyConditionalWriterFor(store); !ok {
 		t.Fatal("conditional_writes=require hid a capable ready conditional writer")
+	}
+}
+
+func TestReadyConditionalWriterForReturnsWrapperHandleAfterBackingPolicyValidation(t *testing.T) {
+	backing := NewMemStore()
+	backing.stampConditionalWritesMode(gate.Require, false)
+	var called bool
+	handle := readyConditionalWriterFunc(func(string, int64, UpdateOpts) error {
+		called = true
+		return nil
+	})
+	wrapper := &readyConditionalHandleWrapper{Store: backing, handle: handle}
+
+	writer, ok := ReadyConditionalWriterFor(wrapper)
+	if !ok {
+		t.Fatal("ReadyConditionalWriterFor(wrapper) = unavailable")
+	}
+	if err := writer.UpdateIfReadyAndMatch("GC-WORK", 1, UpdateOpts{Metadata: map[string]string{"route": "safe"}}); err != nil {
+		t.Fatalf("wrapper ready handle: %v", err)
+	}
+	if !called {
+		t.Fatal("ReadyConditionalWriterFor returned the raw backing instead of the wrapper handle")
+	}
+
+	backing.stampConditionalWritesMode(gate.Off, false)
+	if _, ok := ReadyConditionalWriterFor(wrapper); ok {
+		t.Fatal("wrapper handle bypassed the backing's conditional_writes=off policy")
 	}
 }

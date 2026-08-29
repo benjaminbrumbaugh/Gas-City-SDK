@@ -18,6 +18,13 @@ import (
 	"time"
 )
 
+func bindDelegatedSystemctlPath(t *testing.T, path string) {
+	t.Helper()
+	old := delegatedSystemctlPathHook
+	delegatedSystemctlPathHook = func() string { return path }
+	t.Cleanup(func() { delegatedSystemctlPathHook = old })
+}
+
 // installFakeDelegatedSystemctl writes an executable `systemctl` shim into a fresh
 // temp dir, prepends that dir to PATH, and returns the path of the file
 // the shim appends its argv into (one line per invocation). The shim
@@ -44,9 +51,11 @@ func installFakeDelegatedSystemctlWithUnitState(t *testing.T, exitCode int, stde
 		script += fmt.Sprintf("echo %q >&2\n", stderrMsg)
 	}
 	script += fmt.Sprintf("exit %d\n", exitCode)
-	if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte(script), 0o755); err != nil {
+	systemctlPath := filepath.Join(dir, "systemctl")
+	if err := os.WriteFile(systemctlPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("writing fake systemctl: %v", err)
 	}
+	bindDelegatedSystemctlPath(t, systemctlPath)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return argsFile
 }
@@ -70,9 +79,11 @@ func installFakeDelegatedSystemctlHangingVerbWithUnitState(t *testing.T, verb st
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "systemctl-args")
 	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %q\ncase \" $* \" in *\" is-active \"*) exit %d ;; *\" %s \"*) exec sleep 5 ;; esac\nexit 0\n", argsFile, isActiveExit, verb)
-	if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte(script), 0o755); err != nil {
+	systemctlPath := filepath.Join(dir, "systemctl")
+	if err := os.WriteFile(systemctlPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("writing fake systemctl: %v", err)
 	}
+	bindDelegatedSystemctlPath(t, systemctlPath)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return argsFile
 }
@@ -87,9 +98,11 @@ func installFakeDelegatedSystemctlHangingStartAndIsActive(t *testing.T) {
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "systemctl-args")
 	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %q\ncase \" $* \" in *\" is-active \"*) exec sleep 5 ;; *\" start \"*) exec sleep 5 ;; esac\nexit 0\n", argsFile)
-	if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte(script), 0o755); err != nil {
+	systemctlPath := filepath.Join(dir, "systemctl")
+	if err := os.WriteFile(systemctlPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("writing fake systemctl: %v", err)
 	}
+	bindDelegatedSystemctlPath(t, systemctlPath)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
@@ -1733,6 +1746,14 @@ func TestRunStartDriftCheck_DelegatedTryRestartTimeoutThenReplacementSucceeds(t 
 	oldJob := delegatedSystemctlJobTimeout
 	delegatedSystemctlJobTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { delegatedSystemctlJobTimeout = oldJob })
+	// This case proves that the verification poll observes a late
+	// replacement. Give that poll scheduling margin under the highly
+	// parallel local gate; the sibling BoundsSystemctl test owns the
+	// systemctl wall-clock bound, and production keeps its five-second
+	// readiness budget.
+	oldReady := driftReadyTimeout
+	driftReadyTimeout = 15 * time.Second
+	t.Cleanup(func() { driftReadyTimeout = oldReady })
 
 	// Model a unit that replaces the supervisor binary only after the CLI's
 	// bounded try-restart wait has elapsed: once the fake systemctl has run
@@ -1759,20 +1780,16 @@ func TestRunStartDriftCheck_DelegatedTryRestartTimeoutThenReplacementSucceeds(t 
 	t.Cleanup(func() { supervisorAPIBaseURLHook = oldURL })
 
 	var stdout, stderr bytes.Buffer
-	start := time.Now()
 	exitCode, cont := runStartDriftCheck(cityPath, &stdout, &stderr)
-	elapsed := time.Since(start)
 	if exitCode != 0 {
-		t.Fatalf("exitCode = %d, want 0; stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+		args, _ := os.ReadFile(argsFile)
+		t.Fatalf("exitCode = %d, want 0; probes=%d systemctl=%q stdout=%q stderr=%q", exitCode, postTimeoutProbes.Load(), args, stdout.String(), stderr.String())
 	}
 	if !cont {
 		t.Fatalf("cont = false after a verified late replacement; stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 	if postTimeoutProbes.Load() <= oldBuildProbesBeforeReplace {
 		t.Fatalf("verification made %d post-timeout probes; want > %d (the poll must retry past the early old-build probes to the late replacement)", postTimeoutProbes.Load(), oldBuildProbesBeforeReplace)
-	}
-	if elapsed > 3*time.Second {
-		t.Fatalf("delegated try-restart took %s; the job timeout did not bound the systemctl invocation", elapsed)
 	}
 	if !strings.Contains(stdout.String(), " ready (") {
 		t.Errorf("stdout = %q, want ready line after verified late replacement", stdout.String())

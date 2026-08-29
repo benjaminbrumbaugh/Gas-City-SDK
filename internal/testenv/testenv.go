@@ -315,6 +315,18 @@ func refuseDoltPortValue(survives func(name string) bool, targetPort string) {
 	}
 }
 
+func canonicalizeTempDir() {
+	tempDir := os.Getenv("TMPDIR")
+	if tempDir == "" {
+		return
+	}
+	canonical, err := filepath.EvalSymlinks(tempDir)
+	if err != nil || canonical == tempDir {
+		return
+	}
+	_ = os.Setenv("TMPDIR", canonical)
+}
+
 func init() {
 	if !isGoTestBinary() {
 		// Testscript subcommand mode (e.g. this binary was copied to
@@ -326,6 +338,7 @@ func init() {
 		refuseProdDoltPort(func(string) bool { return true })
 		return
 	}
+	canonicalizeTempDir()
 	keep := map[string]bool{}
 	if list := os.Getenv(PassthroughVar); list != "" {
 		for _, name := range strings.Split(list, ",") {

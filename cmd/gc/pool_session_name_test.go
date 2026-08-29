@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log"
 	"slices"
@@ -16,6 +17,23 @@ import (
 )
 
 const testDetachedPoolProbeSpec = "tmux:gascity:soak-loop"
+
+func installDetachedProbeStatus(t *testing.T, status detachedProbeStatus) {
+	t.Helper()
+	old := detachedWorkProbeHook
+	detachedWorkProbeHook = func(_ context.Context, spec string) detachedProbeResult {
+		parsed, err := parseDetachedProbeSpec(spec)
+		if err != nil {
+			return detachedProbeResult{Status: detachedProbeError, Err: err}
+		}
+		result := detachedProbeResult{Status: status, Spec: parsed}
+		if status == detachedProbeError {
+			result.Err = errors.New("probe failed")
+		}
+		return result
+	}
+	t.Cleanup(func() { detachedWorkProbeHook = old })
+}
 
 func TestSessionBeadAssigneeIdentities(t *testing.T) {
 	tests := []struct {
@@ -450,7 +468,7 @@ func TestReleaseOrphanedPoolAssignments_DetachedProbeAliveSkipsRelease(t *testin
 	resetDetachedProbeErrorCountsForTest()
 	store := beads.NewMemStore()
 	work := createDetachedOrphanedPoolWork(t, store)
-	installFakeTmux(t, "exit 0")
+	installDetachedProbeStatus(t, detachedProbeAlive)
 	var logs bytes.Buffer
 	restore := captureLogOutput(&logs)
 	defer restore()
@@ -490,7 +508,7 @@ func TestReleaseOrphanedPoolAssignments_DetachedProbeDeadReleasesAndClears(t *te
 	resetDetachedProbeErrorCountsForTest()
 	store := beads.NewMemStore()
 	work := createDetachedOrphanedPoolWork(t, store)
-	installFakeTmux(t, "exit 1")
+	installDetachedProbeStatus(t, detachedProbeDead)
 
 	released := releaseOrphanedPoolAssignmentsFromBeads(
 		store,
@@ -525,7 +543,7 @@ func TestReleaseOrphanedPoolAssignments_DetachedProbeDeadPreservesGuardWhenRelea
 	base := beads.NewMemStore()
 	work := createDetachedOrphanedPoolWork(t, base)
 	store := failReleaseUpdateStore{Store: base, failID: work.ID}
-	installFakeTmux(t, "exit 1")
+	installDetachedProbeStatus(t, detachedProbeDead)
 
 	released := releaseOrphanedPoolAssignmentsFromBeads(
 		store,
@@ -559,7 +577,7 @@ func TestReleaseOrphanedPoolAssignments_DetachedProbeErrorsReleaseOnThirdTick(t 
 	resetDetachedProbeErrorCountsForTest()
 	store := beads.NewMemStore()
 	work := createDetachedOrphanedPoolWork(t, store)
-	installFakeTmux(t, "exit 2")
+	installDetachedProbeStatus(t, detachedProbeError)
 
 	for tick := 1; tick <= 2; tick++ {
 		released := releaseOrphanedPoolAssignmentsFromBeads(

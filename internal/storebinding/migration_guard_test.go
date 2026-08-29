@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gastownhall/gascity/internal/testutil"
 )
 
 func TestMigrationGuardRetriesOuterReleaseWithoutReopeningClaims(t *testing.T) {
@@ -100,7 +102,7 @@ func returnsMigrationGuard(function *ast.FuncDecl) bool {
 
 func testMigrationGuardDirectory(t *testing.T) string {
 	t.Helper()
-	directory := filepath.Join(t.TempDir(), "city", ".gc")
+	directory := filepath.Join(testutil.CanonicalPath(t.TempDir()), "city", ".gc")
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		t.Fatalf("create city .gc directory: %v", err)
 	}

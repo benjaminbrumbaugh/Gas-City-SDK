@@ -4457,10 +4457,10 @@ func TestOpenControlStoreAtForCityUsesControlRunnerForStaleBdScope(t *testing.T)
 	if got := envs[0]["BD_EXPORT_AUTO"]; got != "false" {
 		t.Fatalf("BD_EXPORT_AUTO = %q, want false", got)
 	}
-	if got := envs[0]["BEADS_DIR"]; got != filepath.Join(staleRigDir, ".beads") {
+	if got := envs[0]["BEADS_DIR"]; canonicalTestPath(got) != canonicalTestPath(filepath.Join(staleRigDir, ".beads")) {
 		t.Fatalf("BEADS_DIR = %q, want stale rig store", got)
 	}
-	if got := envs[0]["GC_RIG_ROOT"]; got != staleRigDir {
+	if got := envs[0]["GC_RIG_ROOT"]; canonicalTestPath(got) != canonicalTestPath(staleRigDir) {
 		t.Fatalf("GC_RIG_ROOT = %q, want stale rig root", got)
 	}
 }

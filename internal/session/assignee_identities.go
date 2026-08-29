@@ -47,13 +47,18 @@ func AssigneeIdentities(i Info) []string {
 }
 
 // AssigneeIdentifier returns the durable agent-facing ownership identity of a
-// session: its current public alias, configured named identity, or runtime
-// session name, falling back to the bead ID when no name metadata is present.
-// This is the same alias-first identity RuntimeEnvWithSessionContext exposes
-// through GC_ALIAS and BEADS_ACTOR; GC_AGENT mirrors it only for compatibility.
-// Keeping API assignment normalization on this rule prevents one session from
-// owning work under a different exact string than it presents to bd.
+// session. Unnamed pool aliases rebind, so pool sessions own work by persisted
+// runtime session name (or bead ID). Configured named sessions retain their
+// stable public/configured identity. RuntimeEnvWithSessionContext exposes the
+// result through BEADS_ACTOR and GC_AGENT while GC_ALIAS remains public routing
+// and display metadata.
 func AssigneeIdentifier(i Info) string {
+	if i.PoolManaged && strings.TrimSpace(i.ConfiguredNamedIdentity) == "" {
+		if sessionName := strings.TrimSpace(i.SessionNameMetadata); sessionName != "" {
+			return sessionName
+		}
+		return i.ID
+	}
 	for _, v := range []string{i.Alias, i.ConfiguredNamedIdentity, i.SessionNameMetadata} {
 		if v = strings.TrimSpace(v); v != "" {
 			return v

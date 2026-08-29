@@ -384,10 +384,10 @@ func TestPurgedDecisionTombstonePreventsStillCurrentReingest(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	payload, approval, signature, verifier := currentTestDecision(t, "decision-long-valid", current)
+	payload, _, _, _ := currentTestDecision(t, "decision-long-valid", current)
 	payload.ExpiresAt = current.AddDate(1, 0, 0)
 	payload.BindingID = BindingID(payload)
-	approval, signature, verifier = signedDecision(t, payload, current.Add(-time.Second))
+	approval, signature, verifier := signedDecision(t, payload, current.Add(-time.Second))
 	request := IngestApprovedRequest{
 		Payload: payload, Approval: approval, Signature: signature,
 		Now: current, IdempotencyToken: "ingest-long-valid",

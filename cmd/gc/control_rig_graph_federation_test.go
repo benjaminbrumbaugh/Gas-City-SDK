@@ -63,7 +63,7 @@ func rigFederationFixture(t *testing.T, bdPayload string) (cityPath, rigPath str
 	t.Helper()
 	configureIsolatedRuntimeEnv(t)
 
-	cityPath = t.TempDir()
+	cityPath = canonicalTestPath(t.TempDir())
 	rigPath = filepath.Join(cityPath, "rigs", "fixture")
 	if err := os.MkdirAll(rigPath, 0o755); err != nil {
 		t.Fatalf("mkdir rig path: %v", err)
