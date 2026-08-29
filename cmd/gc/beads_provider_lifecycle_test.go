@@ -4909,6 +4909,10 @@ esac
 	if err := os.WriteFile(fakeDolt, []byte(fakeDoltScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	fakeBD := filepath.Join(binDir, "bd")
+	if err := os.WriteFile(fakeBD, []byte("#!/bin/sh\nprintf 'bd version 1.1.1 (test)\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	fakeNC := filepath.Join(binDir, "nc")
 	fakeNCScript := fmt.Sprintf(`#!/bin/sh
 attempts_file=%q
