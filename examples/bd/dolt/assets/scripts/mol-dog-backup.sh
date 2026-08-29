@@ -463,21 +463,113 @@ acquire_backup_lock() {
 # RFC3339 for the two Go readers.
 stamp_backup_sync_state() {
     local elapsed="$1"
+    # Target defaults to the city's own state file. Peer scopes pass their own:
+    # this script backs up databases belonging to other beads workspaces, and
+    # each of those scopes is judged on its own copy of this file.
+    local target="${2:-$BACKUP_SYNC_STATE_FILE}"
     local tmp
     local synced_at
 
     synced_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-    tmp=$(mktemp "$BACKUP_SYNC_STATE_FILE.tmp.XXXXXX" 2>/dev/null) || return 1
+    tmp=$(mktemp "$target.tmp.XXXXXX" 2>/dev/null) || return 1
     if ! ( umask 077; printf '{\n  "last_sync": "%s",\n  "duration": "%ss"\n}\n' \
         "$synced_at" "$elapsed" > "$tmp" ); then
         rm -f "$tmp" 2>/dev/null || true
         return 1
     fi
-    if ! mv -f "$tmp" "$BACKUP_SYNC_STATE_FILE" 2>/dev/null; then
+    if ! mv -f "$tmp" "$target" 2>/dev/null; then
         rm -f "$tmp" 2>/dev/null || true
         return 1
     fi
     return 0
+}
+
+# peer_scope_roots emits one absolute workspace root per line for every scope
+# this city's routes bind, excluding the city itself. Route paths are relative
+# to the scope root that owns the file, so they resolve against GC_CITY_PATH. A
+# route pointing at a directory that does not exist is skipped silently — a
+# stale route must not fail a backup run.
+peer_scope_roots() {
+    local routes="$GC_CITY_PATH/.beads/routes.jsonl"
+    local route_line
+    local rel
+    local abs
+
+    [ -f "$routes" ] || return 0
+    while IFS= read -r route_line || [ -n "$route_line" ]; do
+        [ -n "$route_line" ] || continue
+        case "$route_line" in
+            *'"path"'*) ;;
+            *) continue ;;
+        esac
+        rel="${route_line##*\"path\":\"}"
+        rel="${rel%%\"*}"
+        [ -n "$rel" ] || continue
+        abs=$( (CDPATH= cd -- "$GC_CITY_PATH/$rel" 2>/dev/null && pwd) || true )
+        [ -n "$abs" ] || continue
+        if same_path "$abs" "$GC_CITY_PATH"; then
+            continue
+        fi
+        printf '%s\n' "$abs"
+    done < "$routes"
+}
+
+# scope_dolt_database emits the Dolt database a scope's beads workspace is bound
+# to. This is the same binding `gc doctor` resolves per scope root, so stamping
+# keyed on it lands where the freshness check reads.
+scope_dolt_database() {
+    local meta="$1/.beads/metadata.json"
+
+    [ -f "$meta" ] || return 1
+    sed -n 's/.*"dolt_database"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$meta" | head -1
+}
+
+# stamp_peer_scope_states refreshes the freshness signal of every peer scope
+# whose database this run backed up, and emits the number stamped.
+#
+# This script is the mechanism that actually backs those databases up — a rig's
+# store lives in the city's Dolt data dir and its backup lands in the city's
+# artifact dir — but it used to stamp only the city's own file. `gc doctor`
+# bd-backup-freshness reads the file per scope root and reaper.sh step 6 gates
+# its bulk prune on it, so a rig backed up on schedule still looked permanently
+# un-backed-up and kept its prune gate latched (gc-i37v7).
+#
+# Called only on a clean sweep, so every enumerated database synced.
+stamp_peer_scope_states() {
+    local elapsed="$1"
+    local stamped=0
+    local scope_root
+    local scope_db
+    local scope_state
+
+    while IFS= read -r scope_root; do
+        [ -n "$scope_root" ] || continue
+        [ -d "$scope_root/.beads" ] || continue
+        scope_db=$(scope_dolt_database "$scope_root") || continue
+        [ -n "$scope_db" ] || continue
+        if ! printf '%s\n' "$DATABASES" | grep -qx -- "$scope_db"; then
+            continue
+        fi
+        scope_state="$scope_root/.beads/dolt-backup-state.json"
+        # Refresh an existing stamp, or create one for a scope that has a
+        # registered Dolt destination. Never invent one for a scope with
+        # neither: absence means no backup is registered there, which
+        # DoltBackupCheck reports, and writing a stamp would both assert
+        # coverage nobody configured and newly enrol that scope in
+        # bd-backup-freshness. Mirrors the no-workspace rule one level out.
+        if [ ! -f "$scope_state" ] && [ ! -f "$scope_root/.beads/dolt-backup.json" ]; then
+            continue
+        fi
+        if stamp_backup_sync_state "$elapsed" "$scope_state"; then
+            stamped=$((stamped + 1))
+        else
+            echo "backup: warning: could not stamp $scope_state;" \
+                "that scope's reaper bulk prune will keep reading a stale timestamp" >&2
+        fi
+    done <<SCOPE_ROOTS
+$(peer_scope_roots)
+SCOPE_ROOTS
+    printf '%s\n' "$stamped"
 }
 
 # --- Step 1: Preflight Dolt version before backup sync ---
@@ -643,18 +735,25 @@ OFFSITE_STATUS="skipped"
 # that. Offsite rsync is deliberately not a precondition — it runs after this
 # and is non-fatal, so the databases are already backed up either way.
 STATE_STAMP="skipped"
+PEER_SCOPES_STAMPED=0
 if [ "$FAILED_COUNT" -eq 0 ] && [ "$SYNCED" -gt 0 ]; then
+    SYNC_ELAPSED=$(( $(date -u '+%s') - SYNC_STARTED_EPOCH ))
     if [ ! -d "$(dirname "$BACKUP_SYNC_STATE_FILE")" ]; then
         # Not a beads workspace. Creating the directory here would fabricate one
         # that beads.FindBeadsDir() would then resolve, so report and move on.
         STATE_STAMP="no-workspace"
-    elif stamp_backup_sync_state "$(( $(date -u '+%s') - SYNC_STARTED_EPOCH ))"; then
+    elif stamp_backup_sync_state "$SYNC_ELAPSED"; then
         STATE_STAMP="ok"
     else
         STATE_STAMP="failed (non-fatal)"
         echo "backup: warning: could not stamp $BACKUP_SYNC_STATE_FILE;" \
             "reaper bulk prune will keep reading a stale backup timestamp" >&2
     fi
+    # Peer scopes are stamped on the same clean-sweep condition, and
+    # independently of whether the CITY has a beads workspace: a city without
+    # one still backs up its rigs' databases, and those rigs are still judged on
+    # their own freshness files.
+    PEER_SCOPES_STAMPED=$(stamp_peer_scope_states "$SYNC_ELAPSED")
 fi
 
 # --- Step 3: Rsync backup artifacts to offsite storage ---
@@ -695,5 +794,8 @@ else
 fi
 
 SUMMARY="backup — synced: $SYNCED/$TOTAL, offsite: $OFFSITE_STATUS, state: $STATE_STAMP"
+if [ "$PEER_SCOPES_STAMPED" -gt 0 ]; then
+    SUMMARY="$SUMMARY (+$PEER_SCOPES_STAMPED peer scope(s))"
+fi
 dolt_notify_done "$SUMMARY"
 echo "backup: $SUMMARY"
