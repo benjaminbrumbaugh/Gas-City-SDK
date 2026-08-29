@@ -16,15 +16,21 @@
 
 # Local build-layer image produced by Dockerfile.base, not a registry pull.
 ARG BASE_IMAGE=gc-agent-base:latest
+ARG GO_VERSION=1.26.6
 
-FROM golang:1.26.6-bookworm@sha256:433f9dc4f8ea3a1ce4e28f9f15d0f7c056b10475307f886d6f1ac1ccc4abd976 AS bd-builder
+FROM golang:${GO_VERSION}-bookworm@sha256:433f9dc4f8ea3a1ce4e28f9f15d0f7c056b10475307f886d6f1ac1ccc4abd976 AS bd-builder
 
+ARG GO_VERSION
 ARG BD_VERSION=v1.1.1
 ARG BD_SOURCE_REF=869020c2213db2bfd9e1ba0aa54c7e60d52e5f2c
 ARG BD_SOURCE_SHA256=142bc4cadfc9929ab87691c5a6fed346616284175d57ccb7e9ab8b007991049d
 ARG BD_BUILD=869020c221
 ARG BD_BRANCH=HEAD
 ARG GRPC_VERSION=1.83.0
+
+# Source toolchain directives must not download a compiler outside the
+# checksum-pinned builder image.
+ENV GOTOOLCHAIN=local
 
 # Rebuild the schema-v63-compatible Beads source with its production
 # CGO/pure-Go-regex configuration and patched grpc dependency.
@@ -46,6 +52,7 @@ RUN bd_version="${BD_VERSION#v}" \
        -o /out/bd \
        ./cmd/bd \
     && /out/bd --version | grep -Fq "bd version ${bd_version} (${BD_BUILD})" \
+    && go version -m /out/bd | grep -Fq "/out/bd: go${GO_VERSION}" \
     && go version -m /out/bd | tr '\t' ' ' | grep -Fq "dep google.golang.org/grpc v${GRPC_VERSION} "
 
 FROM ${BASE_IMAGE}
