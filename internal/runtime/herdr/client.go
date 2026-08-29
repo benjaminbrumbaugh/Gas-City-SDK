@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -670,37 +671,62 @@ func (c *client) ensurePlacement(ctx context.Context, wsLabel, tabLabel, cwd str
 
 // ── shared session-server lifecycle ──────────────────────────────────────────
 
-// socketPath is the unix socket for this client's herdr session. Must match
-// wherever the herdr binary itself resolves its config/state directory —
-// confirmed empirically (`XDG_CONFIG_HOME=X herdr --help` prints
-// "Config: X/herdr/config.toml" regardless of $HOME; with XDG_CONFIG_HOME
-// unset it falls back to "$HOME/.config/herdr/…") to be standard XDG Base
-// Directory precedence. os.UserConfigDir is not equivalent on macOS: it
-// returns "$HOME/Library/Application Support" and ignores XDG_CONFIG_HOME.
-// A plain os.UserHomeDir()+".config" join also ignores XDG_CONFIG_HOME, so
-// either shortcut diverges from herdr's own resolution in an
-// environment that sets XDG_CONFIG_HOME while pointing $HOME elsewhere —
-// this fleet's agent sandboxes do exactly that. The result: this client
-// dials a socket no herdr process ever binds, so serverAlive() reads false
-// against a perfectly healthy server ("did not become ready"), and every
-// retry launches a redundant herdr server contending for the same pane
-// ("agent_pane_busy") — ga-nqlb8q.
+// herdrConfigDir mirrors herdr's config::io::config_dir exactly. Herdr uses
+// presence-sensitive std::env::var lookups: present empty or whitespace values
+// are paths, not requests to fall back. Normalizing them here would make this
+// client dial a different socket from the server it launches.
+func herdrConfigDir() string {
+	if dir, ok := os.LookupEnv("XDG_CONFIG_HOME"); ok {
+		return filepath.Join(dir, "herdr")
+	}
+	if goruntime.GOOS == "windows" {
+		if dir, ok := os.LookupEnv("APPDATA"); ok {
+			return filepath.Join(dir, "herdr")
+		}
+		if profile, ok := os.LookupEnv("USERPROFILE"); ok {
+			return filepath.Join(profile, "AppData", "Roaming", "herdr")
+		}
+	}
+	if home, ok := os.LookupEnv("HOME"); ok {
+		return filepath.Join(home, ".config", "herdr")
+	}
+	return filepath.Join(os.TempDir(), "herdr")
+}
+
+// serverEnvironment keeps relative config paths anchored to the client's
+// working directory when startServer changes the herdr process directory to
+// the city root. Other herdr commands inherit the client's working directory,
+// so this normalization makes every process resolve the same socket.
+func (c *client) serverEnvironment() ([]string, error) {
+	configDir := herdrConfigDir()
+	if c.cityRoot == "" || filepath.IsAbs(configDir) {
+		return nil, nil
+	}
+	absoluteConfigDir, err := filepath.Abs(configDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve relative herdr config directory: %w", err)
+	}
+	prefix := "XDG_CONFIG_HOME="
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, prefix) {
+			env = append(env, entry)
+		}
+	}
+	return append(env, prefix+filepath.Dir(absoluteConfigDir)), nil
+}
+
+// socketPath is the unix socket for this client's herdr session. It must use
+// herdrConfigDir so serverAlive and the launched herdr process agree.
 func (c *client) socketPath() string {
 	if c.sockPath != "" {
 		return c.sockPath
 	}
-	configDir := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
-	if configDir == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			configDir = filepath.Join(home, ".config")
-		} else {
-			configDir, _ = os.UserConfigDir()
-		}
-	}
+	configDir := herdrConfigDir()
 	if c.session == "" || c.session == "default" {
-		return filepath.Join(configDir, "herdr", "herdr.sock")
+		return filepath.Join(configDir, "herdr.sock")
 	}
-	return filepath.Join(configDir, "herdr", "sessions", c.session, "herdr.sock")
+	return filepath.Join(configDir, "sessions", c.session, "herdr.sock")
 }
 
 // serverAlive reports whether the session-server is actually accepting
@@ -747,6 +773,10 @@ func (c *client) startServer() error {
 	defer func() { _ = devnull.Close() }()
 	cmd := exec.Command(c.bin, "--session", c.session, "server")
 	cmd.Stdout, cmd.Stderr = devnull, devnull
+	cmd.Env, err = c.serverEnvironment()
+	if err != nil {
+		return fmt.Errorf("herdr server environment: %w", err)
+	}
 	// Launch the shared daemon in the city root, not the inherited cwd (which is
 	// often $HOME when gc is invoked from a login shell). Sessions whose --cwd is
 	// empty/nonexistent fall back to this server cwd, so a $HOME-rooted server
