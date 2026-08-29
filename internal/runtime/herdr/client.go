@@ -675,9 +675,10 @@ func (c *client) ensurePlacement(ctx context.Context, wsLabel, tabLabel, cwd str
 // confirmed empirically (`XDG_CONFIG_HOME=X herdr --help` prints
 // "Config: X/herdr/config.toml" regardless of $HOME; with XDG_CONFIG_HOME
 // unset it falls back to "$HOME/.config/herdr/…") to be standard XDG Base
-// Directory precedence, i.e. exactly os.UserConfigDir() on this platform. A
-// plain os.UserHomeDir()+".config" join (the prior implementation) silently
-// ignores XDG_CONFIG_HOME, so it diverges from herdr's own resolution in any
+// Directory precedence. os.UserConfigDir is not equivalent on macOS: it
+// returns "$HOME/Library/Application Support" and ignores XDG_CONFIG_HOME.
+// A plain os.UserHomeDir()+".config" join also ignores XDG_CONFIG_HOME, so
+// either shortcut diverges from herdr's own resolution in an
 // environment that sets XDG_CONFIG_HOME while pointing $HOME elsewhere —
 // this fleet's agent sandboxes do exactly that. The result: this client
 // dials a socket no herdr process ever binds, so serverAlive() reads false
@@ -688,7 +689,14 @@ func (c *client) socketPath() string {
 	if c.sockPath != "" {
 		return c.sockPath
 	}
-	configDir, _ := os.UserConfigDir()
+	configDir := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+	if configDir == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			configDir = filepath.Join(home, ".config")
+		} else {
+			configDir, _ = os.UserConfigDir()
+		}
+	}
 	if c.session == "" || c.session == "default" {
 		return filepath.Join(configDir, "herdr", "herdr.sock")
 	}

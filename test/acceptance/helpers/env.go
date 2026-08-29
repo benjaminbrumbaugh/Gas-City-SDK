@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -16,6 +17,20 @@ import (
 // test-specific overrides on top.
 type Env struct {
 	vars map[string]string
+}
+
+// NewTempRoot creates the isolated acceptance root. macOS AF_UNIX paths are
+// limited to roughly 104 bytes, so its long per-user os.TempDir path cannot
+// safely contain GC_HOME/supervisor.sock.
+func NewTempRoot() (string, error) {
+	return os.MkdirTemp(acceptanceTempRoot(runtime.GOOS, os.TempDir()), "gca-*")
+}
+
+func acceptanceTempRoot(goos, tempDir string) string {
+	if goos == "darwin" {
+		return "/tmp"
+	}
+	return tempDir
 }
 
 // NewEnv creates an isolated environment with the minimum inherited

@@ -1,6 +1,19 @@
 package acceptancehelpers
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
+
+func TestAcceptanceTempRootUsesShortDarwinBase(t *testing.T) {
+	longTemp := filepath.Join("private", "var", "folders", "runner", "T")
+	if got, want := acceptanceTempRoot("darwin", longTemp), "/tmp"; got != want {
+		t.Fatalf("acceptanceTempRoot(darwin) = %q, want %q", got, want)
+	}
+	if got := acceptanceTempRoot("linux", longTemp); got != longTemp {
+		t.Fatalf("acceptanceTempRoot(linux) = %q, want %q", got, longTemp)
+	}
+}
 
 func TestNewEnvInheritsClaudeGatewayVariables(t *testing.T) {
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "synthetic-token")

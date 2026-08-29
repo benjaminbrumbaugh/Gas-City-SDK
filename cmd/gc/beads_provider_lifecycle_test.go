@@ -4779,9 +4779,10 @@ func TestGcBeadsBdStartUsesRootBeadsDataDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitConfig := filepath.Join(homeDir, ".gitconfig")
-	if err := os.WriteFile(gitConfig, []byte("[user]\n\tname = Test User\n\temail = test@example.com\n"), 0o644); err != nil {
+	if err := os.WriteFile(gitConfig, []byte("[user]\n	name = Test User\n	email = test@example.com\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	fakeBD := writeFakeCurrentBDVersion(t, t.TempDir())
 
 	poisonRuntimeDir := filepath.Join(t.TempDir(), "poison-runtime")
 	poisonPackStateDir := filepath.Join(poisonRuntimeDir, "packs", "dolt")
@@ -4791,6 +4792,7 @@ func TestGcBeadsBdStartUsesRootBeadsDataDir(t *testing.T) {
 	t.Setenv("GC_DOLT_STATE_FILE", poisonStateFile)
 
 	scriptEnv := sanitizedBaseEnv(
+		"BD_BIN="+fakeBD,
 		"HOME="+homeDir,
 		"GIT_CONFIG_GLOBAL="+gitConfig,
 		"GC_CITY_PATH="+cityPath,
@@ -8280,6 +8282,7 @@ esac
 	}
 	invocationFile := filepath.Join(t.TempDir(), "gc-invocations.log")
 	fakeGC := writeFakeManagedConfigWriterGC(t, binDir, invocationFile)
+	writeFakeCurrentBDVersion(t, binDir)
 
 	compatPort := reserveRandomTCPPort(t)
 	compatListener := startTCPListenerProcess(t, compatPort)
@@ -8341,6 +8344,15 @@ esac
 	if state.Port != providerPort || state.PID != providerListener.Process.Pid {
 		t.Fatalf("provider state = %+v, want existing provider listener port=%d pid=%d", state, providerPort, providerListener.Process.Pid)
 	}
+}
+
+func writeFakeCurrentBDVersion(t *testing.T, binDir string) string {
+	t.Helper()
+	path := filepath.Join(binDir, "bd")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf 'bd version 1.1.1 (test)\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func writeFakeManagedConfigWriterGC(t *testing.T, binDir, invocationFile string) string {
@@ -10128,6 +10140,7 @@ esac
 	if err := os.WriteFile(fakeDolt, []byte(fakeDoltScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeFakeCurrentBDVersion(t, binDir)
 	env := sanitizedBaseEnv(
 		"GC_CITY_PATH="+cityPath,
 		"GC_DOLT_PORT=3311",
@@ -10376,6 +10389,7 @@ esac
 	if err := os.WriteFile(fakeDolt, []byte(fakeScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeFakeCurrentBDVersion(t, binDir)
 
 	env := sanitizedBaseEnv(
 		"GC_CITY_PATH="+cityPath,
@@ -11414,7 +11428,14 @@ esac
 	}
 
 	fakeDolt := filepath.Join(binDir, "dolt")
-	if err := os.WriteFile(fakeDolt, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	fakeDoltScript := fmt.Sprintf(`#!/bin/sh
+schema_marker=%q
+case "$*" in
+  *"SELECT 1 FROM config"*) [ -f "$schema_marker" ] ;;
+  *) exit 0 ;;
+esac
+`, bdInitLog)
+	if err := os.WriteFile(fakeDolt, []byte(fakeDoltScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
 

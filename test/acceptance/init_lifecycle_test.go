@@ -22,7 +22,7 @@ import (
 var testEnv *helpers.Env
 
 func TestMain(m *testing.M) {
-	tmpDir, err := os.MkdirTemp("", "gc-acceptance-*")
+	tmpDir, err := helpers.NewTempRoot()
 	if err != nil {
 		panic("acceptance: creating temp dir: " + err.Error())
 	}

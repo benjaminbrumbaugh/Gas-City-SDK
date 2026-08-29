@@ -38,7 +38,6 @@ RUN mkdir -p /src/bd /out \
 
 WORKDIR /src/bd
 RUN bd_version="${BD_VERSION#v}" \
-    && grep -Fq "Version = \"${bd_version}\"" cmd/bd/version.go \
     && go get "google.golang.org/grpc@v${GRPC_VERSION}" \
     && CGO_ENABLED=1 go build \
        -tags="gms_pure_go" \
@@ -55,7 +54,7 @@ FROM ${BASE_IMAGE}
 # back to gcagent below.
 USER root
 
-# bd (beads) CLI, rebuilt above from checksum-pinned release source.
+# bd (beads) CLI, rebuilt above from checksum-pinned source.
 COPY --from=bd-builder /out/bd /usr/local/bin/bd
 RUN BD_DISABLE_METRICS=1 BD_DISABLE_EVENT_FLUSH=1 bd --version
 

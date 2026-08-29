@@ -76,7 +76,7 @@ func TestAgentImageRebuildsBDAndGCWithPatchedGRPC(t *testing.T) {
 	bdCurrentVersion := readDotenv(t, root+"/deps.env")["BD_CURRENT_VERSION"]
 	bdVersion := strings.SplitN(bdCurrentVersion, "-", 2)[0]
 	if bdVersion != "v1.1.1" {
-		t.Fatalf("deps.env BD_CURRENT_VERSION = %q, want a v1.1.1 source version", bdCurrentVersion)
+		t.Fatalf("deps.env BD_CURRENT_VERSION = %q, want a v1.1.1 built version", bdCurrentVersion)
 	}
 
 	dockerfile := readFile(t, root, "contrib/k8s/Dockerfile.agent")
@@ -89,7 +89,6 @@ func TestAgentImageRebuildsBDAndGCWithPatchedGRPC(t *testing.T) {
 		"ARG GRPC_VERSION=" + grpcVersion,
 		`https://github.com/steveyegge/beads/archive/${BD_SOURCE_REF}.tar.gz`,
 		`echo "${BD_SOURCE_SHA256}  /tmp/bd-source.tar.gz" | sha256sum --check --strict`,
-		`grep -Fq "Version = \"${bd_version}\"" cmd/bd/version.go`,
 		`go get "google.golang.org/grpc@v${GRPC_VERSION}"`,
 		`CGO_ENABLED=1 go build`,
 		`-tags="gms_pure_go"`,
