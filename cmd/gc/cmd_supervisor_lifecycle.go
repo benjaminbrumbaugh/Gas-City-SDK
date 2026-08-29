@@ -2233,7 +2233,22 @@ func uninstallSupervisorLaunchd(_ *supervisorServiceData, stdout, stderr io.Writ
 		// Socket-protocol stop, never the delegated redirect: uninstall is
 		// cleaning up gc's OWN service and must not stop an operator's
 		// delegated unit (or require systemctl on darwin) as a side effect.
-		if code := stopSupervisorViaVerifiedSocketJSON(sockPath, apiPID, stdout, stderr, true, 30*time.Second, false); code != 0 {
+		ownedPath := legacySupervisorLaunchdPlistPath()
+		if currentOwned {
+			ownedPath = path
+		}
+		unloadOwnedService := func() error {
+			if err := supervisorLaunchctlRun("unload", ownedPath); err != nil {
+				return err
+			}
+			if currentOwned {
+				currentRegistered = false
+			} else {
+				legacyRegistered = false
+			}
+			return nil
+		}
+		if code := stopSupervisorViaVerifiedSocketJSON(sockPath, apiPID, stdout, stderr, true, 30*time.Second, false, unloadOwnedService); code != 0 {
 			return code
 		}
 	} else if active || legacyActive {

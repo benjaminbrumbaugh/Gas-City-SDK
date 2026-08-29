@@ -4550,6 +4550,7 @@ func TestUninstallSupervisorLaunchdUsesControlSocketWhenSupervisorRunning(t *tes
 		socketStopSeen     bool
 		stopped            bool
 		unloadBeforeSocket bool
+		currentUnloadCalls int
 		launchdDisableSeen bool
 	)
 	sockPath := supervisorSocketPath()
@@ -4576,8 +4577,14 @@ func TestUninstallSupervisorLaunchdUsesControlSocketWhenSupervisorRunning(t *tes
 	supervisorLaunchctlRun = func(args ...string) error {
 		mu.Lock()
 		defer mu.Unlock()
-		if len(args) == 2 && args[0] == "unload" && args[1] == currentPath && !socketStopSeen {
-			unloadBeforeSocket = true
+		if len(args) == 2 && args[0] == "unload" && args[1] == currentPath {
+			currentUnloadCalls++
+			if !socketStopSeen {
+				unloadBeforeSocket = true
+			}
+			if currentUnloadCalls > 1 {
+				return errors.New("service already unloaded")
+			}
 		}
 		if len(args) == 2 && args[0] == "disable" && args[1] == supervisorLaunchdServiceTarget(supervisorLaunchdLabel()) {
 			launchdDisableSeen = true
@@ -4608,6 +4615,9 @@ func TestUninstallSupervisorLaunchdUsesControlSocketWhenSupervisorRunning(t *tes
 	defer mu.Unlock()
 	if unloadBeforeSocket {
 		t.Fatal("launchd uninstall unloaded the service before requesting destructive socket shutdown")
+	}
+	if currentUnloadCalls != 1 {
+		t.Fatalf("current launchd unload calls = %d, want exactly 1", currentUnloadCalls)
 	}
 	if !socketStopSeen {
 		t.Fatal("launchd uninstall did not request shutdown through the supervisor control socket")

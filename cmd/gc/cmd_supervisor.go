@@ -828,10 +828,13 @@ func stopSupervisorViaSocketJSON(stdout, stderr io.Writer, wait bool, waitTimeou
 		fmt.Fprintln(stderr, "gc supervisor stop: supervisor is not running") //nolint:errcheck
 		return 1
 	}
-	return stopSupervisorViaVerifiedSocketJSON(sockPath, pid, stdout, stderr, wait, waitTimeout, jsonOut)
+	return stopSupervisorViaVerifiedSocketJSON(sockPath, pid, stdout, stderr, wait, waitTimeout, jsonOut, func() error {
+		unloadSupervisorService()
+		return nil
+	})
 }
 
-func stopSupervisorViaVerifiedSocketJSON(sockPath string, expectedPID int, stdout, stderr io.Writer, wait bool, waitTimeout time.Duration, jsonOut bool) int {
+func stopSupervisorViaVerifiedSocketJSON(sockPath string, expectedPID int, stdout, stderr io.Writer, wait bool, waitTimeout time.Duration, jsonOut bool, unload func() error) int {
 	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
 	if err != nil {
 		fmt.Fprintln(stderr, "gc supervisor stop: supervisor is not running") //nolint:errcheck
@@ -861,7 +864,12 @@ func stopSupervisorViaVerifiedSocketJSON(sockPath string, expectedPID int, stdou
 	if !jsonOut {
 		fmt.Fprintln(stdout, "Supervisor stopping...") //nolint:errcheck
 	}
-	unloadSupervisorService()
+	if unload != nil {
+		if err := unload(); err != nil {
+			fmt.Fprintf(stderr, "gc supervisor stop: unloading service: %v\n", err) //nolint:errcheck
+			return 1
+		}
+	}
 	if !wait {
 		if jsonOut {
 			return writeSupervisorStopSuccess(stdout, stderr, wait)
