@@ -346,7 +346,7 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 	register(doctor.NewDoltConfigCheckForConfig(cityPath, opts.SkipManagedDoltCheck, cfg, cfgErr))
 	register(doctor.NewScopedDoltVersionCheckForConfig(cityPath, opts.SkipManagedDoltCheck, cfg, cfgErr))
 	register(&doctor.EventsLogCheck{})
-	register(doctor.NewEventLogSizeCheck())
+	register(doctor.NewEventLogSizeCheckForConfig(cfg, cfgErr))
 	// bd auto-backup growth canary. bd's auto-backup pipeline (upstream of
 	// gascity, gastownhall/beads#2993) writes to .beads/backup/ on every bd
 	// invocation without retention. This check warns before the directory

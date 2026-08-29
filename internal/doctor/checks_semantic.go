@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -146,16 +147,76 @@ func (c *DurationRangeCheck) Fix(_ *CheckContext) error { return nil }
 
 // --- Event log size check ---
 
-// EventLogSizeCheck warns when .gc/events.jsonl exceeds a size threshold.
-// The event log grows unbounded; large files slow down reads and waste disk.
+// EventLogSizeCheck warns when .gc/events.jsonl has outgrown the events
+// ROTATION policy that is supposed to bound it.
+//
+// It previously carried its own 100 MB literal and a premise that the event log
+// "grows unbounded". Rotation made that false: the runtime bounds the file at
+// Rotation.MaxSizeBytesOrDefault(), 256 MB by default. A second, lower literal
+// therefore warned across the whole band between the two while rotation was
+// working exactly as designed, and its hint sent operators to hand-truncate a
+// file the runtime owns and is actively appending to (gc-dfwf5).
+//
+// The threshold is now the rotation ceiling itself, resolved the same way the
+// runtime resolves it, so the two cannot drift apart again. Crossing it is the
+// genuinely actionable condition: rotation is disabled, misconfigured, or stuck.
 type EventLogSizeCheck struct {
-	// MaxSize is the warning threshold in bytes. Defaults to 100 MB.
+	// MaxSize is the warning threshold in bytes — the effective rotation
+	// ceiling.
 	MaxSize int64
+	// rotationEnabled records whether rotation is configured to run at all. A
+	// disabled policy is worth naming outright: no ceiling will ever be
+	// enforced, so quoting one is misleading.
+	rotationEnabled bool
 }
 
-// NewEventLogSizeCheck creates a check for event log size.
+// NewEventLogSizeCheck creates a check using the default rotation ceiling.
+// Prefer NewEventLogSizeCheckForConfig, which honors a city's own policy.
 func NewEventLogSizeCheck() *EventLogSizeCheck {
-	return &EventLogSizeCheck{MaxSize: 100 * 1024 * 1024} // 100 MB
+	return &EventLogSizeCheck{
+		MaxSize:         config.DefaultEventsRotationMaxSizeBytes,
+		rotationEnabled: true,
+	}
+}
+
+// NewEventLogSizeCheckForConfig resolves the warning threshold from the city's
+// events-rotation policy, including the GC_EVENTS_ROTATION_MAX_SIZE_BYTES
+// override the runtime honors. An unreadable config falls back to the runtime
+// defaults rather than to a stale literal.
+func NewEventLogSizeCheckForConfig(cfg *config.City, cfgErr error) *EventLogSizeCheck {
+	c := NewEventLogSizeCheck()
+	if cfgErr == nil && cfg != nil {
+		rotation := cfg.Events.Rotation
+		c.MaxSize = rotation.MaxSizeBytesOrDefault()
+		c.rotationEnabled = rotation.EnabledOrDefault()
+	}
+	if raw, ok := os.LookupEnv("GC_EVENTS_ROTATION_MAX_SIZE_BYTES"); ok {
+		if n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil && n > 0 {
+			c.MaxSize = n
+		}
+	}
+	if raw, ok := os.LookupEnv("GC_EVENTS_ROTATION_ENABLED"); ok {
+		if enabled, valid := parseRotationEnabledEnv(raw); valid {
+			c.rotationEnabled = enabled
+		}
+	}
+	return c
+}
+
+// parseRotationEnabledEnv mirrors the runtime's GC_EVENTS_ROTATION_ENABLED
+// parse (parseEventsRotationEnabled, cmd/gc/providers.go). The check has to
+// agree with the runtime on whether rotation is on, or it reports a ceiling
+// that is not being enforced — the same disagreement this check was fixed for.
+// An unrecognized value is ignored, leaving the configured value in place.
+func parseRotationEnabledEnv(raw string) (enabled bool, valid bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "t", "true", "y", "yes", "on", "enabled":
+		return true, true
+	case "0", "f", "false", "n", "no", "off", "disabled":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 // Name returns the check identifier.
@@ -181,9 +242,21 @@ func (c *EventLogSizeCheck) Run(ctx *CheckContext) *CheckResult {
 	}
 
 	r.Status = StatusWarning
-	r.Message = fmt.Sprintf("events.jsonl is %s (exceeds %s threshold)",
+	if !c.rotationEnabled {
+		r.Message = fmt.Sprintf(
+			"events.jsonl is %s and events rotation is disabled, so nothing will bound it",
+			humanSize(size))
+		r.FixHint = "re-enable rotation ([events.rotation] enabled in city.toml, " +
+			"or GC_EVENTS_ROTATION_ENABLED); do not truncate .gc/events.jsonl by hand " +
+			"while the runtime is appending to it"
+		return r
+	}
+	r.Message = fmt.Sprintf(
+		"events.jsonl is %s (past its %s rotation ceiling — rotation may be stuck)",
 		humanSize(size), humanSize(c.MaxSize))
-	r.FixHint = "consider truncating or archiving .gc/events.jsonl"
+	r.FixHint = "check that events rotation is running and correctly configured " +
+		"([events.rotation] in city.toml, GC_EVENTS_ROTATION_* overrides); the runtime " +
+		"owns this file, so do not truncate or archive it by hand"
 	return r
 }
 
