@@ -6521,32 +6521,36 @@ func TestStopSupervisorWithWaitStopsSystemdServiceAfterAckBeforeDone(t *testing.
 			go func(conn net.Conn) {
 				defer conn.Close() //nolint:errcheck
 				r := bufio.NewReader(conn)
-				line, err := r.ReadString('\n')
-				if err != nil {
-					return
-				}
-				switch strings.TrimSpace(line) {
-				case "ping":
-					mu.Lock()
-					defer mu.Unlock()
-					if stopped {
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
 						return
 					}
-					io.WriteString(conn, "4242\n") //nolint:errcheck
-				case "stop":
-					mu.Lock()
-					stopped = true
-					mu.Unlock()
-					close(ackSent)
-					io.WriteString(conn, "ok\n") //nolint:errcheck
-					select {
-					case <-serviceStopped:
-					case <-time.After(200 * time.Millisecond):
+					switch strings.TrimSpace(line) {
+					case "ping":
 						mu.Lock()
-						doneSentBeforeService = true
+						if stopped {
+							mu.Unlock()
+							return
+						}
+						io.WriteString(conn, "4242\n") //nolint:errcheck
 						mu.Unlock()
+					case "stop":
+						mu.Lock()
+						stopped = true
+						mu.Unlock()
+						close(ackSent)
+						io.WriteString(conn, "ok\n") //nolint:errcheck
+						select {
+						case <-serviceStopped:
+						case <-time.After(200 * time.Millisecond):
+							mu.Lock()
+							doneSentBeforeService = true
+							mu.Unlock()
+						}
+						io.WriteString(conn, "done:ok\n") //nolint:errcheck
+						return
 					}
-					io.WriteString(conn, "done:ok\n") //nolint:errcheck
 				}
 			}(conn)
 		}
