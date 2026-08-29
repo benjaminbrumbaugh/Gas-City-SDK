@@ -327,6 +327,41 @@ backup_url_from_list() {
     return 1
 }
 
+# backup_name_for_path reads a `dolt backup -v` listing on stdin and emits the
+# name of the first remote whose file:// URL resolves to the given path. It
+# exists because a database's backup can legitimately carry a name other than
+# the managed `<db>-backup` — `bd backup` configures one called `default` — and
+# such a remote IS coverage. Matching only on the managed name made the script
+# try to add a second remote at an address Dolt already has claimed, which Dolt
+# refuses outright, so the database silently lost all backup coverage
+# (gc-534qw). Matching is by resolved path, never by name, so this cannot widen
+# what counts as a valid destination.
+backup_name_for_path() {
+    local target="$1"
+    local line
+    local name
+    local url
+
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        name="${line%%[[:space:]]*}"
+        [ -n "$name" ] || continue
+        url="${line#"$name"}"
+        url="${url#"${url%%[![:space:]]*}"}"
+        url="${url%\{\}}"
+        url="${url% }"
+        case "$url" in
+            file://*)
+                if same_path "${url#file://}" "$target"; then
+                    printf '%s\n' "$name"
+                    return 0
+                fi
+                ;;
+        esac
+    done
+    return 1
+}
+
 backup_destination_is_safe() {
     local candidate="$1"
     local live_db="$2"
@@ -498,13 +533,19 @@ ensure_backup_remote() {
     remote_db_dir="$DOLT_DATA_DIR/$remote_db"
     expected_remote_path="$BACKUP_ARTIFACT_DIR/$remote_db"
     BACKUP_REMOTE_FAILURE="backup add failed"
+    # The name the sync loop must address this database's backup by. Defaults to
+    # the managed name and is rewritten below when an existing remote under a
+    # different name already covers the managed path.
+    BACKUP_REMOTE_NAME="${remote_db}-backup"
     [ -d "$remote_db_dir/.dolt" ] || return 0 # sync loop reports not-found
     if ! backup_destination_is_safe "$expected_remote_path" "$remote_db_dir"; then
         BACKUP_REMOTE_FAILURE="unsafe backup artifact path"
         echo "backup: refusing unsafe backup destination for $remote_db: $expected_remote_path" >&2
         return 1
     fi
-    backup_url=$(cd "$remote_db_dir" && run_bounded 30 dolt backup -v 2>/dev/null | backup_url_from_list "${remote_db}-backup" || true)
+    # Read the listing once: it is consulted twice, by name and then by path.
+    backup_list=$(cd "$remote_db_dir" && run_bounded 30 dolt backup -v 2>/dev/null || true)
+    backup_url=$(printf '%s\n' "$backup_list" | backup_url_from_list "${remote_db}-backup" || true)
     if [ -n "$backup_url" ]; then
         case "$backup_url" in
             file://*)
@@ -517,11 +558,34 @@ ensure_backup_remote() {
         echo "backup: ${remote_db}-backup points outside managed artifact path: $backup_url" >&2
         return 1
     fi
+    # No remote under the managed name — but a backup configured by another tool
+    # may already cover the managed path under a different name (`bd backup`
+    # names its remote `default`). That is coverage, and adding a second remote
+    # at the same address is not merely redundant: Dolt rejects it outright with
+    # "address conflict with a remote", which used to mark the database failed
+    # and, because the whole-city stamp is gated on a clean sweep, froze
+    # bd-backup-freshness for every other database too (gc-534qw). Adopt the
+    # existing name instead. Only the resolved destination decides the match, so
+    # this cannot admit a backup living anywhere but the managed path.
+    existing_name=$(printf '%s\n' "$backup_list" | backup_name_for_path "$expected_remote_path" || true)
+    if [ -n "$existing_name" ]; then
+        BACKUP_REMOTE_NAME="$existing_name"
+        echo "backup: $remote_db already backed up to the managed path by remote '$existing_name'"
+        return 0
+    fi
     remote_url="file://$expected_remote_path"
     mkdir -p "$BACKUP_ARTIFACT_DIR/$remote_db"
-    if (cd "$remote_db_dir" && run_bounded 30 dolt backup add "${remote_db}-backup" "$remote_url" >/dev/null 2>&1); then
+    # Keep dolt's refusal. Discarding it left only the opaque "backup add
+    # failed", which is what made the address conflict above take a day to
+    # place.
+    if add_output=$(cd "$remote_db_dir" && run_bounded 30 dolt backup add "${remote_db}-backup" "$remote_url" 2>&1); then
         echo "backup: auto-configured missing backup remote ${remote_db}-backup -> $remote_url"
         return 0
+    fi
+    if [ -n "$add_output" ]; then
+        printf '%s\n' "$add_output" | while IFS= read -r add_line || [ -n "$add_line" ]; do
+            printf 'backup: %s: %s\n' "$remote_db" "$add_line" >&2
+        done
     fi
     return 1
 }
@@ -551,7 +615,7 @@ for db in $DATABASES; do
         continue
     fi
     sync_output=""
-    if sync_output=$(cd "$db_dir" && run_bounded 120 dolt backup sync --prune-with-grace-period "$BACKUP_PRUNE_GRACE_PERIOD" "${db}-backup" 2>&1); then
+    if sync_output=$(cd "$db_dir" && run_bounded 120 dolt backup sync --prune-with-grace-period "$BACKUP_PRUNE_GRACE_PERIOD" "$BACKUP_REMOTE_NAME" 2>&1); then
         SYNCED=$((SYNCED + 1))
         if printf '%s\n' "$sync_output" | grep -qiE 'not supported.*only file:// backups can be pruned|pruning .* failed, continuing with sync'; then
             PRUNE_FAILED=$((PRUNE_FAILED + 1))
