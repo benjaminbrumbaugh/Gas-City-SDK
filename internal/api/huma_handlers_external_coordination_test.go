@@ -101,7 +101,7 @@ func TestExternalCoordinationResponseRouteAcceptsCurrentExternalAdapterRegistrat
 	h := newTestCityHandler(t, state)
 	registration := registerExternalCoordinationResponseTestAdapter(t, h, state)
 	if registration.Credential == "" || registration.Generation == 0 || registration.Instance == "" {
-		t.Fatalf("registration = %+v, want usable callback credential, generation, and instance", registration)
+		t.Fatal("registration is missing a callback credential, generation, or instance")
 	}
 
 	claimed := claimExternalCoordinationResponseTestRequest(t, state)
@@ -119,13 +119,34 @@ func TestExternalCoordinationResponseRouteAcceptsCurrentExternalAdapterRegistrat
 	}
 }
 
+func TestExternalCoordinationResponseRouteRejectsOutcomeAfterCompletionAsConflict(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	h := newTestCityHandler(t, state)
+	registration := registerExternalCoordinationResponseTestAdapter(t, h, state)
+	claimed := claimExternalCoordinationResponseTestRequest(t, state)
+	if response := postExternalCoordinationResponse(t, h, state, claimed, registration); response.Code != http.StatusOK {
+		t.Fatalf("first POST /external-coordination/responses status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
+	response := postExternalCoordinationResponse(t, h, state, claimed, registration)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("duplicate POST /external-coordination/responses status = %d, want 409; body = %s", response.Code, response.Body.String())
+	}
+	stored, err := externalcoordination.NewService(state.CityBeadStore()).Get(context.Background(), claimed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != externalcoordination.StateCompleted {
+		t.Fatalf("stored request state after conflict = %q, want completed", stored.State)
+	}
+}
+
 func TestExternalCoordinationResponseRouteRejectsReplacedExternalAdapterRegistration(t *testing.T) {
 	state := newExternalCoordinationResponseTestState(t)
 	h := newTestCityHandler(t, state)
 	first := registerExternalCoordinationResponseTestAdapter(t, h, state)
 	second := registerExternalCoordinationResponseTestAdapter(t, h, state)
 	if first.Credential == "" || second.Credential == "" || first.Credential == second.Credential || first.Generation >= second.Generation || first.Instance == second.Instance {
-		t.Fatalf("registrations first=%+v second=%+v, want distinct rotated callback identities", first, second)
+		t.Fatal("replacement did not issue a distinct callback credential, generation, and instance")
 	}
 
 	claimed := claimExternalCoordinationResponseTestRequest(t, state)
@@ -139,6 +160,64 @@ func TestExternalCoordinationResponseRouteRejectsReplacedExternalAdapterRegistra
 	}
 	if stored.State != externalcoordination.StateRunning {
 		t.Fatalf("stored request state after stale callback = %q, want running", stored.State)
+	}
+}
+
+func TestExtMsgAdapterUnregisterRequiresCurrentRegistrationFence(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	h := newTestCityHandler(t, state)
+	first := registerExternalCoordinationResponseTestAdapter(t, h, state)
+	second := registerExternalCoordinationResponseTestAdapter(t, h, state)
+
+	missingFence := unregisterExternalCoordinationTestAdapter(t, h, state, coordinationCallbackRegistration{})
+	if missingFence.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("DELETE /extmsg/adapters without fence status = %d, want 422; body = %s", missingFence.Code, missingFence.Body.String())
+	}
+	stale := unregisterExternalCoordinationTestAdapter(t, h, state, first)
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("DELETE /extmsg/adapters with stale fence status = %d, want 409; body = %s", stale.Code, stale.Body.String())
+	}
+	key := extmsg.AdapterKey{Provider: "hermes", AccountID: "desktop"}
+	if got := state.AdapterRegistry().Lookup(key); got == nil {
+		t.Fatal("stale unregister removed replacement registration")
+	}
+
+	current := unregisterExternalCoordinationTestAdapter(t, h, state, second)
+	if current.Code != http.StatusOK {
+		t.Fatalf("DELETE /extmsg/adapters with current fence status = %d, want 200; body = %s", current.Code, current.Body.String())
+	}
+	if got := state.AdapterRegistry().Lookup(key); got != nil {
+		t.Fatalf("current unregister left adapter %T registered", got)
+	}
+}
+
+func TestExtMsgAdapterRegisterRejectsUnsafeSecretBearingCallbackURLs(t *testing.T) {
+	for _, callbackURL := range []string{
+		"http://example.com/bridge",
+		"https://user:password@example.com/bridge",
+		"https://example.com/bridge?target=other",
+		"https://example.com/bridge#fragment",
+		"ftp://example.com/bridge",
+	} {
+		t.Run(callbackURL, func(t *testing.T) {
+			state := newExternalCoordinationResponseTestState(t)
+			h := newTestCityHandler(t, state)
+			body := fmt.Sprintf(`{"provider":"hermes","account_id":"desktop","name":"hermes","callback_url":%q}`, callbackURL)
+			req := httptest.NewRequest(http.MethodPost, cityURL(state, "/extmsg/adapters"), strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-GC-Request", "coordination-adapter-register")
+			response := httptest.NewRecorder()
+
+			h.ServeHTTP(response, req)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("POST /extmsg/adapters callback_url=%q status = %d, want 400; body = %s", callbackURL, response.Code, response.Body.String())
+			}
+			key := extmsg.AdapterKey{Provider: "hermes", AccountID: "desktop"}
+			if got := state.AdapterRegistry().Lookup(key); got != nil {
+				t.Fatalf("unsafe registration left adapter %T registered", got)
+			}
+		})
 	}
 }
 
@@ -184,6 +263,17 @@ func registerExternalCoordinationResponseTestAdapter(t *testing.T, h http.Handle
 		t.Fatal(err)
 	}
 	return registration
+}
+
+func unregisterExternalCoordinationTestAdapter(t *testing.T, h http.Handler, state State, registration coordinationCallbackRegistration) *httptest.ResponseRecorder {
+	t.Helper()
+	body := fmt.Sprintf(`{"provider":"hermes","account_id":"desktop","generation":%d,"instance":%q}`, registration.Generation, registration.Instance)
+	req := httptest.NewRequest(http.MethodDelete, cityURL(state, "/extmsg/adapters"), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GC-Request", "coordination-adapter-unregister")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, req)
+	return response
 }
 
 func claimExternalCoordinationResponseTestRequest(t *testing.T, state State) externalcoordination.RequestRecord {

@@ -1905,7 +1905,7 @@ type ExtMsgAdapterRegisterInputBody struct {
 	// AccountId Account ID.
 	AccountId string `json:"account_id"`
 
-	// CallbackUrl Callback URL for outbound messages.
+	// CallbackUrl Callback base URL for outbound messages. Secret-bearing callbacks require HTTPS, except HTTP is allowed for literal loopback hosts; user information, queries, and fragments are rejected.
 	CallbackUrl  *string              `json:"callback_url,omitempty"`
 	Capabilities *AdapterCapabilities `json:"capabilities,omitempty"`
 
@@ -1944,6 +1944,12 @@ type ExtMsgAdapterRegisterOutputBody struct {
 type ExtMsgAdapterUnregisterInputBody struct {
 	// AccountId Account ID.
 	AccountId string `json:"account_id"`
+
+	// Generation Exact registration generation returned by the successful register call.
+	Generation int64 `json:"generation"`
+
+	// Instance Exact registration instance returned by the successful register call.
+	Instance string `json:"instance"`
 
 	// Provider Provider name.
 	Provider string `json:"provider"`
@@ -3342,11 +3348,13 @@ type ProviderUpdateInputBody struct {
 
 // PublishReceipt defines model for PublishReceipt.
 type PublishReceipt struct {
+	Accepted     bool              `json:"Accepted"`
 	Conversation ConversationRef   `json:"Conversation"`
 	Delivered    bool              `json:"Delivered"`
 	FailureKind  string            `json:"FailureKind"`
 	MessageID    string            `json:"MessageID"`
 	Metadata     map[string]string `json:"Metadata"`
+	Queued       bool              `json:"Queued"`
 	RetryAfter   int64             `json:"RetryAfter"`
 }
 
@@ -35406,6 +35414,7 @@ type PostV0CityByCityNameExternalCoordinationResponsesResponse struct {
 	ApplicationproblemJSON400 *ErrorModel
 	ApplicationproblemJSON403 *ErrorModel
 	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON409 *ErrorModel
 	ApplicationproblemJSON422 *ErrorModel
 	ApplicationproblemJSON500 *ErrorModel
 	ApplicationproblemJSON503 *ErrorModel
@@ -35434,6 +35443,7 @@ type DeleteV0CityByCityNameExtmsgAdaptersResponse struct {
 	ApplicationproblemJSON401 *ErrorModel
 	ApplicationproblemJSON403 *ErrorModel
 	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON409 *ErrorModel
 	ApplicationproblemJSON422 *ErrorModel
 	ApplicationproblemJSON500 *ErrorModel
 	ApplicationproblemJSON503 *ErrorModel
@@ -43733,6 +43743,13 @@ func ParsePostV0CityByCityNameExternalCoordinationResponsesResponse(rsp *http.Re
 		}
 		response.ApplicationproblemJSON404 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest ErrorModel
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -43800,6 +43817,13 @@ func ParseDeleteV0CityByCityNameExtmsgAdaptersResponse(rsp *http.Response) (*Del
 			return nil, err
 		}
 		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest ErrorModel

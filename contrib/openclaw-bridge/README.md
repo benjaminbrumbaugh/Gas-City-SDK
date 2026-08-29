@@ -125,10 +125,16 @@ What "import openclaw connectors" costs, learned by building this:
    are single-id (openclaw's `MessageReceipt` is multi-part with edit/delete
    tokens), and `AdapterCapabilities`' three booleans can't express openclaw's
    capability vocabulary. Reactions/tapbacks are skipped by this bridge for
-   the same reason — no gc representation yet. Known PoC simplifications on
-   the bridge itself: every publish failure is reported as `transient`, and
-   the `/publish` callback has no auth token — fine against the fake backend,
-   close both before pointing it at a real iMessage account.
+   the same reason — no gc representation yet. Callback mutations require the
+   current in-memory registration bearer (`/healthz` remains public); the
+   immediately previous same-process credential remains valid for at most 30
+   seconds across periodic re-registration so already-dispatched callbacks do
+   not fail inside the rotation response window. Registration and unregister
+   share one serialized lifecycle queue, so a later rotation cannot cross an
+   in-flight fenced delete. The
+   remaining bridge simplification is that every publish failure is reported
+   as `transient`; classify those failures before pointing it at a real
+   iMessage account.
 5. **Latency note:** `POST /extmsg/inbound` took ~5s per call in the demo
    environment (bead-store side, unrelated to the connector path, which
    measured ~30ms; tracked in beads).
@@ -237,12 +243,15 @@ and `demo-telegram.sh` exercises a per-workstream thread end to end.
    polling is fused into `monitorTelegramProvider`). Where the platform
    protocol is simple (Telegram), owning inbound in the bridge is cheaper
    than asking upstream for an export. The PoC simplifications are shared
-   with iMessage: publish failures all report `transient`, every callback
-   endpoint (`/publish` and the state-changing `/child-conversation`) is
-   unauthenticated, and non-text media is skipped (no gc representation —
-   finding 4). Both endpoints bind `127.0.0.1`, so the gap is local-only, but
-   close all of them — not just `/publish` — before pointing the bridge at a
-   real account.
+   with iMessage: publish failures all report `transient`, and non-text media
+   is skipped (no gc representation — finding 4). Callback mutations
+   (`/publish` and `/child-conversation`) require the current in-memory
+   registration bearer; only `/healthz` remains unauthenticated. The immediately
+   previous same-process credential remains valid for at most 30 seconds across
+   periodic re-registration so already-dispatched callbacks do not fail inside
+   the rotation response window. Registration and unregister share one
+   serialized lifecycle queue, so a later rotation cannot cross an in-flight
+   fenced delete.
 8. **Shared retry/drop policy; durability differs per connector.** Both
    connectors forward to gc through the same `forwardWithRetry` helper
    (`lib/inbound.mjs`), so they classify failures identically: a transient gc

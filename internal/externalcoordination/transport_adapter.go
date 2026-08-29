@@ -3,9 +3,13 @@ package externalcoordination
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"unicode/utf8"
 
 	"github.com/gastownhall/gascity/internal/extmsg"
 )
+
+const maxBridgeMetadataValueBytes = 512
 
 // TransportAdapter adapts the SDK's existing external-messaging transport
 // registry to the external coordination callback contract. This is useful for adapters that can
@@ -46,6 +50,10 @@ func (a *TransportAdapter) Deliver(ctx context.Context, request Request) (Delive
 	if conversationID == "" {
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: "target conversation_id is not configured"}, fmt.Errorf("%w: conversation_id is required", ErrInvalidInput)
 	}
+	metadata, err := bridgeMetadata(request)
+	if err != nil {
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: err.Error()}, err
+	}
 	result, err := a.transport.Publish(ctx, extmsg.PublishRequest{
 		Conversation: extmsg.ConversationRef{
 			ScopeID:        a.scopeID,
@@ -56,18 +64,12 @@ func (a *TransportAdapter) Deliver(ctx context.Context, request Request) (Delive
 		},
 		Text:           request.Prompt,
 		IdempotencyKey: request.IdempotencyKey,
-		Metadata: map[string]string{
-			"hca_request_id": request.RequestID,
-			"source_agent":   request.SourceAgent,
-			"reason":         string(request.Reason),
-			"work_ref":       request.WorkRef,
-			"correlation_id": request.CorrelationID,
-		},
+		Metadata:       metadata,
 	})
 	if err != nil {
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: err.Error()}, err
 	}
-	if result == nil || !result.Delivered {
+	if result == nil || (!result.Delivered && (!result.Accepted || !result.Queued)) {
 		errText := "transport rejected external coordination request"
 		if result != nil && result.FailureKind != "" {
 			errText = string(result.FailureKind)
@@ -82,4 +84,33 @@ func (a *TransportAdapter) Deliver(ctx context.Context, request Request) (Delive
 		Accepted:        true,
 		TargetSessionID: request.Target.ConversationID,
 	}, nil
+}
+
+func bridgeMetadata(request Request) (map[string]string, error) {
+	if len(request.RequestID) > maxBridgeMetadataValueBytes {
+		return nil, fmt.Errorf("%w: request_id exceeds bridge metadata limit", ErrInvalidInput)
+	}
+	if len(request.CorrelationID) > maxBridgeMetadataValueBytes {
+		return nil, fmt.Errorf("%w: correlation_id exceeds bridge metadata limit", ErrInvalidInput)
+	}
+	return map[string]string{
+		"hca_request_id":    request.RequestID,
+		"hca_attempt":       strconv.Itoa(request.Attempt),
+		"source_agent":      boundBridgeMetadataValue(request.SourceAgent),
+		"reason":            boundBridgeMetadataValue(string(request.Reason)),
+		"work_ref":          boundBridgeMetadataValue(request.WorkRef),
+		"correlation_id":    request.CorrelationID,
+		"content_retention": string(request.ContentRetention),
+	}, nil
+}
+
+func boundBridgeMetadataValue(value string) string {
+	if len(value) <= maxBridgeMetadataValueBytes {
+		return value
+	}
+	limit := maxBridgeMetadataValueBytes
+	for limit > 0 && !utf8.RuneStart(value[limit]) {
+		limit--
+	}
+	return value[:limit]
 }

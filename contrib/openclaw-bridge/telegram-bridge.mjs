@@ -317,17 +317,6 @@ async function handlePublish(pub) {
   }
 }
 
-const server = await startCallbackServer({ handleRequest, port: PORT })
-log(`callback server on http://127.0.0.1:${PORT}`)
-
-const pollDone = pollUpdates()
-log('polling telegram getUpdates')
-
-// 4. Register with gc last, so gc never publishes before we can send. The
-//    registry is in-memory on the gc side, so re-register on an interval to
-//    survive controller restarts. PascalCase capabilities are correct here:
-//    extmsg.AdapterCapabilities is intentionally untagged on the gc side
-//    (internal/extmsg/types.go) while the rest of this request body is snake_case.
 const registrar = makeAdapterRegistrar({
   gcFetch,
   baseUrl: GC_BASE,
@@ -338,6 +327,21 @@ const registrar = makeAdapterRegistrar({
   capabilities: { SupportsChildConversations: true, SupportsAttachments: false, MaxMessageLength: 0 },
   log,
 })
+const server = await startCallbackServer({
+  handleRequest,
+  port: PORT,
+  authorizeRequest: registrar.authorizeRequest,
+})
+log(`callback server on http://127.0.0.1:${PORT}`)
+
+const pollDone = pollUpdates()
+log('polling telegram getUpdates')
+
+// 4. Register with gc last, so gc never publishes before we can send. The
+//    registry is in-memory on the gc side, so re-register on an interval to
+//    survive controller restarts. PascalCase capabilities are correct here:
+//    extmsg.AdapterCapabilities is intentionally untagged on the gc side
+//    (internal/extmsg/types.go) while the rest of this request body is snake_case.
 await registrar.registerWithRetry()
 log(`registered adapter provider=${PROVIDER} account=${ACCOUNT} city=${CITY}`)
 const reregister = registrar.startReregister()

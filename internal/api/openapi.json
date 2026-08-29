@@ -3083,7 +3083,7 @@
             "type": "string"
           },
           "callback_url": {
-            "description": "Callback URL for outbound messages.",
+            "description": "Callback base URL for outbound messages. Secret-bearing callbacks require HTTPS, except HTTP is allowed for literal loopback hosts; user information, queries, and fragments are rejected.",
             "type": "string"
           },
           "capabilities": {
@@ -3162,6 +3162,17 @@
             "minLength": 1,
             "type": "string"
           },
+          "generation": {
+            "description": "Exact registration generation returned by the successful register call.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instance": {
+            "description": "Exact registration instance returned by the successful register call.",
+            "minLength": 1,
+            "type": "string"
+          },
           "provider": {
             "description": "Provider name.",
             "minLength": 1,
@@ -3170,7 +3181,9 @@
         },
         "required": [
           "provider",
-          "account_id"
+          "account_id",
+          "generation",
+          "instance"
         ],
         "type": "object"
       },
@@ -10507,6 +10520,9 @@
       "PublishReceipt": {
         "additionalProperties": false,
         "properties": {
+          "Accepted": {
+            "type": "boolean"
+          },
           "Conversation": {
             "$ref": "#/components/schemas/ConversationRef"
           },
@@ -10525,6 +10541,9 @@
             },
             "type": "object"
           },
+          "Queued": {
+            "type": "boolean"
+          },
           "RetryAfter": {
             "format": "int64",
             "type": "integer"
@@ -10533,6 +10552,8 @@
         "required": [
           "MessageID",
           "Conversation",
+          "Accepted",
+          "Queued",
           "Delivered",
           "FailureKind",
           "RetryAfter",
@@ -36958,6 +36979,21 @@
               }
             }
           },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Conflict",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
           "422": {
             "content": {
               "application/problem+json": {
@@ -37100,6 +37136,21 @@
               }
             },
             "description": "Not Found",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Conflict",
             "headers": {
               "X-GC-Request-Id": {
                 "$ref": "#/components/headers/X-GC-Request-Id"

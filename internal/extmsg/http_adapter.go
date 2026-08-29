@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,10 +23,11 @@ const csrfHeaderName = "X-GC-Request"
 // to an external HTTP service at callbackURL. Used for out-of-process
 // adapters that register via the API.
 type HTTPAdapter struct {
-	name         string
-	callbackURL  string
-	capabilities AdapterCapabilities
-	client       *http.Client
+	name          string
+	callbackURL   string
+	capabilities  AdapterCapabilities
+	client        *http.Client
+	authorization atomic.Pointer[string]
 }
 
 // NewHTTPAdapter creates an HTTPAdapter that forwards to callbackURL.
@@ -36,6 +38,9 @@ func NewHTTPAdapter(name, callbackURL string, caps AdapterCapabilities) *HTTPAda
 		capabilities: caps,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 	}
 }
@@ -45,6 +50,20 @@ func (a *HTTPAdapter) Name() string { return a.name }
 
 // Capabilities returns the adapter capabilities.
 func (a *HTTPAdapter) Capabilities() AdapterCapabilities { return a.capabilities }
+
+// bindRegistrationCredential keeps the ephemeral registration bearer only in
+// memory. Atomic replacement lets a registration rotate while callback calls
+// already in flight continue with the header snapshot they were created with.
+func (a *HTTPAdapter) bindRegistrationCredential(credential string) {
+	authorization := "Bearer " + credential
+	a.authorization.Store(&authorization)
+}
+
+func (a *HTTPAdapter) setAuthorizationHeader(req *http.Request) {
+	if authorization := a.authorization.Load(); authorization != nil {
+		req.Header.Set("Authorization", *authorization)
+	}
+}
 
 // VerifyAndNormalizeInbound is not used for HTTP adapters — out-of-process
 // adapters verify and normalize on their side before posting to the API.
@@ -72,6 +91,7 @@ func (a *HTTPAdapter) Publish(ctx context.Context, req PublishRequest) (*Publish
 		return nil, fmt.Errorf("creating HTTP request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	a.setAuthorizationHeader(httpReq)
 	// See csrfHeaderName above for why this is required on outbound
 	// callbacks. Harmless when callbackURL is an external HTTP listener.
 	httpReq.Header.Set(csrfHeaderName, "true")
@@ -88,6 +108,14 @@ func (a *HTTPAdapter) Publish(ctx context.Context, req PublishRequest) (*Publish
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
+		return &PublishReceipt{
+			Conversation: req.Conversation,
+			Delivered:    false,
+			FailureKind:  PublishFailureTransient,
+		}, nil
+	}
+
+	if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
 		return &PublishReceipt{
 			Conversation: req.Conversation,
 			Delivered:    false,
@@ -140,6 +168,8 @@ func (a *HTTPAdapter) Publish(ctx context.Context, req PublishRequest) (*Publish
 type wirePublishReceipt struct {
 	MessageID    string             `json:"message_id,omitempty"`
 	Conversation ConversationRef    `json:"conversation"`
+	Accepted     bool               `json:"accepted"`
+	Queued       bool               `json:"queued"`
 	Delivered    bool               `json:"delivered"`
 	FailureKind  PublishFailureKind `json:"failure_kind,omitempty"`
 	RetryAfter   time.Duration      `json:"retry_after,omitempty"`
@@ -150,6 +180,8 @@ func (w wirePublishReceipt) toPublishReceipt() *PublishReceipt {
 	return &PublishReceipt{
 		MessageID:    w.MessageID,
 		Conversation: w.Conversation,
+		Accepted:     w.Accepted,
+		Queued:       w.Queued,
 		Delivered:    w.Delivered,
 		FailureKind:  w.FailureKind,
 		RetryAfter:   w.RetryAfter,
@@ -177,6 +209,7 @@ func (a *HTTPAdapter) EnsureChildConversation(ctx context.Context, ref Conversat
 		return nil, fmt.Errorf("creating HTTP request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	a.setAuthorizationHeader(httpReq)
 	httpReq.Header.Set(csrfHeaderName, "true")
 
 	resp, err := a.client.Do(httpReq)

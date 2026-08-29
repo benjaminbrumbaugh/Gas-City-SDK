@@ -193,7 +193,7 @@ type ExtMsgAdapterRegisterInput struct {
 		Provider     string                     `json:"provider" minLength:"1" doc:"Provider name."`
 		AccountID    string                     `json:"account_id" minLength:"1" doc:"Account ID."`
 		Name         string                     `json:"name,omitempty" doc:"Adapter display name."`
-		CallbackURL  string                     `json:"callback_url,omitempty" doc:"Callback URL for outbound messages."`
+		CallbackURL  string                     `json:"callback_url,omitempty" doc:"Callback base URL for outbound messages. Secret-bearing callbacks require HTTPS, except HTTP is allowed for literal loopback hosts; user information, queries, and fragments are rejected."`
 		Capabilities extmsg.AdapterCapabilities `json:"capabilities,omitempty" doc:"Adapter capabilities."`
 	}
 }
@@ -215,7 +215,9 @@ type ExtMsgAdapterRegisterOutput struct {
 type ExtMsgAdapterUnregisterInput struct {
 	CityScope
 	Body struct {
-		Provider  string `json:"provider" minLength:"1" doc:"Provider name."`
-		AccountID string `json:"account_id" minLength:"1" doc:"Account ID."`
+		Provider   string `json:"provider" minLength:"1" doc:"Provider name."`
+		AccountID  string `json:"account_id" minLength:"1" doc:"Account ID."`
+		Generation uint64 `json:"generation" minimum:"1" doc:"Exact registration generation returned by the successful register call."`
+		Instance   string `json:"instance" minLength:"1" doc:"Exact registration instance returned by the successful register call."`
 	}
 }

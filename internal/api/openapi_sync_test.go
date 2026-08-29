@@ -66,7 +66,7 @@ func TestOpenAPISpecInSync(t *testing.T) {
 	}
 }
 
-func TestExternalCoordinationResponseRouteDeclaresForbiddenInOpenAPI(t *testing.T) {
+func TestExternalCoordinationResponseRouteDeclaresAuthAndIdempotencyErrorsInOpenAPI(t *testing.T) {
 	sm := api.NewSupervisorMux(emptyTestResolver{}, nil, false, "", "", time.Time{})
 	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
 	rec := httptest.NewRecorder()
@@ -83,15 +83,17 @@ func TestExternalCoordinationResponseRouteDeclaresForbiddenInOpenAPI(t *testing.
 	path, _ := paths["/v0/city/{cityName}/external-coordination/responses"].(map[string]any)
 	post, _ := path["post"].(map[string]any)
 	responses, _ := post["responses"].(map[string]any)
-	forbidden, ok := responses["403"].(map[string]any)
-	if !ok {
-		t.Fatalf("POST /v0/city/{cityName}/external-coordination/responses does not declare 403: responses=%v", responses)
-	}
-	content, _ := forbidden["content"].(map[string]any)
-	problem, _ := content["application/problem+json"].(map[string]any)
-	schema, _ := problem["schema"].(map[string]any)
-	if got, _ := schema["$ref"].(string); got != "#/components/schemas/ErrorModel" {
-		t.Fatalf("403 response schema ref = %q, want ErrorModel", got)
+	for _, status := range []string{"403", "409"} {
+		response, ok := responses[status].(map[string]any)
+		if !ok {
+			t.Fatalf("POST /v0/city/{cityName}/external-coordination/responses does not declare %s: responses=%v", status, responses)
+		}
+		content, _ := response["content"].(map[string]any)
+		problem, _ := content["application/problem+json"].(map[string]any)
+		schema, _ := problem["schema"].(map[string]any)
+		if got, _ := schema["$ref"].(string); got != "#/components/schemas/ErrorModel" {
+			t.Fatalf("%s response schema ref = %q, want ErrorModel", status, got)
+		}
 	}
 }
 

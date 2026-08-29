@@ -7,6 +7,7 @@
 // the shutdown ordering all live in one place.
 
 import http from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
 
 // env(k, d): process.env[k] when it is set and non-empty, otherwise the default.
 export const env = (k, d) => (process.env[k] !== undefined && process.env[k] !== '' ? process.env[k] : d)
@@ -41,7 +42,7 @@ export function makeGcClient({ baseUrl, city, timeoutMs = 15000 }) {
 // every other request to handleRequest(req, rawBody), which returns
 // { status, body }; a thrown handler becomes a 500. Only handleRequest's routing
 // is provider-specific.
-export function startCallbackServer({ handleRequest, port }) {
+export function startCallbackServer({ handleRequest, port, authorizeRequest }) {
   const server = http.createServer((req, res) => {
     const send = (status, body) => {
       res.writeHead(status, { 'Content-Type': 'application/json' })
@@ -50,6 +51,17 @@ export function startCallbackServer({ handleRequest, port }) {
     if (req.method === 'GET' && req.url === '/healthz') {
       req.resume() // drain any body before responding
       send(200, { ok: true })
+      return
+    }
+    let authorized = false
+    try {
+      authorized = authorizeRequest?.(req) === true
+    } catch {
+      authorized = false
+    }
+    if (!authorized) {
+      req.resume()
+      send(401, { error: 'unauthorized' })
       return
     }
     const chunks = []
@@ -70,15 +82,74 @@ export function startCallbackServer({ handleRequest, port }) {
 // registry is in-memory, so callers register once at startup (retrying while gc
 // is still coming up), re-register on an interval to survive controller
 // restarts, and unregister on shutdown.
-export function makeAdapterRegistrar({ gcFetch, baseUrl, provider, account, name, callbackUrl, capabilities, log }) {
-  const register = () =>
-    gcFetch('POST', '/extmsg/adapters', {
+export function makeAdapterRegistrar({
+  gcFetch,
+  baseUrl,
+  provider,
+  account,
+  name,
+  callbackUrl,
+  capabilities,
+  log,
+  now = Date.now,
+  credentialGraceMs = 30_000,
+}) {
+  let currentRegistration = null
+  let previousCredential = null
+  let registrationQueue = Promise.resolve()
+
+  const performRegister = async () => {
+    const result = await gcFetch('POST', '/extmsg/adapters', {
       provider,
       account_id: account,
       name,
       callback_url: callbackUrl,
       capabilities,
     })
+    if (
+      !Number.isSafeInteger(result?.generation) ||
+      result.generation < 1 ||
+      typeof result?.instance !== 'string' ||
+      result.instance.trim() === '' ||
+      typeof result?.credential !== 'string' ||
+      result.credential.trim() === ''
+    ) {
+      throw new Error('gc adapter registration response is missing its lifecycle fence or credential')
+    }
+    const nextRegistration = {
+      generation: result.generation,
+      instance: result.instance,
+      credential: result.credential,
+    }
+    previousCredential = currentRegistration && credentialGraceMs > 0
+      ? { credential: currentRegistration.credential, expiresAt: now() + credentialGraceMs }
+      : null
+    currentRegistration = nextRegistration
+  }
+
+  const register = () => {
+    const pending = registrationQueue.then(performRegister)
+    registrationQueue = pending.catch(() => {})
+    return pending
+  }
+
+  const authorizeRequest = (req) => {
+    const registration = currentRegistration
+    const actual = req?.headers?.authorization
+    if (!registration || typeof actual !== 'string') return false
+    const matches = (credential) => {
+      const expectedBytes = Buffer.from(`Bearer ${credential}`)
+      const actualBytes = Buffer.from(actual)
+      return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes)
+    }
+    if (matches(registration.credential)) return true
+    const previous = previousCredential
+    if (!previous || now() >= previous.expiresAt) {
+      previousCredential = null
+      return false
+    }
+    return matches(previous.credential)
+  }
 
   // registerWithRetry blocks until gc accepts the registration (gc may still be
   // starting), giving up only after ~60s so a misconfigured base url still fails
@@ -103,9 +174,28 @@ export function makeAdapterRegistrar({ gcFetch, baseUrl, provider, account, name
   const startReregister = () =>
     setInterval(() => register().catch((err) => log('re-register failed:', err.message)), 30000)
 
-  const unregister = () => gcFetch('DELETE', '/extmsg/adapters', { provider, account_id: account })
+  const performUnregister = async () => {
+    const registration = currentRegistration
+    if (!registration) throw new Error('cannot unregister before a successful adapter registration')
+    await gcFetch('DELETE', '/extmsg/adapters', {
+      provider,
+      account_id: account,
+      generation: registration.generation,
+      instance: registration.instance,
+    })
+    if (currentRegistration === registration) {
+      currentRegistration = null
+      previousCredential = null
+    }
+  }
 
-  return { register, registerWithRetry, startReregister, unregister }
+  const unregister = () => {
+    const pending = registrationQueue.then(performUnregister)
+    registrationQueue = pending.catch(() => {})
+    return pending
+  }
+
+  return { register, registerWithRetry, startReregister, unregister, authorizeRequest }
 }
 
 // makeShutdown returns an idempotent SIGINT/SIGTERM handler that tears the

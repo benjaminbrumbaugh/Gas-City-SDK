@@ -85,7 +85,7 @@ func TestAdapterRegistryCredentialIsBoundToCurrentGenerationAndInstance(t *testi
 	adapter := newStubAdapter("hermes", ConversationRef{})
 	first := registry.Register(key, adapter)
 	if first.Credential == "" || first.Instance == "" || first.Generation == 0 {
-		t.Fatalf("registration = %+v, want credential, instance, and generation", first)
+		t.Fatal("registration is missing a credential, instance, or generation")
 	}
 	if _, ok := registry.Authenticate(key, "hermes", first.Generation, first.Instance, "Bearer "+first.Credential); !ok {
 		t.Fatal("Authenticate current registration = false, want true")
@@ -96,6 +96,28 @@ func TestAdapterRegistryCredentialIsBoundToCurrentGenerationAndInstance(t *testi
 	}
 	if _, ok := registry.Authenticate(key, "hermes", first.Generation, first.Instance, "Bearer "+first.Credential); ok {
 		t.Fatal("Authenticate stale registration = true, want false")
+	}
+}
+
+func TestAdapterRegistryUnregisterRequiresCurrentRegistrationFence(t *testing.T) {
+	registry := NewAdapterRegistry()
+	key := AdapterKey{Provider: "hermes", AccountID: "desktop"}
+	firstAdapter := newStubAdapter("hermes", ConversationRef{})
+	first := registry.Register(key, firstAdapter)
+	secondAdapter := newStubAdapter("hermes", ConversationRef{})
+	second := registry.Register(key, secondAdapter)
+
+	if registry.Unregister(key, first.Generation, first.Instance) {
+		t.Fatal("stale registration fence removed replacement")
+	}
+	if got := registry.Lookup(key); got != secondAdapter {
+		t.Fatalf("Lookup after stale unregister = %T, want replacement adapter", got)
+	}
+	if !registry.Unregister(key, second.Generation, second.Instance) {
+		t.Fatal("current registration fence was refused")
+	}
+	if got := registry.Lookup(key); got != nil {
+		t.Fatalf("Lookup after current unregister = %T, want nil", got)
 	}
 }
 
@@ -148,6 +170,46 @@ func TestHandleOutbound_BindingPathUnchanged(t *testing.T) {
 	}
 	if (*captured)[0].Subject != "sess-bound" {
 		t.Fatalf("event subject = %q, want sess-bound", (*captured)[0].Subject)
+	}
+}
+
+func TestHandleOutbound_QueuedAcceptanceRecordsAdmissionWithoutClaimingDelivery(t *testing.T) {
+	freezeTestClock(t)
+	fabric, adapter, captured, deps := newOutboundTestRig(t)
+	ref := testConversationRef()
+	adapter.receipt = PublishReceipt{
+		MessageID: "queued-message-1",
+		Accepted:  true,
+		Queued:    true,
+		Delivered: false,
+	}
+	binding, err := fabric.Bindings.Bind(context.Background(), testControllerCaller(), BindInput{
+		Conversation: ref,
+		SessionID:    "sess-queued",
+		Now:          testNow(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := HandleOutbound(context.Background(), deps, testControllerCaller(), OutboundRequest{
+		SessionID:    "sess-queued",
+		Conversation: ref,
+		Text:         "queue this",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Receipt.Accepted || !result.Receipt.Queued || result.Receipt.Delivered {
+		t.Fatalf("receipt = %+v, want accepted queued and not delivered", result.Receipt)
+	}
+	if result.DeliveryContext == nil || result.DeliveryContext.BindingGeneration != binding.BindingGeneration || result.DeliveryContext.LastMessageID != "queued-message-1" {
+		t.Fatalf("delivery context = %+v, want queued admission context", result.DeliveryContext)
+	}
+	if result.TranscriptEntry == nil || result.TranscriptEntry.ProviderMessageID != "queued-message-1" {
+		t.Fatalf("transcript entry = %+v, want queued admission record", result.TranscriptEntry)
+	}
+	if len(*captured) != 1 || (*captured)[0].Type != events.ExtMsgOutbound {
+		t.Fatalf("captured events = %+v, want one outbound admission event", *captured)
 	}
 }
 

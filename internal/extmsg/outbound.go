@@ -178,8 +178,10 @@ func HandleOutbound(ctx context.Context, deps OutboundDeps, caller Caller, req O
 
 	result := &OutboundResult{Receipt: *receipt}
 
-	// If the publish was not delivered, return the receipt without recording.
-	if !receipt.Delivered {
+	// Record either legacy synchronous delivery or explicit durable queue
+	// admission. The receipt remains truthful: queued acceptance does not become
+	// downstream delivery merely because gc records its local outbound context.
+	if !receipt.Delivered && (!receipt.Accepted || !receipt.Queued) {
 		return result, nil
 	}
 
