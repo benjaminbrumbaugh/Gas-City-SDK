@@ -256,6 +256,17 @@ classify_count() {
   printf '%s\n' "$cc_out" | awk -F, 'NR == 2 { gsub(/^"|"$/, "", $1); print $1; exit }'
 }
 
+# server_read_timeout_secs — emit the Dolt sql-server's listener read timeout in
+# seconds, or nothing when it cannot be read. Exposed to SQL as
+# @@net_read_timeout, which mirrors listener.read_timeout_millis from the
+# managed dolt-config.yaml. Read only on the push-failure path so a healthy sync
+# issues no extra query, and best-effort: a missing value degrades the
+# diagnostic's wording rather than failing the run.
+server_read_timeout_secs() {
+  rt_csv=$(dolt_sql "SELECT @@net_read_timeout" 2>/dev/null) || return 0
+  printf '%s\n' "$rt_csv" | awk -F, 'NR == 2 { gsub(/^"|"$/, "", $1); if ($1 ~ /^[0-9]+$/) print $1; exit }'
+}
+
 find_remote_sql() {
   db="$1"
   remote_csv=$(dolt_sql "USE \`$db\`; SELECT name, url FROM dolt_remotes LIMIT 1") || return 1
@@ -510,6 +521,52 @@ sync_database_sql() {
   else
     echo "  $name: ERROR: push failed (exit $push_rc)" >&2
     last_fail_reason="push failed (exit $push_rc)"
+  fi
+
+  # A failed push is not one undifferentiated event to an unattended patrol, and
+  # reporting every one as a bare "push failed (exit 1)" is what let this city
+  # run a full day with the city ledger held nowhere but this box (gc-lnf79).
+  # Two facts change what an operator must do, so both are surfaced here and
+  # folded into last_fail_reason, which reaches the trailing summary line that
+  # the OrderFailed tail keeps.
+
+  # 1. A FIRST push failing means the store has NO off-box copy at all, not a
+  #    stale one — a different severity from a missed incremental delta, and the
+  #    only failure that can silently persist forever (there is no prior copy to
+  #    fall back on). ff_status is "first-push" only when the pre-push
+  #    DOLT_FETCH reported the remote has no such branch; --force leaves it
+  #    "force" and a classified push leaves it "ahead N", so neither can
+  #    misfire here.
+  if [ "$ff_status" = "first-push" ]; then
+    echo "  $name: FIRST PUSH FAILED — $remote_name has no '$remote_branch' ref yet, so this store has NO off-box copy (not merely a stale one)" >&2
+    last_fail_reason="FIRST PUSH FAILED, NO off-box copy — $last_fail_reason"
+  fi
+
+  # 2. "connection was closed" / "row read wait bigger than connection timeout"
+  #    is the Dolt sql-server tearing the client connection down mid-push at its
+  #    listener read_timeout, NOT the remote refusing the push. CALL DOLT_PUSH
+  #    emits its single result row only once the whole transfer finishes, so the
+  #    inter-row produce gap for a push IS the entire push wall-clock and
+  #    read_timeout bounds it end to end. GC_DOLT_SYNC_PUSH_TIMEOUT_SECS is
+  #    never reached, so an operator who reads only the generic line tunes the
+  #    one bound that cannot help. Verified on this city at read_timeout_millis
+  #    15000: the server logged "client connection went away while a query was
+  #    executing" exactly 15s after connect, then "unknown push error;
+  #    connection was closed" — and a push large enough to never finish inside
+  #    the window can never succeed, which is why this recurred for hours.
+  if [ -s "$push_err_tmp" ] &&
+    { grep -q "connection was closed" "$push_err_tmp" 2>/dev/null ||
+      grep -q "row read wait bigger than connection timeout" "$push_err_tmp" 2>/dev/null; }; then
+    read_timeout_secs=$(server_read_timeout_secs)
+    if [ -n "$read_timeout_secs" ]; then
+      cut_at=" at its listener read_timeout (${read_timeout_secs}s)"
+    else
+      cut_at=" at its listener read_timeout"
+    fi
+    echo "  $name: cut by the Dolt server${cut_at}, not by the remote and not by the client bound" >&2
+    echo "  $name: CALL DOLT_PUSH emits its only row when the transfer completes, so read_timeout bounds the whole push — GC_DOLT_SYNC_PUSH_TIMEOUT_SECS=${push_timeout}s was never reached and raising it will not help" >&2
+    echo "  $name: remedy: raise read_timeout_millis (and wait_timeout_seconds with it) under [dolt] in city.toml above the push duration, restart Dolt, then re-run gc dolt sync" >&2
+    last_fail_reason="$last_fail_reason; cut by dolt server read_timeout mid-push"
   fi
 
   # Replay the captured dolt stderr, prefixed with the db name for scannable

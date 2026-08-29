@@ -1927,6 +1927,25 @@ const (
 	// with slower live operations raise it via city.toml [dolt]
 	// read_timeout_millis. See #3022 (5m->30s) and the scale_check storm RCA
 	// (30s->15s).
+	//
+	// The "does not cut a long but steadily-producing query" carve-out does NOT
+	// cover a query that produces nothing until it finishes, and the one that
+	// matters is CALL DOLT_PUSH: it emits a single result row once the whole
+	// transfer to the remote completes, so its inter-row produce gap IS the
+	// entire push wall-clock and read_timeout bounds the push end to end. A
+	// store whose push cannot finish inside this window can therefore never be
+	// pushed by `gc dolt sync` at all — the client-side
+	// GC_DOLT_SYNC_PUSH_TIMEOUT_SECS bound (1800s, sized for large first
+	// pushes) is never reached, and raising it changes nothing. Observed on the
+	// city store at 15000: the server logged "client connection went away while
+	// a query was executing" exactly 15s after connect, then returned "unknown
+	// push error; connection was closed", every patrol cycle, leaving the city
+	// ledger with no off-box copy for over a day (gc-lnf79). A session-level
+	// `SET net_read_timeout` cannot rescue such a push: the variable changes but
+	// ErrRowTimeout reads the server-level listener value, verified against this
+	// city's Dolt 2.1.0 server. A city whose stores are large enough for this
+	// must raise read_timeout_millis (and wait_timeout_seconds with it) rather
+	// than tune the sync command.
 	DefaultDoltReadTimeoutMillis = 15000
 	// DefaultDoltWriteTimeoutMillis is the managed Dolt listener write timeout.
 	DefaultDoltWriteTimeoutMillis = 300000
