@@ -579,12 +579,25 @@ while :; do
 
     # Coalesce the rest of a pasted burst: gc sends the body, waits, then
     # Enter, so a 1s idle window closes the paste without splitting it. A
-    # timed-out read still assigns whatever partial line arrived, so take it
-    # before breaking — otherwise the tail of the last line is silently lost.
+    # Bash 3.2 can return nonzero from a timed read while still assigning the
+    # final byte. Read one byte at a time and retain that nonzero-path byte so
+    # a partial trailing line is never silently truncated.
     while :; do
         more=""
-        IFS= read -r -t "$DRAIN_TIMEOUT" more
-        drain_rc=$?
+        drain_rc=1
+        while :; do
+            unset char
+            if IFS= read -r -t "$DRAIN_TIMEOUT" -n 1 char; then
+                if [[ -n "$char" ]]; then
+                    more+="$char"
+                    continue
+                fi
+                drain_rc=0
+                break
+            fi
+            if [[ -n "${char-}" ]]; then more+="$char"; fi
+            break
+        done
         if (( drain_rc == 0 )); then
             # A blank interior line reads as empty and must be kept: paragraph
             # breaks are part of the prompt.
