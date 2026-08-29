@@ -246,12 +246,12 @@ func TestGoTestShardWatchdogKillsARunThatDefeatsGoTimeout(t *testing.T) {
     while [ "$(date +%%s)" -lt "$end" ] ; do sleep 1 ; done
 `, pidFile, fixtureLifetimeSeconds))
 
-	start := time.Now()
 	cmd := fixture.start(t,
 		"GO_TEST_TIMEOUT=2s",
 		"GO_TEST_WATCHDOG_GRACE=2s",
 	)
 	wedged := waitForPIDFile(t, pidFile, fixtureStartupTimeout, fixture.output)
+	start := time.Now()
 
 	err := waitWithin(t, cmd, 90*time.Second)
 	elapsed := time.Since(start)
