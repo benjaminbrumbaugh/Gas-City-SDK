@@ -8746,6 +8746,10 @@ esac
 
 func writeFakeManagedConfigWriterDolt(t *testing.T, binDir string) {
 	t.Helper()
+	fakeBD := filepath.Join(binDir, "bd")
+	if err := os.WriteFile(fakeBD, []byte("#!/bin/sh\nprintf 'bd version 1.1.1 (test)\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	fakeDolt := filepath.Join(binDir, "dolt")
 	fakeDoltScript := `#!/bin/sh
 set -eu
