@@ -31,6 +31,10 @@ type adapterRegistration struct {
 	instance       string
 }
 
+type registrationCredentialBinder interface {
+	bindRegistrationCredential(string)
+}
+
 // AdapterRegistry is a concurrent-safe, ephemeral registry of transport
 // adapters keyed by (Provider, AccountID). Created once per controller
 // lifetime and not rebuilt on config hot-reload.
@@ -57,6 +61,9 @@ func (r *AdapterRegistry) Register(key AdapterKey, adapter TransportAdapter) Ada
 	defer r.mu.Unlock()
 	previous := r.adapters[key]
 	credential := uuid.NewString()
+	if binder, ok := adapter.(registrationCredentialBinder); ok {
+		binder.bindRegistrationCredential(credential)
+	}
 	registration := adapterRegistration{
 		adapter:        adapter,
 		credentialHash: sha256.Sum256([]byte(credential)),
@@ -71,11 +78,17 @@ func (r *AdapterRegistry) Register(key AdapterKey, adapter TransportAdapter) Ada
 	}
 }
 
-// Unregister removes an adapter by key and revokes its callback credential.
-func (r *AdapterRegistry) Unregister(key AdapterKey) {
+// Unregister removes an adapter only when generation and instance exactly match
+// the current registration. A stale or unknown fence is a safe no-op.
+func (r *AdapterRegistry) Unregister(key AdapterKey, generation uint64, instance string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	registration, ok := r.adapters[key]
+	if !ok || registration.generation != generation || registration.instance != instance {
+		return false
+	}
 	delete(r.adapters, key)
+	return true
 }
 
 // Lookup returns the adapter for the given key, or nil if not registered.

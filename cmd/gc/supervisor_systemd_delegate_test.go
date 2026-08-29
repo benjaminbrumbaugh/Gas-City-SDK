@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
@@ -1266,7 +1267,11 @@ func TestSupervisorUninstallWarnsAndSkipsDelegatedUnit(t *testing.T) {
 	if goruntime.GOOS != "linux" {
 		t.Skip("systemd path only applies on linux")
 	}
-	t.Setenv("HOME", t.TempDir())
+	currentUser, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", currentUser.HomeDir)
 	t.Setenv("GC_HOME", t.TempDir())
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	setDelegationEnvForTest(t, "gascity-prod.service", "")

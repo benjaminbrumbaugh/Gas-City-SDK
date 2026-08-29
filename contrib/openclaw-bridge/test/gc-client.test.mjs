@@ -97,28 +97,50 @@ test('gcFetch surfaces transport errors with no numeric status (treated as trans
 })
 
 test('startCallbackServer serves /healthz, routes to handleRequest, 404s unknown paths, 500s a thrown handler', async () => {
+  let handled = 0
   const handleRequest = async (req, rawBody) => {
+    handled += 1
     if (req.method === 'POST' && req.url === '/publish') {
       return { status: 200, body: { delivered: true, echo: JSON.parse(rawBody) } }
     }
     if (req.method === 'POST' && req.url === '/boom') throw new Error('handler exploded')
     return { status: 404, body: { error: 'not found' } }
   }
-  const server = await startCallbackServer({ handleRequest, port: 0 })
+  const server = await startCallbackServer({
+    handleRequest,
+    port: 0,
+    authorizeRequest: (req) => req.headers.authorization === 'Bearer current-registration',
+  })
   const base = `http://127.0.0.1:${server.address().port}`
   try {
     const health = await fetch(`${base}/healthz`)
     assert.equal(health.status, 200)
     assert.deepEqual(await health.json(), { ok: true })
 
-    const pub = await fetch(`${base}/publish`, { method: 'POST', body: JSON.stringify({ text: 'hi' }) })
+    const unauthorized = await fetch(`${base}/publish`, { method: 'POST', body: JSON.stringify({ text: 'blocked' }) })
+    assert.equal(unauthorized.status, 401)
+    assert.equal(handled, 0)
+
+    const pub = await fetch(`${base}/publish`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer current-registration' },
+      body: JSON.stringify({ text: 'hi' }),
+    })
     assert.equal(pub.status, 200)
     assert.deepEqual(await pub.json(), { delivered: true, echo: { text: 'hi' } })
 
-    const missing = await fetch(`${base}/nope`, { method: 'POST', body: '{}' })
+    const missing = await fetch(`${base}/nope`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer current-registration' },
+      body: '{}',
+    })
     assert.equal(missing.status, 404)
 
-    const boom = await fetch(`${base}/boom`, { method: 'POST', body: '{}' })
+    const boom = await fetch(`${base}/boom`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer current-registration' },
+      body: '{}',
+    })
     assert.equal(boom.status, 500)
     assert.match((await boom.json()).error, /exploded/)
   } finally {
@@ -126,13 +148,57 @@ test('startCallbackServer serves /healthz, routes to handleRequest, 404s unknown
   }
 })
 
-test('makeAdapterRegistrar registers and unregisters with the gc-facing body shape', async () => {
+test('makeAdapterRegistrar rotates callback auth and unregisters with the latest completed fence', async () => {
   const calls = []
+  let nowMs = 1_000
+  let registrationCount = 0
+  let releaseReplacement
+  const replacementBlocked = new Promise((resolve) => {
+    releaseReplacement = resolve
+  })
+  let replacementObserved
+  const replacementStarted = new Promise((resolve) => {
+    replacementObserved = resolve
+  })
+  let releaseDelete
+  const deleteBlocked = new Promise((resolve) => {
+    releaseDelete = resolve
+  })
+  let deleteObserved
+  const deleteStarted = new Promise((resolve) => {
+    deleteObserved = resolve
+  })
   const { server, port } = await listen((req, res) => {
     const chunks = []
     req.on('data', (c) => chunks.push(c))
     req.on('end', () => {
       calls.push({ method: req.method, url: req.url, body: Buffer.concat(chunks).toString('utf8') })
+      if (req.method === 'POST' && req.url === '/v0/city/c/extmsg/adapters') {
+        registrationCount += 1
+        const respond = () => {
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({
+            generation: registrationCount,
+            instance: `instance-${registrationCount}`,
+            credential: `credential-${registrationCount}`,
+          }))
+        }
+        if (registrationCount === 2) {
+          replacementObserved()
+          replacementBlocked.then(respond)
+        } else {
+          respond()
+        }
+        return
+      }
+      if (req.method === 'DELETE' && req.url === '/v0/city/c/extmsg/adapters') {
+        deleteObserved()
+        deleteBlocked.then(() => {
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end('{}')
+        })
+        return
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end('{}')
     })
@@ -149,9 +215,33 @@ test('makeAdapterRegistrar registers and unregisters with the gc-facing body sha
       callbackUrl: 'http://127.0.0.1:8931',
       capabilities: { SupportsChildConversations: true, SupportsAttachments: false, MaxMessageLength: 0 },
       log: () => {},
+      now: () => nowMs,
+      credentialGraceMs: 100,
     })
     await registrar.registerWithRetry()
-    await registrar.unregister()
+    assert.equal(registrar.authorizeRequest({ headers: { authorization: 'Bearer credential-1' } }), true)
+
+    const replacing = registrar.register()
+    await replacementStarted
+    const unregistering = registrar.unregister()
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(calls.some((c) => c.method === 'DELETE'), false)
+    releaseReplacement()
+    await replacing
+    await deleteStarted
+    const oldAcceptedDuringGrace = registrar.authorizeRequest({ headers: { authorization: 'Bearer credential-1' } })
+    const newAcceptedDuringGrace = registrar.authorizeRequest({ headers: { authorization: 'Bearer credential-2' } })
+    nowMs += 100
+    const oldAcceptedAfterGrace = registrar.authorizeRequest({ headers: { authorization: 'Bearer credential-1' } })
+    const newAcceptedAfterGrace = registrar.authorizeRequest({ headers: { authorization: 'Bearer credential-2' } })
+    releaseDelete()
+    await unregistering
+    assert.equal(oldAcceptedDuringGrace, true)
+    assert.equal(newAcceptedDuringGrace, true)
+    assert.equal(oldAcceptedAfterGrace, false)
+    assert.equal(newAcceptedAfterGrace, true)
+    assert.equal(registrar.authorizeRequest({ headers: { authorization: 'Bearer credential-1' } }), false)
+    assert.equal(registrar.authorizeRequest({ headers: { authorization: 'Bearer credential-2' } }), false)
 
     const reg = calls.find((c) => c.method === 'POST' && c.url === '/v0/city/c/extmsg/adapters')
     assert.ok(reg, 'posted a registration')
@@ -165,8 +255,70 @@ test('makeAdapterRegistrar registers and unregisters with the gc-facing body sha
 
     const del = calls.find((c) => c.method === 'DELETE' && c.url === '/v0/city/c/extmsg/adapters')
     assert.ok(del, 'deleted the registration on unregister')
-    assert.deepEqual(JSON.parse(del.body), { provider: 'telegram', account_id: 'default' })
+    assert.deepEqual(JSON.parse(del.body), {
+      provider: 'telegram',
+      account_id: 'default',
+      generation: 2,
+      instance: 'instance-2',
+    })
   } finally {
     await close(server)
   }
+})
+
+test('makeAdapterRegistrar serializes registrations started after unregister', async () => {
+  let generation = 0
+  let releaseDelete
+  const deleteBlocked = new Promise((resolve) => {
+    releaseDelete = resolve
+  })
+  let deleteObserved
+  const deleteStarted = new Promise((resolve) => {
+    deleteObserved = resolve
+  })
+  const deleteBodies = []
+  const gcFetch = async (method, path, body) => {
+    if (method === 'POST' && path === '/extmsg/adapters') {
+      generation += 1
+      return { generation, instance: `instance-${generation}`, credential: `credential-${generation}` }
+    }
+    if (method === 'DELETE' && path === '/extmsg/adapters') {
+      deleteBodies.push(body)
+      deleteObserved()
+      await deleteBlocked
+      return {}
+    }
+    throw new Error(`unexpected request ${method} ${path}`)
+  }
+  const registrar = makeAdapterRegistrar({
+    gcFetch,
+    baseUrl: 'http://127.0.0.1:8372',
+    provider: 'telegram',
+    account: 'default',
+    name: 'openclaw-telegram-bridge',
+    callbackUrl: 'http://127.0.0.1:8931',
+    capabilities: {},
+    log: () => {},
+  })
+
+  await registrar.register()
+  const unregistering = registrar.unregister()
+  await deleteStarted
+  const registering = registrar.register()
+  await new Promise((resolve) => setImmediate(resolve))
+  const generationBeforeDeleteCompleted = generation
+  releaseDelete()
+  await unregistering
+  await registering
+
+  assert.equal(generationBeforeDeleteCompleted, 1)
+  assert.deepEqual(deleteBodies[0], {
+    provider: 'telegram',
+    account_id: 'default',
+    generation: 1,
+    instance: 'instance-1',
+  })
+  assert.equal(registrar.authorizeRequest({ headers: { authorization: 'Bearer credential-2' } }), true)
+  await registrar.unregister()
+  assert.equal(registrar.authorizeRequest({ headers: { authorization: 'Bearer credential-2' } }), false)
 })

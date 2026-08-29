@@ -552,6 +552,8 @@ export const zExtMsgAdapterRegisterOutputBody = z.object({
 
 export const zExtMsgAdapterUnregisterInputBody = z.object({
     account_id: z.string().min(1),
+    generation: z.coerce.bigint().gte(BigInt(1)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    instance: z.string().min(1),
     provider: z.string().min(1)
 });
 
@@ -1972,11 +1974,13 @@ export const zProviderUpdateInputBody = z.object({
 });
 
 export const zPublishReceipt = z.object({
+    Accepted: z.boolean(),
     Conversation: zConversationRef,
     Delivered: z.boolean(),
     FailureKind: z.string(),
     MessageID: z.string(),
     Metadata: z.record(z.string(), z.string()),
+    Queued: z.boolean(),
     RetryAfter: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' })
 });
 

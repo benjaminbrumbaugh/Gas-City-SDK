@@ -213,7 +213,21 @@ async function handlePublish(pub) {
   }
 }
 
-const server = await startCallbackServer({ handleRequest, port: PORT })
+const registrar = makeAdapterRegistrar({
+  gcFetch,
+  baseUrl: GC_BASE,
+  provider: PROVIDER,
+  account: ACCOUNT,
+  name: 'openclaw-imessage-bridge',
+  callbackUrl: `http://127.0.0.1:${PORT}`,
+  capabilities: { SupportsChildConversations: false, SupportsAttachments: false, MaxMessageLength: 0 },
+  log,
+})
+const server = await startCallbackServer({
+  handleRequest,
+  port: PORT,
+  authorizeRequest: registrar.authorizeRequest,
+})
 log(`callback server on http://127.0.0.1:${PORT}`)
 
 const subscribed = await client.request(
@@ -229,16 +243,6 @@ log('subscribed to imsg watch notifications')
 //    survive controller restarts. PascalCase capabilities are correct here:
 //    extmsg.AdapterCapabilities is intentionally untagged on the gc side
 //    (internal/extmsg/types.go) while the rest of this request body is snake_case.
-const registrar = makeAdapterRegistrar({
-  gcFetch,
-  baseUrl: GC_BASE,
-  provider: PROVIDER,
-  account: ACCOUNT,
-  name: 'openclaw-imessage-bridge',
-  callbackUrl: `http://127.0.0.1:${PORT}`,
-  capabilities: { SupportsChildConversations: false, SupportsAttachments: false, MaxMessageLength: 0 },
-  log,
-})
 await registrar.registerWithRetry()
 log(`registered adapter provider=${PROVIDER} account=${ACCOUNT} city=${CITY}`)
 const reregister = registrar.startReregister()

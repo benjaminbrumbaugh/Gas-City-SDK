@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -545,6 +547,9 @@ func (s *Server) humaHandleExtMsgAdapterRegister(_ context.Context, input *ExtMs
 	if err != nil {
 		return nil, err
 	}
+	if err := validateSecretBearingCallbackURL(input.Body.CallbackURL); err != nil {
+		return nil, apierr.InvalidRequest.Msg(err.Error())
+	}
 	name := input.Body.Name
 	if name == "" {
 		name = input.Body.Provider + "/" + input.Body.AccountID
@@ -567,6 +572,32 @@ func (s *Server) humaHandleExtMsgAdapterRegister(_ context.Context, input *ExtMs
 	return out, nil
 }
 
+func validateSecretBearingCallbackURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Host == "" || u.Opaque != "" {
+		return errors.New("callback_url must be an absolute URL with a host")
+	}
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") {
+		return errors.New("callback_url must not contain user information, a query, or a fragment")
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if host == "localhost" {
+			return nil
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			return nil
+		}
+	}
+	return errors.New("callback_url must use https, or http for a loopback host")
+}
+
 // humaHandleExtMsgAdapterUnregister is the Huma-typed handler for DELETE /v0/extmsg/adapters.
 func (s *Server) humaHandleExtMsgAdapterUnregister(_ context.Context, input *ExtMsgAdapterUnregisterInput) (*OKResponse, error) {
 	reg, err := s.humaExtmsgAdapterRegistry()
@@ -575,7 +606,9 @@ func (s *Server) humaHandleExtMsgAdapterUnregister(_ context.Context, input *Ext
 	}
 
 	key := extmsg.AdapterKey{Provider: input.Body.Provider, AccountID: input.Body.AccountID}
-	reg.Unregister(key)
+	if !reg.Unregister(key, input.Body.Generation, input.Body.Instance) {
+		return nil, apierr.ConflictWrongState.Msg("adapter registration fence does not match current registration")
+	}
 
 	s.extmsgEmitEvent()(events.ExtMsgAdapterRemoved, input.Body.Provider+"/"+input.Body.AccountID, extmsg.AdapterEventPayload{
 		Provider:  input.Body.Provider,

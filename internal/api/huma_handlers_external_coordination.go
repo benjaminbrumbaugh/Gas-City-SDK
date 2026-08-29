@@ -203,6 +203,9 @@ func (s *Server) humaHandleExternalCoordinationResponse(ctx context.Context, inp
 			return "recorded", service.RecordResponse(ctx, input.Body)
 		})
 	if err != nil {
+		if errors.Is(err, externalcoordination.ErrNotQueued) {
+			return nil, apierr.ConflictWrongState.Msg(err.Error())
+		}
 		if errors.Is(err, externalcoordination.ErrInvalidInput) || errors.Is(err, externalcoordination.ErrNotFound) {
 			return nil, apierr.InvalidRequest.Msg(err.Error())
 		}

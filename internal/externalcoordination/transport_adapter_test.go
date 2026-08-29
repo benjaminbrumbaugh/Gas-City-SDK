@@ -2,6 +2,7 @@ package externalcoordination
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 type fakeTransport struct {
 	published extmsg.PublishRequest
+	receipt   *extmsg.PublishReceipt
 }
 
 func (f *fakeTransport) Name() string { return "fake-external-coordination-transport" }
@@ -28,7 +30,87 @@ func (f *fakeTransport) EnsureChildConversation(context.Context, extmsg.Conversa
 
 func (f *fakeTransport) Publish(_ context.Context, request extmsg.PublishRequest) (*extmsg.PublishReceipt, error) {
 	f.published = request
-	return &extmsg.PublishReceipt{Delivered: true, MessageID: "message-1"}, nil
+	if f.receipt != nil {
+		return f.receipt, nil
+	}
+	return &extmsg.PublishReceipt{Accepted: true, Delivered: true, MessageID: "message-1"}, nil
+}
+
+func TestTransportAdapterAcceptsQueuedReceiptWithoutCompletingRequest(t *testing.T) {
+	transport := &fakeTransport{receipt: &extmsg.PublishReceipt{
+		Accepted:  true,
+		Queued:    true,
+		Delivered: false,
+		MessageID: "queue-1",
+	}}
+	request := Request{
+		RequestID:     "request-queued",
+		Attempt:       3,
+		Target:        Target{Provider: "hermes", AccountID: "desktop", ConversationID: "conversation-1"},
+		Prompt:        "Need authorization.",
+		CorrelationID: "corr-queued",
+	}
+
+	receipt, err := NewTransportAdapter(transport, "city-a").Deliver(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if !receipt.Accepted || receipt.State != StateRunning {
+		t.Fatalf("receipt = %+v, want accepted running", receipt)
+	}
+	if receipt.Attempt != request.Attempt || receipt.CorrelationID != request.CorrelationID {
+		t.Fatalf("receipt causal fence = %+v", receipt)
+	}
+}
+
+func TestTransportAdapterPreservesLegacyDeliveredReceiptCompatibility(t *testing.T) {
+	transport := &fakeTransport{receipt: &extmsg.PublishReceipt{
+		Delivered: true,
+		MessageID: "message-legacy",
+	}}
+	request := Request{
+		RequestID:     "request-legacy",
+		Attempt:       2,
+		Target:        Target{Provider: "slack", AccountID: "default", ConversationID: "conversation-legacy"},
+		Prompt:        "Need a completed delivery.",
+		CorrelationID: "corr-legacy",
+	}
+
+	receipt, err := NewTransportAdapter(transport, "city-a").Deliver(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if !receipt.Accepted || receipt.State != StateRunning {
+		t.Fatalf("receipt = %+v, want accepted running", receipt)
+	}
+	if receipt.Attempt != request.Attempt || receipt.CorrelationID != request.CorrelationID {
+		t.Fatalf("receipt causal fence = %+v", receipt)
+	}
+}
+
+func TestTransportAdapterRejectsPartialQueuedAcceptanceEvidence(t *testing.T) {
+	tests := map[string]*extmsg.PublishReceipt{
+		"accepted without queued": {Accepted: true},
+		"queued without accepted": {Queued: true},
+	}
+	for name, result := range tests {
+		t.Run(name, func(t *testing.T) {
+			request := Request{
+				RequestID:     "request-partial",
+				Target:        Target{Provider: "hermes", AccountID: "desktop", ConversationID: "conversation-1"},
+				Prompt:        "Need authorization.",
+				CorrelationID: "corr-partial",
+			}
+
+			receipt, err := NewTransportAdapter(&fakeTransport{receipt: result}, "city-a").Deliver(context.Background(), request)
+			if err != nil {
+				t.Fatalf("Deliver: %v", err)
+			}
+			if receipt.Accepted || receipt.State != StateFailed {
+				t.Fatalf("receipt = %+v, want rejected failed", receipt)
+			}
+		})
+	}
 }
 
 func TestTransportAdapterPublishesCausallyLinkedRequest(t *testing.T) {
@@ -60,6 +142,40 @@ func TestTransportAdapterPublishesCausallyLinkedRequest(t *testing.T) {
 	}
 	if transport.published.IdempotencyKey != "idem-1" || transport.published.Metadata["work_ref"] != "gc-123" || transport.published.Metadata["correlation_id"] != "corr-1" {
 		t.Fatalf("causal metadata = %+v", transport.published.Metadata)
+	}
+}
+
+func TestTransportAdapterSendsBoundedBridgeMetadataWithRequestFences(t *testing.T) {
+	transport := &fakeTransport{}
+	longValue := strings.Repeat("x", 2048)
+	request := Request{
+		RequestID:        "request-7",
+		Attempt:          7,
+		SourceAgent:      longValue,
+		Target:           Target{Provider: "hermes", AccountID: "desktop", ConversationID: "conversation-1"},
+		Reason:           ReasonEscalation,
+		Prompt:           "Need authorization.",
+		WorkRef:          longValue,
+		CorrelationID:    "corr-7",
+		ContentRetention: RetentionDurable,
+	}
+
+	if _, err := NewTransportAdapter(transport, "city-a").Deliver(context.Background(), request); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if got := transport.published.Metadata["hca_attempt"]; got != "7" {
+		t.Fatalf("hca_attempt = %q, want 7", got)
+	}
+	if got := transport.published.Metadata["content_retention"]; got != string(RetentionDurable) {
+		t.Fatalf("content_retention = %q, want %q", got, RetentionDurable)
+	}
+	if transport.published.Metadata["hca_request_id"] != request.RequestID || transport.published.Metadata["correlation_id"] != request.CorrelationID {
+		t.Fatalf("causal metadata = %+v", transport.published.Metadata)
+	}
+	for key, value := range transport.published.Metadata {
+		if len(value) > 512 {
+			t.Fatalf("metadata[%q] length = %d, want <= 512", key, len(value))
+		}
 	}
 }
 

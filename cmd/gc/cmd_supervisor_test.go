@@ -4487,15 +4487,18 @@ func TestUninstallSupervisorLaunchdRemovesMatchingLegacyDefaultPlistForIsolatedG
 
 	oldRun := supervisorLaunchctlRun
 	oldRegistered := supervisorLaunchdRegistered
+	oldActive := supervisorLaunchdActive
 	var calls []string
 	supervisorLaunchctlRun = func(args ...string) error {
 		calls = append(calls, strings.Join(args, " "))
 		return nil
 	}
 	supervisorLaunchdRegistered = func(string) bool { return true }
+	supervisorLaunchdActive = func(string) bool { return false }
 	t.Cleanup(func() {
 		supervisorLaunchctlRun = oldRun
 		supervisorLaunchdRegistered = oldRegistered
+		supervisorLaunchdActive = oldActive
 	})
 
 	var stdout, stderr bytes.Buffer
@@ -6518,32 +6521,36 @@ func TestStopSupervisorWithWaitStopsSystemdServiceAfterAckBeforeDone(t *testing.
 			go func(conn net.Conn) {
 				defer conn.Close() //nolint:errcheck
 				r := bufio.NewReader(conn)
-				line, err := r.ReadString('\n')
-				if err != nil {
-					return
-				}
-				switch strings.TrimSpace(line) {
-				case "ping":
-					mu.Lock()
-					defer mu.Unlock()
-					if stopped {
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
 						return
 					}
-					io.WriteString(conn, "4242\n") //nolint:errcheck
-				case "stop":
-					mu.Lock()
-					stopped = true
-					mu.Unlock()
-					close(ackSent)
-					io.WriteString(conn, "ok\n") //nolint:errcheck
-					select {
-					case <-serviceStopped:
-					case <-time.After(200 * time.Millisecond):
+					switch strings.TrimSpace(line) {
+					case "ping":
 						mu.Lock()
-						doneSentBeforeService = true
+						if stopped {
+							mu.Unlock()
+							return
+						}
+						io.WriteString(conn, "4242\n") //nolint:errcheck
 						mu.Unlock()
+					case "stop":
+						mu.Lock()
+						stopped = true
+						mu.Unlock()
+						close(ackSent)
+						io.WriteString(conn, "ok\n") //nolint:errcheck
+						select {
+						case <-serviceStopped:
+						case <-time.After(200 * time.Millisecond):
+							mu.Lock()
+							doneSentBeforeService = true
+							mu.Unlock()
+						}
+						io.WriteString(conn, "done:ok\n") //nolint:errcheck
+						return
 					}
-					io.WriteString(conn, "done:ok\n") //nolint:errcheck
 				}
 			}(conn)
 		}
@@ -6728,16 +6735,19 @@ func TestStopSupervisorWithWaitPropagatesDoneErr(t *testing.T) {
 			go func(conn net.Conn) {
 				defer conn.Close() //nolint:errcheck
 				r := bufio.NewReader(conn)
-				line, err := r.ReadString('\n')
-				if err != nil {
-					return
-				}
-				switch strings.TrimSpace(line) {
-				case "ping":
-					io.WriteString(conn, "4242\n") //nolint:errcheck
-				case "stop":
-					io.WriteString(conn, "ok\n")                                             //nolint:errcheck
-					io.WriteString(conn, "done:err:city \"alpha\" did not exit within 5s\n") //nolint:errcheck
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					switch strings.TrimSpace(line) {
+					case "ping":
+						io.WriteString(conn, "4242\n") //nolint:errcheck
+					case "stop":
+						io.WriteString(conn, "ok\n")                                             //nolint:errcheck
+						io.WriteString(conn, "done:err:city \"alpha\" did not exit within 5s\n") //nolint:errcheck
+						return
+					}
 				}
 			}(conn)
 		}

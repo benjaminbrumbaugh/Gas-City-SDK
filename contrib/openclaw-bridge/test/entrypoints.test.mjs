@@ -12,6 +12,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
@@ -25,5 +26,14 @@ for (const file of ['bridge.mjs', 'telegram-bridge.mjs']) {
     } catch (err) {
       assert.fail(`node --check ${file} failed:\n${err.stderr || err.message}`)
     }
+  })
+
+  test(`${file} wires current registration authorization before callback startup`, async () => {
+    const source = await readFile(entrypoint(file), 'utf8')
+    const registrar = source.indexOf('const registrar = makeAdapterRegistrar({')
+    const callbackServer = source.indexOf('const server = await startCallbackServer({')
+    assert.ok(registrar >= 0, `${file} constructs the adapter registrar`)
+    assert.ok(callbackServer > registrar, `${file} constructs the registrar before starting callbacks`)
+    assert.match(source, /authorizeRequest:\s*registrar\.authorizeRequest/)
   })
 }

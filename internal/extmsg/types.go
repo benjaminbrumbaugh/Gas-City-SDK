@@ -211,10 +211,14 @@ const (
 type PublishReceipt struct {
 	MessageID    string
 	Conversation ConversationRef
-	Delivered    bool
-	FailureKind  PublishFailureKind
-	RetryAfter   time.Duration
-	Metadata     map[string]string
+	// Accepted means the callback admitted the request. Queued means it was
+	// durably queued for later execution; neither field implies completion.
+	Accepted    bool
+	Queued      bool
+	Delivered   bool
+	FailureKind PublishFailureKind
+	RetryAfter  time.Duration
+	Metadata    map[string]string
 }
 
 // ErrAdapterUnsupported is returned when the adapter does not support the requested operation.

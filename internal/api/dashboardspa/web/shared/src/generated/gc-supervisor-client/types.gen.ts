@@ -1034,7 +1034,7 @@ export type ExtMsgAdapterRegisterInputBody = {
      */
     account_id: string;
     /**
-     * Callback URL for outbound messages.
+     * Callback base URL for outbound messages. Secret-bearing callbacks require HTTPS, except HTTP is allowed for literal loopback hosts; user information, queries, and fragments are rejected.
      */
     callback_url?: string;
     /**
@@ -1087,6 +1087,14 @@ export type ExtMsgAdapterUnregisterInputBody = {
      * Account ID.
      */
     account_id: string;
+    /**
+     * Exact registration generation returned by the successful register call.
+     */
+    generation: number;
+    /**
+     * Exact registration instance returned by the successful register call.
+     */
+    instance: string;
     /**
      * Provider name.
      */
@@ -2769,6 +2777,7 @@ export type ProviderUpdateInputBody = {
 };
 
 export type PublishReceipt = {
+    Accepted: boolean;
     Conversation: ConversationRef;
     Delivered: boolean;
     FailureKind: string;
@@ -2776,6 +2785,7 @@ export type PublishReceipt = {
     Metadata: {
         [key: string]: string;
     };
+    Queued: boolean;
     RetryAfter: number;
 };
 
@@ -12680,6 +12690,10 @@ export type PostV0CityByCityNameExternalCoordinationResponsesErrors = {
      */
     404: ErrorModel;
     /**
+     * Conflict
+     */
+    409: ErrorModel;
+    /**
      * Unprocessable Entity
      */
     422: ErrorModel;
@@ -12735,6 +12749,10 @@ export type DeleteV0CityByCityNameExtmsgAdaptersErrors = {
      * Not Found
      */
     404: ErrorModel;
+    /**
+     * Conflict
+     */
+    409: ErrorModel;
     /**
      * Unprocessable Entity
      */
