@@ -93,14 +93,18 @@ func bridgeMetadata(request Request) (map[string]string, error) {
 	if len(request.CorrelationID) > maxBridgeMetadataValueBytes {
 		return nil, fmt.Errorf("%w: correlation_id exceeds bridge metadata limit", ErrInvalidInput)
 	}
+	// These keys are the bridge-facing wire contract. They were named hca_*
+	// while this package was called the human coordinator adapter; the name no
+	// longer describes anything the package does, and no released bridge reads
+	// the old spelling, so they carry the package's own vocabulary instead.
 	return map[string]string{
-		"hca_request_id":    request.RequestID,
-		"hca_attempt":       strconv.Itoa(request.Attempt),
-		"source_agent":      boundBridgeMetadataValue(request.SourceAgent),
-		"reason":            boundBridgeMetadataValue(string(request.Reason)),
-		"work_ref":          boundBridgeMetadataValue(request.WorkRef),
-		"correlation_id":    request.CorrelationID,
-		"content_retention": string(request.ContentRetention),
+		"coordination_request_id": request.RequestID,
+		"coordination_attempt":    strconv.Itoa(request.Attempt),
+		"source_agent":            boundBridgeMetadataValue(request.SourceAgent),
+		"reason":                  boundBridgeMetadataValue(string(request.Reason)),
+		"work_ref":                boundBridgeMetadataValue(request.WorkRef),
+		"correlation_id":          request.CorrelationID,
+		"content_retention":       string(request.ContentRetention),
 	}, nil
 }
 

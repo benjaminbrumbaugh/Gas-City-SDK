@@ -91,10 +91,7 @@ func (s *Server) humaHandleExternalCoordinationRequest(ctx context.Context, inpu
 		return nil, apierr.Internal.Msg(err.Error())
 	}
 	s.state.Poke()
-	queued := record
-	s.runBackground(func(ctx context.Context) {
-		s.dispatchExternalCoordinationRequest(ctx, queued)
-	})
+	s.runBackground(s.drainExternalCoordinationQueue)
 	return &ExternalCoordinationRequestOutput{Body: record}, nil
 }
 
@@ -140,28 +137,79 @@ func normalizeExternalCoordinationTarget(request *externalcoordination.RequestIn
 	return nil
 }
 
-// dispatchExternalCoordinationRequest is best-effort at the API boundary. If the configured
-// adapter has not registered yet, the durable request remains queued for the
-// next controller dispatch opportunity; the API must not turn that absence
-// into a false success or delete the causal record.
-func (s *Server) dispatchExternalCoordinationRequest(ctx context.Context, record externalcoordination.RequestRecord) {
+// externalCoordinationDeliveryBudget bounds one drain pass. A drain hands over
+// at most this many requests, so a large or slow queue cannot hold a background
+// task open indefinitely; whatever is left is picked up by the next trigger.
+const externalCoordinationDeliveryBudget = 16
+
+// externalCoordinationAdapterKey reports the adapter key external coordination
+// is configured to deliver through, and whether external coordination is
+// configured at all. Callers use it to decide whether an unrelated adapter
+// registration is worth a drain.
+func (s *Server) externalCoordinationAdapterKey() (extmsg.AdapterKey, bool) {
+	cfg := s.state.Config()
+	if cfg == nil || cfg.ExternalCoordination == nil || !cfg.ExternalCoordination.Enabled {
+		return extmsg.AdapterKey{}, false
+	}
+	return extmsg.AdapterKey{
+		Provider:  cfg.ExternalCoordination.Provider,
+		AccountID: cfg.ExternalCoordination.AccountID,
+	}, true
+}
+
+// externalCoordinationDispatcher builds a dispatcher over the adapter that is
+// registered right now, or reports that nothing can deliver at this moment.
+func (s *Server) externalCoordinationDispatcher() (*externalcoordination.Dispatcher, bool) {
+	key, ok := s.externalCoordinationAdapterKey()
+	if !ok || s.state.CityBeadStore() == nil {
+		return nil, false
+	}
 	registry := s.state.AdapterRegistry()
 	if registry == nil {
-		return
+		return nil, false
 	}
-	transport := registry.Lookup(extmsg.AdapterKey{
-		Provider:  record.Request.Target.Provider,
-		AccountID: record.Request.Target.AccountID,
-	})
+	transport := registry.Lookup(key)
 	if transport == nil {
-		return
+		return nil, false
 	}
-	dispatcher := externalcoordination.Dispatcher{
+	return &externalcoordination.Dispatcher{
 		Queue:   externalcoordination.NewService(s.state.CityBeadStore()),
 		Adapter: externalcoordination.NewTransportAdapter(transport, s.state.CityName()),
 		Worker:  "city-api-external-coordination-dispatcher",
+	}, true
+}
+
+// drainExternalCoordinationQueue pushes queued requests to the registered
+// adapter's callback until the queue is empty or the budget is spent. It is
+// best-effort at the API boundary: with no adapter registered the durable
+// requests stay queued for the next dispatch opportunity, and the API must not
+// turn that absence into a false success or delete the causal record.
+//
+// Every caller is an event, never a timer: a request was enqueued, an adapter
+// registered, or a coordinator turn ended. Delivery therefore stays a push from
+// the city to the adapter's callback; nothing outside the city polls for
+// pending work, and nothing inside it sweeps on a clock.
+func (s *Server) drainExternalCoordinationQueue(ctx context.Context) {
+	dispatcher, ok := s.externalCoordinationDispatcher()
+	if !ok {
+		return
 	}
-	_, _, _ = dispatcher.DeliverNext(ctx, time.Now())
+	for i := 0; i < externalCoordinationDeliveryBudget; i++ {
+		if ctx.Err() != nil {
+			return
+		}
+		record, receipt, err := dispatcher.DeliverNext(ctx, time.Now())
+		if record == nil || err != nil {
+			// Empty queue, an unclaimable head, or a delivery that failed and
+			// was recorded as failed. Stopping on the first failure is
+			// deliberate: a registered-but-unhealthy adapter should cost one
+			// failed record, not the whole queue walked into the same failure.
+			return
+		}
+		if receipt != nil && receipt.State == externalcoordination.StateFailed {
+			return
+		}
+	}
 }
 
 func (s *Server) humaHandleExternalCoordinationRequestList(ctx context.Context, input *ExternalCoordinationRequestListInput) (*ExternalCoordinationRequestListOutput, error) {
@@ -211,6 +259,9 @@ func (s *Server) humaHandleExternalCoordinationResponse(ctx context.Context, inp
 		}
 		return nil, apierr.Internal.Msg(fmt.Sprintf("recording external coordination response: %v", err))
 	}
+	// A recorded outcome is a coordinator session boundary, which is exactly
+	// when queued-mode delivery is permitted to hand over the next request.
+	s.runBackground(s.drainExternalCoordinationQueue)
 	out := &ExternalCoordinationResponseOutput{}
 	out.Body.Status = "recorded"
 	return out, nil

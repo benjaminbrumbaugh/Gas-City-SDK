@@ -163,13 +163,13 @@ func TestTransportAdapterSendsBoundedBridgeMetadataWithRequestFences(t *testing.
 	if _, err := NewTransportAdapter(transport, "city-a").Deliver(context.Background(), request); err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
-	if got := transport.published.Metadata["hca_attempt"]; got != "7" {
-		t.Fatalf("hca_attempt = %q, want 7", got)
+	if got := transport.published.Metadata["coordination_attempt"]; got != "7" {
+		t.Fatalf("coordination_attempt = %q, want 7", got)
 	}
 	if got := transport.published.Metadata["content_retention"]; got != string(RetentionDurable) {
 		t.Fatalf("content_retention = %q, want %q", got, RetentionDurable)
 	}
-	if transport.published.Metadata["hca_request_id"] != request.RequestID || transport.published.Metadata["correlation_id"] != request.CorrelationID {
+	if transport.published.Metadata["coordination_request_id"] != request.RequestID || transport.published.Metadata["correlation_id"] != request.CorrelationID {
 		t.Fatalf("causal metadata = %+v", transport.published.Metadata)
 	}
 	for key, value := range transport.published.Metadata {
