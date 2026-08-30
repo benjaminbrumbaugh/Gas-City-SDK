@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -152,7 +153,14 @@ func (d *Dispatcher) DeliverNext(ctx context.Context, now time.Time) (*RequestRe
 	}
 	receipt, deliverErr := d.Adapter.Deliver(ctx, record.Request)
 	if deliverErr != nil {
-		_ = d.Queue.Fail(ctx, record.ID, deliverErr, now)
+		// ErrUnavailable means the adapter could not be reached, not that the
+		// request is bad. Failing it here is terminal and unrecoverable, since
+		// only queued records are ever dispatched again.
+		if errors.Is(deliverErr, ErrUnavailable) {
+			_ = d.Queue.Requeue(ctx, record.ID, deliverErr, now)
+		} else {
+			_ = d.Queue.Fail(ctx, record.ID, deliverErr, now)
+		}
 		return &record, &receipt, deliverErr
 	}
 	if receipt.State == StateFailed {

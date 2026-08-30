@@ -74,6 +74,21 @@ func (a *TransportAdapter) Deliver(ctx context.Context, request Request) (Delive
 		if result != nil && result.FailureKind != "" {
 			errText = string(result.FailureKind)
 		}
+		// The transport already classified this. A transient or rate-limited
+		// publish says nothing about the request -- the adapter is registered
+		// but momentarily unreachable -- so surface it as ErrUnavailable and
+		// let the dispatcher requeue rather than burning the record. Dropping
+		// the classification here is what turned a restarting bridge into
+		// destroyed requests.
+		if result != nil && (result.FailureKind == extmsg.PublishFailureTransient ||
+			result.FailureKind == extmsg.PublishFailureRateLimited) {
+			return DeliveryReceipt{
+				RequestID:  request.RequestID,
+				State:      StateQueued,
+				Error:      errText,
+				RetryAfter: result.RetryAfter,
+			}, fmt.Errorf("%w: %s", ErrUnavailable, errText)
+		}
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: errText}, nil
 	}
 	return DeliveryReceipt{
