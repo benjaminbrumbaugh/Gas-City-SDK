@@ -352,6 +352,29 @@ func (s *Service) Fail(ctx context.Context, id string, cause error, now time.Tim
 	return s.setState(id, StateFailed, zeroTime(now), message)
 }
 
+// Requeue returns a claimed request to the queue after a retryable delivery
+// failure, so a later dispatch opportunity can try it again.
+//
+// This is deliberately distinct from Fail. Fail is terminal, and DeliverNext
+// only ever lists queued records, so a request failed for a reason that was
+// never the request's fault -- an adapter that is registered but momentarily
+// unreachable -- can never be retried and is effectively destroyed. The
+// attempt counter is NOT rewound: the try happened and the causal record keeps
+// saying so.
+func (s *Service) Requeue(ctx context.Context, id string, cause error, now time.Time) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	if _, err := s.Get(ctx, id); err != nil {
+		return err
+	}
+	message := "delivery deferred"
+	if cause != nil {
+		message = cause.Error()
+	}
+	return s.setState(id, StateQueued, zeroTime(now), message)
+}
+
 // Cancel terminally cancels a request. It never deletes the causal record.
 func (s *Service) Cancel(ctx context.Context, id string, now time.Time) error {
 	if err := checkContext(ctx); err != nil {
