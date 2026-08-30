@@ -5000,7 +5000,7 @@ printf '%s	%s\n' "${GC_TEST_DU_KIB:-0}" "${3:-${2:-${1:-}}}"
 	if got := strings.Count(readLog(), "mail send mayor -s Dolt backup size warning [MEDIUM]"); got != 1 {
 		t.Fatalf("first size warning mails = %d, want 1\n%s", got, readLog())
 	}
-	if !strings.Contains(readLog(), "request queued outside help through HCA") {
+	if !strings.Contains(readLog(), "request queued outside help through external coordination") {
 		t.Fatalf("size warning must tell Mayor how to escalate for help:\n%s", readLog())
 	}
 	for _, want := range []string{

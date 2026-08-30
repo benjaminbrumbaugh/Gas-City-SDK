@@ -557,6 +557,16 @@ func (s *Server) humaHandleExtMsgAdapterRegister(_ context.Context, input *ExtMs
 	adapter := extmsg.NewHTTPAdapter(name, input.Body.CallbackURL, input.Body.Capabilities)
 	key := extmsg.AdapterKey{Provider: input.Body.Provider, AccountID: input.Body.AccountID}
 	registration := reg.Register(key, adapter)
+	// Registration is the moment a queue that had nowhere to go becomes
+	// deliverable, and it is the only such moment: nothing else in the
+	// controller re-runs the external coordination dispatcher. Without this,
+	// a request enqueued before its adapter registered stays queued forever —
+	// the exact ordering that stalled the first city-to-coordinator handoff.
+	// This is still push delivery: the drain calls the callback URL this
+	// registration just supplied.
+	if coordinationKey, enabled := s.externalCoordinationAdapterKey(); enabled && coordinationKey == key {
+		s.runBackground(s.drainExternalCoordinationQueue)
+	}
 	s.extmsgEmitEvent()(events.ExtMsgAdapterAdded, name, extmsg.AdapterEventPayload{
 		Provider:  input.Body.Provider,
 		AccountID: input.Body.AccountID,
