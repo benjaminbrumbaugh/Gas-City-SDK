@@ -225,14 +225,14 @@ Likewise, `~/go/bin/gc`, `Gas-City-SDK/gc`, and binaries inside migration worktr
 
 ## Dashboards
 
-The SDK contains an embedded upstream dashboard SPA and its support API because that is part of the upstream supervisor product. Benjamin's operational dashboard is separate:
+The SDK retains the upstream embedded dashboard SPA and its support API for compatibility, but this fork disables the embedded SPA in durable supervisor configuration while preserving the API/run-projection plane. Benjamin's operational dashboard is separate and authoritative:
 
 ```text
-SDK embedded dashboard: supervisor listener on 8372
-Owned Python dashboard:  http://localhost:8400/
+Retained upstream SPA: optional compatibility UI on the supervisor listener
+Owned Python dashboard: http://localhost:8400/
 ```
 
-The embedded SPA is marked as extraneous for this workspace in `internal/api/dashboardspa/READ_ME_FIRST.md`. Do not copy its UI into the owned Python dashboard and do not treat the SDK repository as the dashboard migration source.
+Generic dashboard layout, copy, interaction, and operations work belongs in `/Users/benjaminbrumbaugh/Documents/Gas City/Gas-City-Dashboard`. Editing `internal/api/dashboardspa` requires an explicit task naming the retained embedded UI; SDK API/run-projection changes remain here when independently justified.
 
 The Python dashboard's source and runtime are documented in:
 

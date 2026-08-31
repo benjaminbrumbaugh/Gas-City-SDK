@@ -46,7 +46,7 @@ var dashboardHealthOKHook = dashboardHealthOK
 // mint dead links. The chain: supervisor alive → supervisor base URL →
 // city registered with the supervisor (the SPA routes by registry name,
 // not config city name) → name passes the BFF grammar → dashboard actually
-// mounted (GET /api/health) → deep link. A single result carrying a
+// mounted (GET / returns HTML) → deep link. A single result carrying a
 // graph.v2 workflow root links straight to that run's detail view; every
 // other successful shape (wisps, plain beads, batches, idempotent skips)
 // links to the runs list, since only graph.v2 roots render run detail.
@@ -91,14 +91,13 @@ func slingSupervisorAliveUntil(deadline time.Time) int {
 	return 0
 }
 
-// dashboardHealthOK reports whether the dashboard /api plane is mounted at
-// baseURL by probing its unauthenticated GET /api/health endpoint. The
-// endpoint exists only when the dashboard is mounted, so anything but a
-// fast 200 means no link should be emitted.
+// dashboardHealthOK reports whether an embedded browser surface is mounted at
+// baseURL. API health is intentionally insufficient: the retained BFF can be
+// healthy while the SPA is disabled.
 func dashboardHealthOK(baseURL string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), slingDashboardHealthTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/", nil)
 	if err != nil {
 		return false
 	}
@@ -107,5 +106,9 @@ func dashboardHealthOK(baseURL string) bool {
 		return false
 	}
 	defer resp.Body.Close() //nolint:errcheck // read-only probe
-	return resp.StatusCode == http.StatusOK
+	return dashboardResponseAvailable(resp.StatusCode, resp.Header.Get("Content-Type"))
+}
+
+func dashboardResponseAvailable(status int, contentType string) bool {
+	return status == http.StatusOK && strings.HasPrefix(strings.ToLower(contentType), "text/html")
 }

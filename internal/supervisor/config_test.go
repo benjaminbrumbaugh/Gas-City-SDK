@@ -112,6 +112,38 @@ func setProgramName(t *testing.T, name string) {
 	})
 }
 
+func TestLoadConfigDashboardPolicy(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+		wantUI   bool
+		wantURL  string
+	}{
+		{name: "absent defaults enabled", contents: "[supervisor]\n", wantUI: true},
+		{name: "explicit true", contents: "[supervisor]\nembedded_dashboard = true\n", wantUI: true},
+		{name: "explicit false", contents: "[supervisor]\nembedded_dashboard = false\n", wantUI: false},
+		{name: "dashboard url preserves spelling", contents: "[supervisor]\ndashboard_url = \" https://dash.example.test/front/ \"\n", wantUI: true, wantURL: " https://dash.example.test/front/ "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "supervisor.toml")
+			if err := os.WriteFile(path, []byte(tt.contents), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.Supervisor.EmbeddedDashboardEnabled(); got != tt.wantUI {
+				t.Fatalf("EmbeddedDashboardEnabled() = %t, want %t", got, tt.wantUI)
+			}
+			if got := cfg.Supervisor.DashboardURL; got != tt.wantURL {
+				t.Fatalf("DashboardURL = %q, want %q", got, tt.wantURL)
+			}
+		})
+	}
+}
+
 func TestLoadConfigExplicit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "supervisor.toml")

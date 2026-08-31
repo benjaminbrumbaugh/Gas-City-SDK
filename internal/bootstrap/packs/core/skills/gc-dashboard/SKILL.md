@@ -5,8 +5,10 @@ description: API server and web dashboard — config, start, monitor
 
 # Dashboard
 
-The dashboard is a web UI compiled into the `gc` binary for monitoring
-convoys, agents, mail, rigs, sessions, and events in real time.
+Benjamin's configured dashboard product is the separate `Gas-City-Dashboard`
+front door at `http://localhost:8400/`. The SDK's embedded SPA is optional,
+upstream-compatibility code; a healthy `/api` plane does not prove that UI is
+mounted.
 
 ## Prerequisites
 
@@ -52,15 +54,11 @@ gc dashboard --city /path/to/city         # Optional city context for standalone
 gc dashboard --api http://127.0.0.1:8372 # Optional override
 ```
 
-`gc dashboard` auto-discovers the right API server in this order:
-
-- Supervisor-managed city: uses the machine supervisor API and defaults the UI
-  to the supervisor view. Pick a city in the UI.
-- Standalone city context: uses that city's configured `[api]` listener.
-- No city context: if the machine supervisor is running, uses the supervisor
-  API and shows supervisor-level state.
-
-The `--api` flag remains available as an override for non-standard setups.
+`gc dashboard` first reads `[supervisor] dashboard_url` and opens that validated
+external front door when configured. Otherwise it probes the actual root HTML
+surface before offering an embedded supervisor or standalone URL. API health
+alone is never treated as UI availability. The `--api` flag remains available
+as an override only when that origin serves the embedded root.
 
 ## Features
 

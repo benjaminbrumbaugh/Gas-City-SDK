@@ -1515,15 +1515,14 @@ func runSupervisor(stdout, stderr io.Writer) int {
 	// Host the embedded dashboard SPA + host-side /api plane on the same
 	// listener (same-origin), so the supervisor serves the dashboard for all
 	// registered cities. Disabled with GC_SUPERVISOR_DASHBOARD=0.
-	dashboardPlane, dashErr := attachDashboard(apiMux, registry, readOnly, bind, port)
+	dashboardPlane, dashboardMounted, dashErr := attachDashboard(apiMux, registry, readOnly, bind, port, supCfg.Supervisor.EmbeddedDashboardEnabled())
 	if dashErr != nil {
 		fmt.Fprintf(stderr, "gc supervisor: dashboard: %v\n", dashErr) //nolint:errcheck
 		return 1
 	}
-	dashboardMounted := dashboardPlane != nil
 	if dashboardPlane == nil {
-		// The typed run census is available even when the embedded dashboard is
-		// disabled. Keep its incremental plane unmounted in that posture.
+		// The typed run census remains available under the legacy full-disable
+		// environment gate, but its incremental plane stays unmounted.
 		dashboardPlane = newRunCensusPlane(apiMux, registry)
 	}
 	dashboardPlane.Start(ctx)
@@ -1567,7 +1566,7 @@ func runSupervisor(stdout, stderr io.Writer) int {
 		apiMux.Shutdown(shutCtx) //nolint:errcheck
 	}()
 	fmt.Fprintf(stdout, "Supervisor API listening on http://%s\n", addr) //nolint:errcheck
-	writeSupervisorDashboardStartup(stdout, dashboardMounted, readOnly, bind, port)
+	writeSupervisorDashboardStartup(stdout, dashboardMounted, readOnly, bind, port, supCfg.Supervisor.DashboardURL)
 
 	// External event forwarders consume the typed supervisor stream without
 	// configuring [events.export]. Allow that long-lived supervisor unit to arm

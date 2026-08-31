@@ -33,12 +33,14 @@ type Config struct {
 
 // Section holds the [supervisor] table fields.
 type Section struct {
-	Port           int      `toml:"port,omitempty"`
-	Bind           string   `toml:"bind,omitempty"`
-	PatrolInterval string   `toml:"patrol_interval,omitempty"`
-	AllowMutations bool     `toml:"allow_mutations,omitempty"`
-	AllowedOrigins []string `toml:"allowed_origins,omitempty"`
-	AllowedHosts   []string `toml:"allowed_hosts,omitempty"`
+	Port              int      `toml:"port,omitempty"`
+	Bind              string   `toml:"bind,omitempty"`
+	PatrolInterval    string   `toml:"patrol_interval,omitempty"`
+	AllowMutations    bool     `toml:"allow_mutations,omitempty"`
+	AllowedOrigins    []string `toml:"allowed_origins,omitempty"`
+	AllowedHosts      []string `toml:"allowed_hosts,omitempty"`
+	EmbeddedDashboard *bool    `toml:"embedded_dashboard,omitempty"`
+	DashboardURL      string   `toml:"dashboard_url,omitempty"`
 	// WriteAuthVerifyKey / WriteAuthRequired require a signed write grant on
 	// every mutating request to an already-registered city (the per-city routes
 	// under /v0/city/{cityName}); city registry creation (POST /v0/city) stays
@@ -124,6 +126,12 @@ func (x ExportConfig) BatchIntervalDuration() time.Duration {
 		return 5 * time.Second
 	}
 	return d
+}
+
+// EmbeddedDashboardEnabled reports whether the supervisor should mount the
+// embedded SPA. The upstream-compatible default is enabled.
+func (s Section) EmbeddedDashboardEnabled() bool {
+	return s.EmbeddedDashboard == nil || *s.EmbeddedDashboard
 }
 
 // BindOrDefault returns the bind address, defaulting to "127.0.0.1".

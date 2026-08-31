@@ -1392,13 +1392,12 @@ gc costs --json
 
 ## gc dashboard
 
-Open the GC dashboard in your browser.
+Open the configured Gas City dashboard in your browser.
 
-The dashboard SPA is embedded in the gc binary and served same-origin by the
-supervisor; it is no longer a separate static server. This command resolves the
-supervisor URL, opens it in your default browser, and prints it too (or tells
-you how to start the supervisor). Use --no-open to print the URL without
-launching a browser.
+When [supervisor] dashboard_url is set, this command opens that validated
+external front door. Otherwise it opens an embedded dashboard only when the
+resolved API origin actually serves the SPA root. Use --no-open to print the
+URL without launching a browser.
 
 ```
 gc dashboard [flags]
@@ -1415,11 +1414,11 @@ gc dashboard [flags]
 
 ## gc dashboard serve
 
-Report the URL where the GC dashboard is served.
+Report the configured Gas City dashboard URL.
 
-The dashboard SPA is embedded in the gc binary and served same-origin by the
-supervisor; "gc dashboard serve" no longer starts a static server. It resolves
-and prints the supervisor URL (or tells you how to start the supervisor).
+When [supervisor] dashboard_url is set, this command prints that external front
+door. Otherwise it prints an embedded dashboard origin only when the resolved
+API origin actually serves the SPA. It never starts a static server.
 
 ```
 gc dashboard serve [flags]
