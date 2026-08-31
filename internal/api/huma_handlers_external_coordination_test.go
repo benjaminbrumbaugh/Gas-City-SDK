@@ -535,3 +535,94 @@ func TestExternalCoordinationRegistrationOfAnUnrelatedAdapterDoesNotDeliver(t *t
 		t.Fatalf("unrelated adapter received %d coordination callback(s), want 0", got)
 	}
 }
+
+// getExternalCoordinationCapability performs the pre-flight check an
+// orchestrator is instructed to run before using external coordination.
+func getExternalCoordinationCapability(t *testing.T, h http.Handler, state State) config.ExternalCoordinationCapability {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, cityURL(state, "/external-coordination"), nil)
+	req.Header.Set("X-GC-Request", "coordination-capability")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /external-coordination status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var capability config.ExternalCoordinationCapability
+	if err := json.Unmarshal(response.Body.Bytes(), &capability); err != nil {
+		t.Fatal(err)
+	}
+	return capability
+}
+
+// TestExternalCoordinationCapabilityTracksLiveAdapterRegistration pins the
+// signifier to what can actually deliver. Adapter registrations are in-memory
+// and do not survive a controller restart, so [external_coordination] can stay
+// enabled while the registry is empty. Reporting available=true in that window
+// gave an orchestrator following its own pre-flight instructions a false green,
+// and every request it enqueued sat undelivered until a bridge re-registered.
+func TestExternalCoordinationCapabilityTracksLiveAdapterRegistration(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	h := newTestCityHandler(t, state)
+
+	capability := getExternalCoordinationCapability(t, h, state)
+	if capability.Available || capability.Registered {
+		t.Fatalf("capability with an empty adapter registry = %+v, want available=false registered=false", capability)
+	}
+	if !capability.Configured {
+		t.Fatalf("capability.Configured = false with [external_coordination] enabled: %+v", capability)
+	}
+
+	registration := registerExternalCoordinationResponseTestAdapter(t, h, state)
+
+	capability = getExternalCoordinationCapability(t, h, state)
+	if !capability.Available || !capability.Registered || !capability.Configured {
+		t.Fatalf("capability after adapter registration = %+v, want available/registered/configured all true", capability)
+	}
+
+	if response := unregisterExternalCoordinationTestAdapter(t, h, state, registration); response.Code != http.StatusOK {
+		t.Fatalf("DELETE /extmsg/adapters status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
+
+	capability = getExternalCoordinationCapability(t, h, state)
+	if capability.Available || capability.Registered {
+		t.Fatalf("capability after adapter unregistration = %+v, want available=false registered=false", capability)
+	}
+}
+
+// TestExternalCoordinationCapabilityIgnoresUnrelatedAdapterRegistration keeps
+// the signifier scoped to the configured (provider, account_id). An unrelated
+// chat adapter registering cannot carry a coordination request, so it must not
+// flip the signifier green either.
+func TestExternalCoordinationCapabilityIgnoresUnrelatedAdapterRegistration(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	h := newTestCityHandler(t, state)
+
+	body := `{"provider":"discord","account_id":"acct-1","name":"discord","callback_url":"http://127.0.0.1:9/callback"}`
+	req := httptest.NewRequest(http.MethodPost, cityURL(state, "/extmsg/adapters"), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GC-Request", "coordination-capability-unrelated-register")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, req)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("POST /extmsg/adapters status = %d, want 201; body = %s", response.Code, response.Body.String())
+	}
+
+	capability := getExternalCoordinationCapability(t, h, state)
+	if capability.Available || capability.Registered {
+		t.Fatalf("capability with only an unrelated adapter registered = %+v, want available=false registered=false", capability)
+	}
+}
+
+// TestExternalCoordinationCapabilityReportsUnconfiguredCityAsUnavailable keeps
+// the two negative cases distinguishable: a city with no [external_coordination]
+// table at all is not merely unreachable, it is unconfigured.
+func TestExternalCoordinationCapabilityReportsUnconfiguredCityAsUnavailable(t *testing.T) {
+	state := newFakeState(t)
+	state.adapterReg = extmsg.NewAdapterRegistry()
+	h := newTestCityHandler(t, state)
+
+	capability := getExternalCoordinationCapability(t, h, state)
+	if capability.Available || capability.Registered || capability.Configured {
+		t.Fatalf("capability for an unconfigured city = %+v, want available/registered/configured all false", capability)
+	}
+}

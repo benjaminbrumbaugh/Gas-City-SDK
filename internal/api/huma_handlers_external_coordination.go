@@ -29,15 +29,20 @@ func (s *Server) humaExternalCoordinationService() (*externalcoordination.Servic
 
 // humaHandleExternalCoordinationCapability exposes capability separately from request
 // delivery so an orchestrator can discover it without creating traffic.
+//
+// This is the documented pre-flight check, so it answers from the same live
+// registry the dispatcher delivers through rather than from configuration
+// alone. Configuration is a static declaration; only a registered adapter can
+// actually carry a request.
 func (s *Server) humaHandleExternalCoordinationCapability(_ context.Context, _ *ExternalCoordinationCapabilityInput) (*ExternalCoordinationCapabilityOutput, error) {
 	cfg := s.state.Config()
 	if cfg == nil {
 		return nil, apierr.ServiceUnavailable.Msg("city configuration unavailable")
 	}
 	if cfg.ExternalCoordination == nil {
-		return &ExternalCoordinationCapabilityOutput{Body: config.ExternalCoordinationConfig{}.Capability()}, nil
+		return &ExternalCoordinationCapabilityOutput{Body: config.ExternalCoordinationConfig{}.Capability(false)}, nil
 	}
-	return &ExternalCoordinationCapabilityOutput{Body: cfg.ExternalCoordination.Capability()}, nil
+	return &ExternalCoordinationCapabilityOutput{Body: cfg.ExternalCoordination.Capability(s.externalCoordinationTransport() != nil)}, nil
 }
 
 // humaHandleExternalCoordinationRequest queues an external coordination request. It never attempts
@@ -157,18 +162,30 @@ func (s *Server) externalCoordinationAdapterKey() (extmsg.AdapterKey, bool) {
 	}, true
 }
 
-// externalCoordinationDispatcher builds a dispatcher over the adapter that is
-// registered right now, or reports that nothing can deliver at this moment.
-func (s *Server) externalCoordinationDispatcher() (*externalcoordination.Dispatcher, bool) {
+// externalCoordinationTransport returns the transport adapter registered right
+// now for the configured external coordination target, or nil when nothing can
+// carry a request at this moment. Both the dispatcher and the capability
+// signifier read it, so what the pre-flight check reports and what delivery
+// actually finds cannot drift apart.
+func (s *Server) externalCoordinationTransport() extmsg.TransportAdapter {
 	key, ok := s.externalCoordinationAdapterKey()
-	if !ok || s.state.CityBeadStore() == nil {
-		return nil, false
+	if !ok {
+		return nil
 	}
 	registry := s.state.AdapterRegistry()
 	if registry == nil {
+		return nil
+	}
+	return registry.Lookup(key)
+}
+
+// externalCoordinationDispatcher builds a dispatcher over the adapter that is
+// registered right now, or reports that nothing can deliver at this moment.
+func (s *Server) externalCoordinationDispatcher() (*externalcoordination.Dispatcher, bool) {
+	if s.state.CityBeadStore() == nil {
 		return nil, false
 	}
-	transport := registry.Lookup(key)
+	transport := s.externalCoordinationTransport()
 	if transport == nil {
 		return nil, false
 	}

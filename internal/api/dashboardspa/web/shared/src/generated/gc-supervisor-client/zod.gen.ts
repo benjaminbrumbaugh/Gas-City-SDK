@@ -631,10 +631,12 @@ export const zExternalCoordinationCapability = z.object({
     available: z.boolean(),
     capabilities: zExternalCoordinationCapabilities,
     config_revision: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    configured: z.boolean(),
     delivery: z.string(),
     instruction: z.string(),
     interrupt_policy: z.string(),
     logical_role: z.string(),
+    registered: z.boolean(),
     session_policy: z.string(),
     target: z.string(),
     triggers: z.array(z.string()).nullable()

@@ -2098,10 +2098,12 @@ type ExternalCoordinationCapability struct {
 	Available       bool                             `json:"available"`
 	Capabilities    ExternalCoordinationCapabilities `json:"capabilities"`
 	ConfigRevision  int64                            `json:"config_revision"`
+	Configured      bool                             `json:"configured"`
 	Delivery        string                           `json:"delivery"`
 	Instruction     string                           `json:"instruction"`
 	InterruptPolicy string                           `json:"interrupt_policy"`
 	LogicalRole     string                           `json:"logical_role"`
+	Registered      bool                             `json:"registered"`
 	SessionPolicy   string                           `json:"session_policy"`
 	Target          string                           `json:"target"`
 	Triggers        *[]string                        `json:"triggers"`

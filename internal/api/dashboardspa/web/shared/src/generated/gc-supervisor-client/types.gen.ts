@@ -1288,10 +1288,12 @@ export type ExternalCoordinationCapability = {
     available: boolean;
     capabilities: ExternalCoordinationCapabilities;
     config_revision: number;
+    configured: boolean;
     delivery: string;
     instruction: string;
     interrupt_policy: string;
     logical_role: string;
+    registered: boolean;
     session_policy: string;
     target: string;
     triggers: Array<string> | null;
