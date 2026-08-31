@@ -1521,8 +1521,8 @@ func runSupervisor(stdout, stderr io.Writer) int {
 		return 1
 	}
 	if dashboardPlane == nil {
-		// The typed run census is available even when the embedded dashboard is
-		// disabled. Keep its incremental plane unmounted in that posture.
+		// The typed run census remains available under the legacy full-disable
+		// environment gate, but its incremental plane stays unmounted.
 		dashboardPlane = newRunCensusPlane(apiMux, registry)
 	}
 	dashboardPlane.Start(ctx)

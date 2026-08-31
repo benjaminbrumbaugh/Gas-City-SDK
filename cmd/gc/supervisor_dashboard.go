@@ -109,10 +109,7 @@ func newRunCensusPlane(mux *api.SupervisorMux, resolver api.CityResolver) *dashb
 }
 
 func writeSupervisorDashboardStartup(stdout io.Writer, mounted, readOnly bool, bind string, port int, configuredURL string) {
-	if strings.TrimSpace(configuredURL) != "" {
-		if dashboardURL, err := validateDashboardURL(configuredURL); err == nil {
-			fmt.Fprintf(stdout, "Dashboard:  %s\n", dashboardURL) //nolint:errcheck
-		}
+	if writeConfiguredDashboardStartup(stdout, configuredURL) {
 		return
 	}
 	if !mounted {
@@ -123,6 +120,19 @@ func writeSupervisorDashboardStartup(stdout io.Writer, mounted, readOnly bool, b
 		dashTag = "  [read-only]"
 	}
 	fmt.Fprintf(stdout, "Dashboard:  %s/%s\n", dashboardLoopbackBaseURL(bind, port), dashTag) //nolint:errcheck
+}
+
+func writeConfiguredDashboardStartup(stdout io.Writer, configuredURL string) bool {
+	if strings.TrimSpace(configuredURL) == "" {
+		return false
+	}
+	dashboardURL, err := validateDashboardURL(configuredURL)
+	if err != nil {
+		fmt.Fprintf(stdout, "Dashboard:  unavailable (%v)\n", err) //nolint:errcheck // best-effort startup guidance
+		return true
+	}
+	fmt.Fprintf(stdout, "Dashboard:  %s\n", dashboardURL) //nolint:errcheck // best-effort startup guidance
+	return true
 }
 
 // dashboardDeps builds the plane's dependencies. Extracted so a regression test
@@ -198,10 +208,7 @@ func printDashboardStartHint(stdout io.Writer) {
 	if err != nil {
 		return
 	}
-	if strings.TrimSpace(cfg.Supervisor.DashboardURL) != "" {
-		if dashboardURL, err := validateDashboardURL(cfg.Supervisor.DashboardURL); err == nil {
-			fmt.Fprintf(stdout, "Dashboard:  %s\n", dashboardURL) //nolint:errcheck // best-effort stdout
-		}
+	if writeConfiguredDashboardStartup(stdout, cfg.Supervisor.DashboardURL) {
 		return
 	}
 	if !dashboardEnabled() {

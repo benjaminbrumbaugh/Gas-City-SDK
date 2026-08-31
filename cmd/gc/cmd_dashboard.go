@@ -21,7 +21,7 @@ func validateDashboardURL(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	u, err := url.Parse(trimmed)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
-		return "", fmt.Errorf("invalid [supervisor] dashboard_url %q: use an absolute http(s) URL with a host and no credentials", raw)
+		return "", fmt.Errorf("invalid dashboard URL %q: use an absolute http(s) URL with a host and no credentials", raw)
 	}
 	return trimmed, nil
 }
@@ -100,7 +100,14 @@ func bindDashboardFlags(cmd *cobra.Command, apiURL *string, noOpen *bool) {
 func runDashboardNotice(apiURLOverride string, noOpen bool, stdout, stderr io.Writer) error {
 	var apiURL string
 	configuredDashboard := false
-	if supCfg, err := supervisorLoadConfig(supervisor.ConfigPath()); err == nil && strings.TrimSpace(supCfg.Supervisor.DashboardURL) != "" {
+	if strings.TrimSpace(apiURLOverride) != "" {
+		var err error
+		apiURL, err = validateDashboardURL(apiURLOverride)
+		if err != nil {
+			return err
+		}
+		apiURL = strings.TrimRight(apiURL, "/")
+	} else if supCfg, err := supervisorLoadConfig(supervisor.ConfigPath()); err == nil && strings.TrimSpace(supCfg.Supervisor.DashboardURL) != "" {
 		apiURL, err = validateDashboardURL(supCfg.Supervisor.DashboardURL)
 		if err != nil {
 			return err

@@ -83,6 +83,21 @@ func TestRunDashboardNoticeUsesConfiguredDashboardURL(t *testing.T) {
 	}
 }
 
+func TestRunDashboardNoticeExplicitAPIOverridesConfiguredDashboardURL(t *testing.T) {
+	configureIsolatedRuntimeEnv(t)
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile(supervisor.ConfigPath(), []byte("[supervisor]\ndashboard_url = \"http://localhost:8400/\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opened := stubDashboardOpen(t)
+	if err := runDashboardNotice("http://127.0.0.1:9372", false, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if *opened != "http://127.0.0.1:9372" {
+		t.Fatalf("opened = %q, want explicit --api origin", *opened)
+	}
+}
+
 func TestRunDashboardNoticePrintsSupervisorURL(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
 	t.Chdir(t.TempDir())
