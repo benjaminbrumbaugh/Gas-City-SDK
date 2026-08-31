@@ -46,7 +46,7 @@ var dashboardHealthOKHook = dashboardHealthOK
 // mint dead links. The chain: supervisor alive → supervisor base URL →
 // city registered with the supervisor (the SPA routes by registry name,
 // not config city name) → name passes the BFF grammar → dashboard actually
-// mounted (GET /api/health) → deep link. A single result carrying a
+// mounted (GET / returns HTML) → deep link. A single result carrying a
 // graph.v2 workflow root links straight to that run's detail view; every
 // other successful shape (wisps, plain beads, batches, idempotent skips)
 // links to the runs list, since only graph.v2 roots render run detail.

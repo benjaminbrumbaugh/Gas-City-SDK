@@ -275,6 +275,7 @@ func TestPrintDashboardStartHintUsesDurablePolicy(t *testing.T) {
 	supervisorLoadConfig = func(string) (supervisor.Config, error) {
 		return supervisor.Config{Supervisor: supervisor.Section{DashboardURL: "http://localhost:8400/"}}, nil
 	}
+	t.Setenv("GC_SUPERVISOR_DASHBOARD", "0")
 	printDashboardStartHint(&out)
 	if got := out.String(); got != "Dashboard:  http://localhost:8400/\n" {
 		t.Fatalf("configured hint = %q", got)

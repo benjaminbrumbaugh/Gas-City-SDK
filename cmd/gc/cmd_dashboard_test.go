@@ -73,6 +73,14 @@ func TestRunDashboardNoticeUsesConfiguredDashboardURL(t *testing.T) {
 	if *opened != "http://localhost:8400/" {
 		t.Fatalf("opened = %q, want configured external dashboard", *opened)
 	}
+
+	stdout.Reset()
+	if err := runDashboardNotice("", true, &stdout, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); got != "The configured dashboard is at http://localhost:8400/\n" {
+		t.Fatalf("configured no-open notice = %q", got)
+	}
 }
 
 func TestRunDashboardNoticePrintsSupervisorURL(t *testing.T) {

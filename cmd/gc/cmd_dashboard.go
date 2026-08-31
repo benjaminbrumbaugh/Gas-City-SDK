@@ -65,11 +65,11 @@ func newDashboardServeCmd(stdout, stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Print where the web dashboard is served",
-		Long: `Report the URL where the GC dashboard is served.
+		Long: `Report the configured Gas City dashboard URL.
 
-The dashboard SPA is embedded in the gc binary and served same-origin by the
-supervisor; "gc dashboard serve" no longer starts a static server. It resolves
-and prints the supervisor URL (or tells you how to start the supervisor).`,
+When [supervisor] dashboard_url is set, this command prints that external front
+door. Otherwise it prints an embedded dashboard origin only when the resolved
+API origin actually serves the SPA. It never starts a static server.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			// "serve" is the legacy print-only entry point: never open a browser.
@@ -99,11 +99,13 @@ func bindDashboardFlags(cmd *cobra.Command, apiURL *string, noOpen *bool) {
 // start hint and never opens a (dead) URL.
 func runDashboardNotice(apiURLOverride string, noOpen bool, stdout, stderr io.Writer) error {
 	var apiURL string
+	configuredDashboard := false
 	if supCfg, err := supervisorLoadConfig(supervisor.ConfigPath()); err == nil && strings.TrimSpace(supCfg.Supervisor.DashboardURL) != "" {
 		apiURL, err = validateDashboardURL(supCfg.Supervisor.DashboardURL)
 		if err != nil {
 			return err
 		}
+		configuredDashboard = true
 	}
 
 	if apiURL == "" {
@@ -137,7 +139,11 @@ func runDashboardNotice(apiURLOverride string, noOpen bool, stdout, stderr io.Wr
 		return nil
 	}
 
-	fmt.Fprintf(stdout, "The dashboard is served by the gc supervisor at %s\n", apiURL) //nolint:errcheck // best-effort stdout
+	if configuredDashboard {
+		fmt.Fprintf(stdout, "The configured dashboard is at %s\n", apiURL) //nolint:errcheck // best-effort stdout
+		return nil
+	}
+	fmt.Fprintf(stdout, "The embedded dashboard is served by the gc supervisor at %s\n", apiURL) //nolint:errcheck // best-effort stdout
 	return nil
 }
 

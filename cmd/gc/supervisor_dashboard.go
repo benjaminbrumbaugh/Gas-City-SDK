@@ -194,9 +194,6 @@ func dashboardLoopbackBaseURL(bind string, port int) string {
 // config-load failure simply skips the hint (the foreground supervisor log and
 // "gc dashboard" still surface the URL), so it never affects start success.
 func printDashboardStartHint(stdout io.Writer) {
-	if !dashboardEnabled() {
-		return
-	}
 	cfg, err := supervisorLoadConfig(supervisor.ConfigPath())
 	if err != nil {
 		return
@@ -205,6 +202,9 @@ func printDashboardStartHint(stdout io.Writer) {
 		if dashboardURL, err := validateDashboardURL(cfg.Supervisor.DashboardURL); err == nil {
 			fmt.Fprintf(stdout, "Dashboard:  %s\n", dashboardURL) //nolint:errcheck // best-effort stdout
 		}
+		return
+	}
+	if !dashboardEnabled() {
 		return
 	}
 	if !cfg.Supervisor.EmbeddedDashboardEnabled() {
