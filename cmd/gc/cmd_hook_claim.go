@@ -39,6 +39,9 @@ const (
 const (
 	hookClaimReleaseReasonUndelivered = "result_undelivered"
 	hookClaimReleaseReasonStraddled   = "claim_window_straddled"
+	// hookClaimReleaseReasonSplitMolecule marks a root claim given back because a
+	// step of the same molecule is in_progress under a different session.
+	hookClaimReleaseReasonSplitMolecule = "molecule_claim_split"
 )
 
 var hookClaimMutationTimeout = 10 * time.Second
@@ -181,7 +184,11 @@ type hookClaimOps struct {
 	Claim              hookClaimFunc
 	ListContinuation   hookListContinuationFunc
 	AssignContinuation hookAssignContinuationFunc
-	DrainAck           hookDrainAckFunc
+	// ListMoleculeSteps lists the in_progress steps of the molecule rooted at a
+	// bead, used to refuse a root claim that would split ownership of one
+	// molecule across two sessions (gc-hqz7e). A nil func disables the check.
+	ListMoleculeSteps hookListMoleculeStepsFunc
+	DrainAck          hookDrainAckFunc
 	// EmitClaimRejected publishes a bead.claim_rejected event when a claim is
 	// lost to a different live claimant (ADR-0009). Best-effort.
 	EmitClaimRejected hookEmitClaimRejectedFunc
@@ -237,6 +244,7 @@ type (
 	hookClaimFunc              func(context.Context, string, []string, string, string) (beads.Bead, bool, error)
 	hookListContinuationFunc   func(context.Context, string, []string, string, string) ([]beads.Bead, error)
 	hookAssignContinuationFunc func(context.Context, string, []string, string, string) error
+	hookListMoleculeStepsFunc  func(context.Context, string, []string, string) ([]beads.Bead, error)
 	hookDrainAckFunc           func(io.Writer) error
 	hookEmitClaimRejectedFunc  func(beadID, existingClaimant, attemptedClaimant string)
 	hookResolveWorkBranchFunc  func(dir string) string
@@ -379,6 +387,9 @@ func (ops *hookClaimOps) applyDefaults() {
 	}
 	if ops.AssignContinuation == nil {
 		ops.AssignContinuation = hookAssignContinuationWithBdStore
+	}
+	if ops.ListMoleculeSteps == nil {
+		ops.ListMoleculeSteps = hookListMoleculeStepsWithBdStore
 	}
 	if ops.DrainAck == nil {
 		ops.DrainAck = hookRuntimeDrainAck
@@ -797,6 +808,29 @@ func writeHookClaimWorkResultForBead(result hookClaimJSONResult, bead beads.Bead
 			bead.ID, ops.claimWindowOrDefault(), ops.invocationAge().Round(time.Millisecond))
 		return unwindUndeliveredHookClaim(hookClaimReleaseReasonStraddled, cause, bead, opts, ops, dir, stderr)
 	}
+	// Refuse BEFORE any stamping. A root claim that is about to be given back
+	// should not first advertise itself as this session's execution identity,
+	// and the checks below are the last point where nothing has been written.
+	if conflicts, err := hookMoleculeRootStepConflicts(bead, opts, ops, dir); err != nil {
+		// Fail OPEN, but never silently. A probe failure means we know nothing
+		// about the molecule, so there is no conflicting step to name and no
+		// refusal that could be acted on — and failing closed here would turn
+		// any bd hiccup into "no molecule root can be claimed", a
+		// self-inflicted outage on the claim hot path. The durable net for what
+		// this misses is the patrol detection query, which runs against the
+		// whole store rather than one claim.
+		fmt.Fprintf(stderr, "gc hook --claim: could not check molecule step ownership for %s: %v (claim admitted; patrol detection is the backstop)\n", bead.ID, err) //nolint:errcheck
+	} else if len(conflicts) > 0 {
+		cause := hookMoleculeSplitClaimCause(bead.ID, conflicts)
+		if !minted {
+			// Adopted, not won: this session already held the root, so there is
+			// no claim of ours to give back. Report and stop rather than hand
+			// the caller work that would collide.
+			fmt.Fprintf(stderr, "gc hook --claim: %s\n", cause) //nolint:errcheck
+			return 1
+		}
+		return unwindUndeliveredHookClaim(hookClaimReleaseReasonSplitMolecule, cause, bead, opts, ops, dir, stderr)
+	}
 	result.RootBeadID = strings.TrimSpace(bead.Metadata[beadmeta.RootBeadIDMetadataKey])
 	result.ContinuationGroup = strings.TrimSpace(bead.Metadata[beadmeta.ContinuationGroupMetadataKey])
 	durable, stamped := stampHookClaimIdentity(bead, opts, ops, dir, stderr)
@@ -1027,6 +1061,154 @@ func preassignHookContinuationGroup(bead beads.Bead, opts hookClaimOptions, ops 
 		assigned = append(assigned, sibling.ID)
 	}
 	return assigned, nil
+}
+
+// hookMoleculeRootStepConflicts lists the in_progress steps of the molecule
+// rooted at bead that are held by a session OTHER than the claimant.
+//
+// A molecule root and its child steps could be owned by two different live
+// sessions at the same time, and nothing detected or prevented it (gc-hqz7e).
+// Observed live on 2026-08-31: slit claimed step gcd-tgu at 19:07:28Z, the
+// supervisor restarted at 19:39:49Z, and furiosa claimed the ROOT gcd-8oq at
+// 19:41:16Z without slit's step claim ever being revoked. Both sessions then
+// ran unittest processes against the same worktree and wrote tests into the
+// same file — confirmed by `lsof +D` showing codex children of two different
+// panes, not by inference.
+//
+// The claim lease did not help and was never going to: gcd-tgu's claim sat
+// untouched for 61 minutes. Expiry is not a detection signal if nothing acts
+// on it.
+//
+// A step counts as a conflict only when it names an owner that is not this
+// claimant. An unowned step is what the continuation preassign path is for; a
+// step this session already holds is the ordinary case of a session working
+// its own molecule.
+func hookMoleculeRootStepConflicts(bead beads.Bead, opts hookClaimOptions, ops hookClaimOps, dir string) ([]beads.Bead, error) {
+	if ops.ListMoleculeSteps == nil {
+		return nil, nil
+	}
+	rootID := strings.TrimSpace(bead.ID)
+	if rootID == "" {
+		return nil, nil
+	}
+	// Only a root is checked. A bead carrying gc.root_bead_id is itself a step,
+	// and a step's siblings are not its to reconcile.
+	if strings.TrimSpace(bead.Metadata[beadmeta.RootBeadIDMetadataKey]) != "" {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), hookClaimMutationTimeout)
+	defer cancel()
+	steps, err := ops.ListMoleculeSteps(ctx, dir, opts.Env, rootID)
+	if err != nil {
+		return nil, err
+	}
+	identities := hookMoleculeClaimantIdentities(opts)
+	var conflicts []beads.Bead
+	for _, step := range steps {
+		if strings.TrimSpace(step.ID) == "" || step.ID == rootID {
+			continue
+		}
+		if hookMoleculeStepOwnedBy(step, identities) {
+			continue
+		}
+		if hookMoleculeStepOwner(step) == "" {
+			// Unowned: the continuation preassign path handles these.
+			continue
+		}
+		conflicts = append(conflicts, step)
+	}
+	return conflicts, nil
+}
+
+// hookMoleculeClaimantIdentities returns every spelling of "this claimant" a
+// step could have recorded. All of them are needed: gc.session_id is the
+// durable handle a step reliably carries (verified on the incident's own
+// ledger, where gcd-drx and gcd-zdd each recorded a session id while
+// gc.work_branch recorded only the base branch), Assignee is what a pool step
+// shows before the session back-reference is stamped, and IdentityCandidates
+// carries the alias/agent spellings the rest of this file already matches on.
+//
+// Over-inclusive on purpose. A missed spelling here reads as "held by another
+// session" and refuses a claim the session was entitled to, which stalls a
+// molecule; the conflicting-owner list in the refusal is what makes such a
+// mistake visible rather than mysterious.
+func hookMoleculeClaimantIdentities(opts hookClaimOptions) []string {
+	identities := make([]string, 0, len(opts.IdentityCandidates)+2)
+	add := func(candidate string) {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "" {
+			return
+		}
+		for _, existing := range identities {
+			if existing == trimmed {
+				return
+			}
+		}
+		identities = append(identities, trimmed)
+	}
+	add(opts.SessionID)
+	add(opts.Assignee)
+	for _, candidate := range opts.IdentityCandidates {
+		add(candidate)
+	}
+	return identities
+}
+
+// hookMoleculeStepOwner returns the step's owning identity, preferring the
+// durable session back-reference over the assignee.
+func hookMoleculeStepOwner(step beads.Bead) string {
+	for _, key := range []string{beadmeta.SessionIDMetadataKey, beadmeta.SessionNameMetadataKey} {
+		if v := strings.TrimSpace(step.Metadata[key]); v != "" {
+			return v
+		}
+	}
+	return strings.TrimSpace(step.Assignee)
+}
+
+// hookMoleculeStepOwnedBy reports whether step is held by this claimant under
+// any identity spelling. It checks the assignee and both session keys rather
+// than only hookMoleculeStepOwner's preferred value, because a step stamped
+// with a session id and assigned to a pool label matches on either.
+func hookMoleculeStepOwnedBy(step beads.Bead, identities []string) bool {
+	if hookClaimHasIdentity(step.Assignee, identities) {
+		return true
+	}
+	for _, key := range []string{beadmeta.SessionIDMetadataKey, beadmeta.SessionNameMetadataKey} {
+		if hookClaimHasIdentity(step.Metadata[key], identities) {
+			return true
+		}
+	}
+	return false
+}
+
+// hookMoleculeSplitClaimCause renders the refusal, naming every conflicting
+// step and the session holding it. The acceptance criterion on gc-hqz7e is
+// explicit that a refusal must name them: the incident was diagnosable only by
+// running lsof against a worktree, which is not something a patrol can do.
+func hookMoleculeSplitClaimCause(rootID string, conflicts []beads.Bead) string {
+	parts := make([]string, 0, len(conflicts))
+	for _, step := range conflicts {
+		parts = append(parts, fmt.Sprintf("%s held by %s", strings.TrimSpace(step.ID), hookMoleculeStepOwner(step)))
+	}
+	return fmt.Sprintf("molecule root %s has %d in_progress step(s) owned by another session (%s); "+
+		"refusing the root claim rather than running two sessions against one molecule. "+
+		"Resolve by releasing the stale step claim (bd unclaim <step>) or by draining the session that holds it",
+		rootID, len(conflicts), strings.Join(parts, "; "))
+}
+
+func hookListMoleculeStepsWithBdStore(_ context.Context, dir string, env []string, rootID string) ([]beads.Bead, error) {
+	store := hookClaimBdStore(dir, env, "")
+	// TierBoth is required, not incidental: formula steps are infra-tier beads
+	// and a default-tier list silently returns none of them, which is the same
+	// filtering that hid patrol wisps in gc-yrv. A conflict probe that cannot
+	// see steps would report "no conflict" for every molecule.
+	return store.List(beads.ListQuery{
+		Status: "in_progress",
+		Metadata: map[string]string{
+			beadmeta.RootBeadIDMetadataKey: rootID,
+		},
+		TierMode: beads.TierBoth,
+	})
 }
 
 func hookClaimWithBdStore(ctx context.Context, dir string, env []string, beadID, assignee string) (beads.Bead, bool, error) {
