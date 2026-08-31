@@ -87,10 +87,10 @@ func bindDashboardFlags(cmd *cobra.Command, apiURL *string, noOpen *bool) {
 
 // runDashboardNotice resolves where the supervisor serves the dashboard SPA,
 // opens it in the user's browser, and prints the URL. It is purely
-// informational and always exits 0: city/config resolution only feeds the
-// standalone-controller fallback, so a failure there is non-fatal — the command
-// falls back to live supervisor discovery and still prints a useful answer (the
-// supervisor URL, or how to start it).
+// informational and exits 0 when discovery or availability fails; malformed
+// explicit or configured URLs return an actionable error before any browser is
+// opened. City/config resolution only feeds the standalone-controller fallback,
+// so a failure there remains non-fatal.
 //
 // Browser-open is best-effort and only happens on the served path: when noOpen
 // is false and the URL actually resolves, it launches the browser via
