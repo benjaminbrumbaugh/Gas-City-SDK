@@ -1366,17 +1366,76 @@ func hookClaimIdentityPatch(bead beads.Bead, opts hookClaimOptions, ops hookClai
 	}
 	if sessionID := hookClaimSessionID(opts.Env); sessionID != "" &&
 		!beadmeta.IsControlKind(strings.TrimSpace(bead.Metadata[beadmeta.KindMetadataKey])) {
-		if strings.TrimSpace(bead.Metadata[beadmeta.SessionIDMetadataKey]) != sessionID {
-			patch[beadmeta.SessionIDMetadataKey] = sessionID
-		}
-		if sessionName := hookClaimSessionName(opts.Env); sessionName != "" &&
-			strings.TrimSpace(bead.Metadata[beadmeta.SessionNameMetadataKey]) != sessionName {
-			patch[beadmeta.SessionNameMetadataKey] = sessionName
+		for key, value := range hookClaimSessionIdentityPatch(bead, sessionID, hookClaimSessionName(opts.Env)) {
+			patch[key] = value
 		}
 	}
 	if strings.TrimSpace(bead.Metadata[beadmeta.ClaimedAtMetadataKey]) == "" {
 		patch[beadmeta.ClaimedAtMetadataKey] = time.Now().UTC().Format(time.RFC3339)
 	}
+	return patch
+}
+
+// hookClaimSessionIdentityPatch returns the metadata entries that make a bead's
+// session identity name THIS claimant and nobody else.
+//
+// The session keys are ONE fact recorded in several places, and treating them
+// as independent fields is what produced gc-nb5h9. The previous code gated each
+// key on its own:
+//
+//	if bead[session_id] != sessionID        { patch[session_id] = sessionID }
+//	if sessionName != "" && bead[...] != .. { patch[session_name] = sessionName }
+//
+// so whenever GC_SESSION_NAME did not resolve, the id was stamped with the new
+// owner and the name was left holding the PREVIOUS owner's value. That is
+// exactly the state the operator found and reasonably read as corruption:
+// gcd-8oq carrying session_id furiosa and session_name slit. It was not
+// corruption; it was two writers and no unit of update.
+//
+// It matters well beyond tidiness. Liveness and orphan checks key off one field
+// or the other, so a witness resolving owners by gc.session_name and a
+// controller resolving by gc.session_id disagree about who holds a bead —
+// precisely the condition under which one of them recovers work from a LIVE
+// agent, or fails to recover it from a dead one.
+//
+// TAKEOVER vs RE-STAMP. When the bead already names this session, a tick with
+// GC_SESSION_NAME missing must not wipe a name that is correct — so only a
+// missing-or-differing name is filled in. When the bead names someone else (or
+// nobody), ownership is CHANGING, and every key moves together even if that
+// means clearing the name to empty. Clearing is sanctioned by this bead's
+// acceptance ("update the session metadata to the new owner, or clear it") and
+// is the safer half of the trade: an empty name is read as "unknown", while a
+// stale one is read as a specific live session that does not hold this work.
+func hookClaimSessionIdentityPatch(bead beads.Bead, sessionID, sessionName string) map[string]string {
+	patch := map[string]string{}
+	current := strings.TrimSpace(bead.Metadata[beadmeta.SessionIDMetadataKey])
+	takeover := current != sessionID
+
+	if takeover {
+		patch[beadmeta.SessionIDMetadataKey] = sessionID
+	}
+	if name := strings.TrimSpace(bead.Metadata[beadmeta.SessionNameMetadataKey]); name != sessionName {
+		// On a re-stamp with no name to offer, leave the existing one alone: it
+		// belongs to this same session and is simply not in this environment.
+		if takeover || sessionName != "" {
+			patch[beadmeta.SessionNameMetadataKey] = sessionName
+		}
+	}
+
+	// The camelCase variants are a READ FALLBACK, not decoration:
+	// routingdecision/workstate.go resolves session identity as
+	// firstWorkStateValue(snake, camel). A stale camel value is therefore not
+	// inert — it becomes the answer the moment the snake key is cleared, which
+	// is a thing this function now deliberately does. This does not start
+	// populating them, which is not this bead's job; it refuses to leave one
+	// contradicting the owner just written.
+	clearStaleCamel := func(key, want string) {
+		if cur := strings.TrimSpace(bead.Metadata[key]); cur != "" && cur != want {
+			patch[key] = ""
+		}
+	}
+	clearStaleCamel(beadmeta.SessionIDCamelMetadataKey, sessionID)
+	clearStaleCamel(beadmeta.SessionNameCamelMetadataKey, sessionName)
 	return patch
 }
 
