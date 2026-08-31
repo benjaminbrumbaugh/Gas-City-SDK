@@ -260,6 +260,28 @@ func notCachedRemediation(source, version string) string {
 	return fmt.Sprintf("pinned at superseded canonical %s; run \"gc doctor --fix\" to re-pin to the current canonical %s (offline), or \"gc import install\" to fetch this exact commit", version, current)
 }
 
+// noLockEntryRemediation returns the remediation clause for an import that has
+// no packs.lock entry at all. This is NOT the same situation as a locked commit
+// whose cache is missing, and it does not have the same repair.
+//
+// "gc import install" is packman.InstallLocked: it iterates the entries already
+// in packs.lock and restores each one into the shared cache. With no lock file,
+// or no entry for this source, there is nothing for it to iterate — it exits 0
+// reporting the imports it did install and writes no new entry, leaving the
+// city in exactly the state that produced this error. An operator sent there
+// concludes the tool is broken (gc-w4bpj). Name a command that can actually
+// create the entry instead.
+//
+// The superseded-canonical case keeps its own clause: "gc doctor --fix" re-pins
+// offline and is still the right first move, because it resolves the pin
+// without needing the network at all.
+func noLockEntryRemediation(source, version string) string {
+	if current, ok := SupersededBundledPinTarget(source, version); ok {
+		return fmt.Sprintf("pinned at superseded canonical %s and not recorded in packs.lock; run \"gc doctor --fix\" to re-pin to the current canonical %s (offline), then \"gc import install\"", version, current)
+	}
+	return `no packs.lock entry records this source, so "gc import install" has nothing to restore for it and will exit 0 without creating one; run "gc import add" (new import) or "gc import upgrade" (existing import) to resolve a commit and write the entry, then "gc import install"`
+}
+
 // IsBundledSourceAtCanonicalPin reports whether commit is the canonical
 // pinned commit the running binary pre-seeds for a bundled source. Only
 // the canonical pin is served from embedded content; pinning a bundled
@@ -331,7 +353,7 @@ func resolveInstalledRemoteImport(source, declaredVersion, cityRoot string, nonB
 				}
 				return cacheDir, nil
 			}
-			return "", fmt.Errorf("remote import %s is not installed (missing packs.lock); %s", source, notCachedRemediation(source, declaredVersion))
+			return "", fmt.Errorf("remote import %s is not installed (missing packs.lock); %s", source, noLockEntryRemediation(source, declaredVersion))
 		}
 		return "", fmt.Errorf("reading packs.lock: %w", err)
 	}
@@ -348,7 +370,7 @@ func resolveInstalledRemoteImport(source, declaredVersion, cityRoot string, nonB
 			}
 			return cacheDir, nil
 		}
-		return "", fmt.Errorf("remote import %s is not installed (missing packs.lock entry); %s", source, notCachedRemediation(source, declaredVersion))
+		return "", fmt.Errorf("remote import %s is not installed (missing packs.lock entry); %s", source, noLockEntryRemediation(source, declaredVersion))
 	}
 
 	cacheRoot, err := GlobalRepoCacheRoot()
@@ -499,7 +521,14 @@ func validateInstalledRemoteCache(source, cacheDir, commit string) error {
 		// path, so validate it with the ordinary remote-cache contract below.
 	}
 	if gitutil.MissingCheckoutMarker(gitInfo, gitStatErr) {
-		return fmt.Errorf("remote import %s is locked but not cached at %s; %s", source, cacheDir, notCachedRemediation(source, "sha:"+commit))
+		// The commit is named deliberately. Without it this message cannot be
+		// read after the fact: packs.lock may have moved on by the time anyone
+		// looks, and "gc import install" then correctly installs whatever the
+		// lock says NOW while the logged path stays absent — which reads as a
+		// broken install rather than as a stale line about a different pin.
+		// That misreading is what happened in gc-w4bpj.
+		return fmt.Errorf("remote import %s is locked at %s but not cached at %s; %s",
+			source, commit, cacheDir, notCachedRemediation(source, "sha:"+commit))
 	}
 	if gitStatErr != nil {
 		return fmt.Errorf("checking cached import %s: %w", source, gitStatErr)

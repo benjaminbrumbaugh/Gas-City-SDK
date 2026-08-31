@@ -114,11 +114,54 @@ func EnsureRepoInCache(cityRoot, source, commit string) (string, error) {
 		return "", fmt.Errorf("creating repo cache root: %w", err)
 	}
 	return config.WithRepoCacheWriteLock(root, func() (string, error) {
+		// Assert the content-addressing invariant before any branch below can
+		// write, check out, or RemoveAll a directory. It has to sit here rather
+		// than deeper in the recovery paths: those treat an error as "this cache
+		// is unusable" and delete the directory, so a guard placed inside them
+		// would turn a refusal to touch the wrong directory into removing it.
+		if err := assertCanonicalRepoCachePath("write", source, commit, cachePath); err != nil {
+			return "", err
+		}
 		if config.IsBundledSourceAtCanonicalPin(source, commit) {
 			return ensureBundledRepoInCacheLocked(source, commit, cachePath)
 		}
 		return ensureRepoInCacheLocked(cityRoot, source, commit, parsed, cachePath)
 	})
+}
+
+// assertCanonicalRepoCachePath verifies cachePath is the directory that
+// (source, commit) hashes to. It is the single expression of the repo cache's
+// content-addressing invariant, and every write to the cache passes it.
+//
+// The cache is content-addressed: a directory name is a sha256 of clone URL +
+// commit (config.RepoCacheKey), and every reader — the config loader included —
+// derives the path it reads from the commit it wants. A directory name is
+// therefore a promise about which commit the directory holds. Checking a
+// different commit out inside one does not "update" a cache entry; it makes one
+// directory answer to a name that means another commit, and every city pinned
+// to that name is served the wrong tree until someone puts it back.
+//
+// That is not hypothetical. In gc-w4bpj the directory keyed for 249e7b479 was
+// checked out to 0060ab901 for ~55 seconds while packs.lock named 0060ab901,
+// whose own directory did not exist yet. For the width of that window every
+// config load in the city failed, so no order could execute and no named
+// session could be resolved or started.
+//
+// gc's own paths all derive cachePath from RepoCachePath and so cannot violate
+// this. The point of stating it as an assertion is that "a commit-keyed
+// directory is never checked out to a different commit" then holds by
+// construction at the one gate all cache writes pass through, instead of
+// resting on each caller having computed its path correctly.
+func assertCanonicalRepoCachePath(op, source, commit, cachePath string) error {
+	expected, err := RepoCachePath(source, commit)
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(cachePath) != filepath.Clean(expected) {
+		return fmt.Errorf("refusing to %s repo cache for %s at non-canonical path %q, expected %q",
+			op, commit, cachePath, expected)
+	}
+	return nil
 }
 
 func ensureBundledRepoInCacheLocked(source, commit, cachePath string) (string, error) {
@@ -205,12 +248,8 @@ func ensureRepoInCacheLocked(cityRoot, source, commit string, parsed remoteSourc
 }
 
 func materializeBundledRepoInCacheLocked(source, commit, cachePath string) error {
-	expected, err := RepoCachePath(source, commit)
-	if err != nil {
+	if err := assertCanonicalRepoCachePath("materialize bundled", source, commit, cachePath); err != nil {
 		return err
-	}
-	if cachePath != expected {
-		return fmt.Errorf("refusing to materialize bundled repo cache at non-canonical path %q, expected %q", cachePath, expected)
 	}
 	repository, ok := builtinpacks.RepositoryForSource(source)
 	if !ok {

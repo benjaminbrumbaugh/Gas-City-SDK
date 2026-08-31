@@ -32,8 +32,16 @@ version = "^1.4"
 	if code == 0 {
 		t.Fatal("expected failure for missing remote import")
 	}
-	if got := stderr.String(); !bytes.Contains([]byte(got), []byte(`run "gc import install"`)) {
+	// This city has no packs.lock, so `gc import install` alone cannot repair
+	// it — it restores entries the lock already has. The remediation must name
+	// a command that can create one (gc-w4bpj).
+	got := stderr.String()
+	if !bytes.Contains([]byte(got), []byte("gc import install")) {
 		t.Fatalf("stderr = %q, want install remediation", got)
+	}
+	if !bytes.Contains([]byte(got), []byte("gc import add")) &&
+		!bytes.Contains([]byte(got), []byte("gc import upgrade")) {
+		t.Fatalf("stderr = %q, want a command that can create the missing lock entry", got)
 	}
 }
 

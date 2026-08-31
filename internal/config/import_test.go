@@ -1108,7 +1108,7 @@ fetched = "2026-04-10T00:00:00Z"
 	if err == nil {
 		t.Fatal("expected missing shared cache error")
 	}
-	if !strings.Contains(err.Error(), "locked but not cached") || !strings.Contains(err.Error(), `run "gc import install"`) {
+	if !strings.Contains(err.Error(), "but not cached") || !strings.Contains(err.Error(), `run "gc import install"`) {
 		t.Fatalf("error = %v, want locked-but-not-cached install hint", err)
 	}
 }
@@ -1211,8 +1211,14 @@ version = "^1.2"
 	if err == nil {
 		t.Fatal("expected missing lockfile error")
 	}
-	if !strings.Contains(err.Error(), "missing packs.lock") || !strings.Contains(err.Error(), `run "gc import install"`) {
-		t.Fatalf("error = %v, want missing packs.lock install hint", err)
+	// A missing packs.lock is not repaired by `gc import install` — it is
+	// InstallLocked, and it has no entry to restore. The hint must name a
+	// command that can write one (gc-w4bpj).
+	if !strings.Contains(err.Error(), "missing packs.lock") || !strings.Contains(err.Error(), "gc import install") {
+		t.Fatalf("error = %v, want missing packs.lock hint", err)
+	}
+	if !strings.Contains(err.Error(), "gc import add") && !strings.Contains(err.Error(), "gc import upgrade") {
+		t.Fatalf("error = %v, want a command that can create the lock entry", err)
 	}
 }
 

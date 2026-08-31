@@ -273,7 +273,7 @@ content_hash = "sha256:deadbeef"
 	if err == nil {
 		t.Fatal("expected non-bundled synthetic cache to be rejected")
 	}
-	if !strings.Contains(err.Error(), "locked but not cached") {
+	if !strings.Contains(err.Error(), "but not cached") {
 		t.Fatalf("error = %v, want ordinary missing-cache error", err)
 	}
 }
@@ -461,8 +461,14 @@ func TestValidateInstalledRemoteCacheRequiresGitForNonCanonicalBundledPin(t *tes
 	if err == nil {
 		t.Fatal("expected non-canonical bundled pin without cache to fail")
 	}
-	if !strings.Contains(err.Error(), "locked but not cached") || !strings.Contains(err.Error(), `run "gc import install"`) {
+	if !strings.Contains(err.Error(), "but not cached") || !strings.Contains(err.Error(), `run "gc import install"`) {
 		t.Fatalf("error = %v, want regular not-cached error", err)
+	}
+	// The commit must be named: a locked-but-not-cached line is unreadable
+	// after packs.lock moves on if it identifies the pin only by cache path
+	// (gc-w4bpj).
+	if !strings.Contains(err.Error(), commit) {
+		t.Fatalf("error = %v, want the wanted commit named", err)
 	}
 	if strings.Contains(err.Error(), "synthetic") {
 		t.Fatalf("error = %v, must not mention the synthetic cache for a non-canonical pin", err)
@@ -613,12 +619,18 @@ func TestSupersededBundledPinErrorsRecommendDoctorFix(t *testing.T) {
 	})
 
 	// A deliberate user pin at a commit that was never canonical keeps the
-	// plain install remediation — the doctor re-pin would not honor it.
+	// plain remediation — the doctor re-pin would not honor it. "Plain" here
+	// means "no doctor --fix clause", not "gc import install alone": this is a
+	// missing-packs.lock case, and install cannot create a lock entry, so the
+	// message names the commands that can (gc-w4bpj).
 	t.Run("non-superseded pin stays plain", func(t *testing.T) {
 		_, cityDir := setupBundledImportTest(t)
 		_, err := resolveInstalledRemoteImport(source, "sha:0123456789abcdef0123456789abcdef01234567", cityDir, false)
-		if err == nil || !strings.Contains(err.Error(), `run "gc import install"`) {
-			t.Fatalf("err = %v, want the plain gc import install remediation", err)
+		if err == nil || !strings.Contains(err.Error(), "gc import install") {
+			t.Fatalf("err = %v, want the plain remediation", err)
+		}
+		if !strings.Contains(err.Error(), "gc import add") && !strings.Contains(err.Error(), "gc import upgrade") {
+			t.Fatalf("err = %v, want a command that can actually create the missing lock entry", err)
 		}
 		if strings.Contains(err.Error(), "gc doctor --fix") {
 			t.Fatalf("err = %v, must not recommend the doctor re-pin for a deliberate non-canonical pin", err)
