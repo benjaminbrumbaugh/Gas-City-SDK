@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gastownhall/gascity/internal/supervisor"
 )
 
 // stubDashboardOpen replaces the browser-open hook with a recorder for the
@@ -16,12 +18,61 @@ func stubDashboardOpen(t *testing.T) *string {
 	t.Helper()
 	var opened string
 	old := openDashboardURLHook
+	oldHealth := dashboardHealthOKHook
 	openDashboardURLHook = func(rawURL string) error {
 		opened = rawURL
 		return nil
 	}
-	t.Cleanup(func() { openDashboardURLHook = old })
+	dashboardHealthOKHook = func(string) bool { return true }
+	t.Cleanup(func() {
+		openDashboardURLHook = old
+		dashboardHealthOKHook = oldHealth
+	})
 	return &opened
+}
+
+func stubDashboardHealth(t *testing.T) {
+	t.Helper()
+	old := dashboardHealthOKHook
+	dashboardHealthOKHook = func(string) bool { return true }
+	t.Cleanup(func() { dashboardHealthOKHook = old })
+}
+
+func TestValidateDashboardURL(t *testing.T) {
+	for _, tc := range []struct {
+		in, want string
+		ok       bool
+	}{
+		{" https://dash.example.test/front/ ", "https://dash.example.test/front/", true},
+		{"http://127.0.0.1:8400/", "http://127.0.0.1:8400/", true},
+		{"javascript:alert(1)", "", false},
+		{"https:///missing-host", "", false},
+		{"https://user:pass@dash.example.test/", "", false},
+	} {
+		got, err := validateDashboardURL(tc.in)
+		if tc.ok && (err != nil || got != tc.want) {
+			t.Errorf("validateDashboardURL(%q) = %q, %v; want %q, nil", tc.in, got, err, tc.want)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("validateDashboardURL(%q) unexpectedly accepted %q", tc.in, got)
+		}
+	}
+}
+
+func TestRunDashboardNoticeUsesConfiguredDashboardURL(t *testing.T) {
+	configureIsolatedRuntimeEnv(t)
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile(supervisor.ConfigPath(), []byte("[supervisor]\nembedded_dashboard = false\ndashboard_url = \"http://localhost:8400/\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opened := stubDashboardOpen(t)
+	var stdout bytes.Buffer
+	if err := runDashboardNotice("", false, &stdout, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if *opened != "http://localhost:8400/" {
+		t.Fatalf("opened = %q, want configured external dashboard", *opened)
+	}
 }
 
 func TestRunDashboardNoticePrintsSupervisorURL(t *testing.T) {
@@ -130,6 +181,7 @@ func TestRunDashboardNoticeNoOpenSkipsBrowser(t *testing.T) {
 func TestRunDashboardNoticeOpenFailureFallsBackToPrint(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
 	t.Chdir(t.TempDir())
+	stubDashboardHealth(t)
 
 	old := openDashboardURLHook
 	openDashboardURLHook = func(string) error { return io.ErrClosedPipe }
@@ -165,6 +217,7 @@ func TestRunDashboardNoticeOpenFailureFallsBackToPrint(t *testing.T) {
 func TestRunDashboardNoticeUsesAPIOverride(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
 	t.Chdir(t.TempDir())
+	stubDashboardHealth(t)
 
 	oldAlive := supervisorAliveHook
 	oldCityFlag := cityFlag
@@ -215,8 +268,8 @@ func TestRunDashboardNoticeHintsStartWhenUnresolvable(t *testing.T) {
 	if err := runDashboardNotice("", true, &stdout, io.Discard); err != nil {
 		t.Fatalf("runDashboardNotice() error = %v, want nil (informational command exits 0)", err)
 	}
-	if !strings.Contains(stdout.String(), "gc supervisor start") {
-		t.Fatalf("notice = %q, want it to include the start hint %q", stdout.String(), "gc supervisor start")
+	if !strings.Contains(stdout.String(), "dashboard_url") {
+		t.Fatalf("notice = %q, want it to name dashboard_url configuration", stdout.String())
 	}
 }
 
@@ -227,6 +280,7 @@ func TestRunDashboardNoticeHintsStartWhenUnresolvable(t *testing.T) {
 // with "city.toml: no such file" instead of reporting where the SPA is served.
 func TestRunDashboardNoticeResilientToBadCityConfig(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
+	stubDashboardHealth(t)
 
 	badCity := filepath.Join(t.TempDir(), "broken")
 	if err := os.MkdirAll(badCity, 0o755); err != nil {
@@ -266,6 +320,7 @@ func TestRunDashboardNoticeResilientToBadCityConfig(t *testing.T) {
 // machine-wide supervisor is running.
 func TestRunDashboardNoticeUsesStandaloneControllerAPI(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
+	stubDashboardHealth(t)
 
 	cityDir := filepath.Join(t.TempDir(), "alpha")
 	if err := os.MkdirAll(cityDir, 0o755); err != nil {

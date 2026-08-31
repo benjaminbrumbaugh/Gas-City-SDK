@@ -65,16 +65,20 @@ func dashboardEnabled() bool {
 // the host-side samplers read the supervisor's /v0 API back over loopback, so
 // the plane must know where to reach it. Operator identity is read from env with
 // neutral defaults applied inside the plane (ZERO hardcoded roles).
-func attachDashboard(mux *api.SupervisorMux, resolver api.CityResolver, readOnly bool, bind string, port int) (*dashboardbff.Plane, error) {
+func attachDashboard(mux *api.SupervisorMux, resolver api.CityResolver, readOnly bool, bind string, port int, embeddedUI bool) (*dashboardbff.Plane, bool, error) {
 	if !dashboardEnabled() {
-		return nil, nil
+		return nil, false, nil
+	}
+	plane := dashboardbff.New(dashboardDeps(resolver, readOnly, bind, port, mux.LoopbackTransport()))
+	mux.WithRunCensusSource(plane).WithAPIPlane(plane.Handler())
+	if !embeddedUI {
+		return plane, false, nil
 	}
 	spa, err := dashboardspa.NewStaticHandler()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	plane := dashboardbff.New(dashboardDeps(resolver, readOnly, bind, port, mux.LoopbackTransport()))
-	mux.WithRunCensusSource(plane).WithAPIPlane(plane.Handler()).WithStaticHandler(spa)
+	mux.WithStaticHandler(spa)
 	// Install the listener's link base alongside the SPA so per-city handlers
 	// can mint dashboard deep links (the sling response's dashboard_url).
 	// Standalone controller processes never call attachDashboard, so their
@@ -88,7 +92,7 @@ func attachDashboard(mux *api.SupervisorMux, resolver api.CityResolver, readOnly
 		base := dashboardLoopbackBaseURL(bind, port)
 		mux.WithDashboardBase(func() string { return base })
 	}
-	return plane, nil
+	return plane, true, nil
 }
 
 // newRunCensusPlane creates the unmounted dashboard plane a standalone
@@ -104,7 +108,13 @@ func newRunCensusPlane(mux *api.SupervisorMux, resolver api.CityResolver) *dashb
 	return plane
 }
 
-func writeSupervisorDashboardStartup(stdout io.Writer, mounted, readOnly bool, bind string, port int) {
+func writeSupervisorDashboardStartup(stdout io.Writer, mounted, readOnly bool, bind string, port int, configuredURL string) {
+	if strings.TrimSpace(configuredURL) != "" {
+		if dashboardURL, err := validateDashboardURL(configuredURL); err == nil {
+			fmt.Fprintf(stdout, "Dashboard:  %s\n", dashboardURL) //nolint:errcheck
+		}
+		return
+	}
 	if !mounted {
 		return
 	}
@@ -191,8 +201,20 @@ func printDashboardStartHint(stdout io.Writer) {
 	if err != nil {
 		return
 	}
-	url := dashboardLoopbackBaseURL(cfg.Supervisor.BindOrDefault(), cfg.Supervisor.PortOrDefault())
-	fmt.Fprintf(stdout, "Dashboard:  %s/\n", url) //nolint:errcheck // best-effort stdout
+	if strings.TrimSpace(cfg.Supervisor.DashboardURL) != "" {
+		if dashboardURL, err := validateDashboardURL(cfg.Supervisor.DashboardURL); err == nil {
+			fmt.Fprintf(stdout, "Dashboard:  %s\n", dashboardURL) //nolint:errcheck // best-effort stdout
+		}
+		return
+	}
+	if !cfg.Supervisor.EmbeddedDashboardEnabled() {
+		return
+	}
+	baseURL := dashboardLoopbackBaseURL(cfg.Supervisor.BindOrDefault(), cfg.Supervisor.PortOrDefault())
+	if !dashboardHealthOKHook(baseURL) {
+		return
+	}
+	fmt.Fprintf(stdout, "Dashboard:  %s/\n", baseURL) //nolint:errcheck // best-effort stdout
 }
 
 // runCwdAllowedRootsFromEnv parses RUN_CWD_ALLOWED_ROOTS (PATH-style,

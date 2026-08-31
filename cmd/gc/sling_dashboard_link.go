@@ -91,14 +91,13 @@ func slingSupervisorAliveUntil(deadline time.Time) int {
 	return 0
 }
 
-// dashboardHealthOK reports whether the dashboard /api plane is mounted at
-// baseURL by probing its unauthenticated GET /api/health endpoint. The
-// endpoint exists only when the dashboard is mounted, so anything but a
-// fast 200 means no link should be emitted.
+// dashboardHealthOK reports whether an embedded browser surface is mounted at
+// baseURL. API health is intentionally insufficient: the retained BFF can be
+// healthy while the SPA is disabled.
 func dashboardHealthOK(baseURL string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), slingDashboardHealthTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/", nil)
 	if err != nil {
 		return false
 	}
@@ -107,5 +106,6 @@ func dashboardHealthOK(baseURL string) bool {
 		return false
 	}
 	defer resp.Body.Close() //nolint:errcheck // read-only probe
-	return resp.StatusCode == http.StatusOK
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	return resp.StatusCode == http.StatusOK && strings.HasPrefix(contentType, "text/html")
 }
