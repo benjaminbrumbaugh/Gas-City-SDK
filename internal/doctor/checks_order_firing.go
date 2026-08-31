@@ -224,7 +224,7 @@ func (c *OrderFiringCurrentCheck) run(ctx *CheckContext) *CheckResult {
 			blockingErrors++
 			continue
 		}
-		status, severity, detail := classifyOrderFiring(order, now, expected, lastFired, startedAt)
+		status, severity, detail := classifyOrderFiring(order, now, expected, c.patrolInterval(), lastFired, startedAt)
 		worst = worseStatus(worst, status)
 		result.Details = append(result.Details, detail)
 		if status != StatusOK {
@@ -797,14 +797,65 @@ func latestOrderFiredAt(evts []events.Event, subject string) time.Time {
 	return latest
 }
 
-func classifyOrderFiring(order orders.Order, now time.Time, expected time.Duration, lastFired, controllerStarted time.Time) (CheckStatus, CheckSeverity, string) {
+// orderFiringSchedulerJitter is the bounded execution allowance folded into the
+// legitimate scheduler window, on top of one whole patrol period. A dispatch
+// tick does work — reading order state, building env, writing the run bead —
+// and that work does not complete at the instant the tick begins.
+//
+// It is a constant rather than config because it is a property of doing the
+// dispatch at all, not of how often the city checks.
+const orderFiringSchedulerJitter = 15 * time.Second
+
+// orderFiringThresholds returns the ages at which a firing gap stops being
+// explainable by the scheduler and starts being evidence of a missed window.
+//
+// The old rule warned at 1.5x the order's own interval and knew nothing about
+// how often the scheduler looks. That is fine while the interval dwarfs the
+// patrol period and wrong as soon as it does not (gc-pdyfp.5): an order with a
+// 30s cooldown on a city with daemon.patrol_interval = 30s cannot fire sooner
+// than the first tick AFTER its cooldown expires, so a perfectly healthy gap
+// reaches 60s and beyond — while the warning fired at 45s. The live symptom was
+// gate-sweep reported overdue while order history showed uninterrupted
+// successful dispatches every 30-80s and order-outcome-healthy stayed green.
+//
+// The largest gap the scheduler can produce while healthy is therefore
+//
+//	expected + one patrol period + bounded execution jitter
+//
+// and nothing at or under that may warn. Above it, the ORIGINAL multipliers
+// still apply: the new floor is combined with them by max(), so an order whose
+// interval already dwarfs the patrol period keeps exactly the thresholds it has
+// today and only sub-patrol-scale orders change. That is what keeps genuinely
+// stale orders covered — this widens the window for the short intervals that
+// were flapping, it does not relax the long ones.
+func orderFiringThresholds(expected, patrolInterval time.Duration) (warnAt, errorAt time.Duration) {
+	if patrolInterval < 0 {
+		patrolInterval = 0
+	}
+	healthyMax := expected + patrolInterval + orderFiringSchedulerJitter
+	// One further patrol period past the healthy maximum: a tick was available
+	// and the order did not fire on it.
+	warnAt = maxOrderFiringDuration(expected+expected/2, healthyMax+patrolInterval)
+	errorAt = maxOrderFiringDuration(expected*3, healthyMax+3*patrolInterval)
+	return warnAt, errorAt
+}
+
+func maxOrderFiringDuration(a, b time.Duration) time.Duration {
+	if b > a {
+		return b
+	}
+	return a
+}
+
+func classifyOrderFiring(order orders.Order, now time.Time, expected, patrolInterval time.Duration, lastFired, controllerStarted time.Time) (CheckStatus, CheckSeverity, string) {
 	name := orderDisplayName(order)
+	warnAt, errorAt := orderFiringThresholds(expected, patrolInterval)
 	if lastFired.IsZero() {
 		if controllerStarted.IsZero() {
 			return StatusOK, SeverityBlocking, fmt.Sprintf("%s: never fired (controller start unknown)", name)
 		}
 		uptime := nonNegativeDuration(now.Sub(controllerStarted))
-		if uptime >= expected+expected/2 {
+		if uptime >= warnAt {
 			// Advisory only for cron: a cron order that has never fired since
 			// controller start may be the cron-scheduler bug (ga-97qngx), not
 			// a real outage. Cooldown never-fired/stale paths remain blocking
@@ -819,9 +870,9 @@ func classifyOrderFiring(order orders.Order, now time.Time, expected time.Durati
 
 	age := nonNegativeDuration(now.Sub(lastFired))
 	switch {
-	case age >= expected*3:
+	case age >= errorAt:
 		return StatusError, SeverityBlocking, fmt.Sprintf("%s: last fired %s ago, expected every %s (CRITICAL: stale)", name, formatOrderFiringDuration(age), formatOrderFiringDuration(expected))
-	case age >= expected+expected/2:
+	case age >= warnAt:
 		return StatusWarning, SeverityBlocking, fmt.Sprintf("%s: last fired %s ago, expected every %s (overdue)", name, formatOrderFiringDuration(age), formatOrderFiringDuration(expected))
 	default:
 		return StatusOK, SeverityBlocking, fmt.Sprintf("%s: last fired %s ago, expected every %s", name, formatOrderFiringDuration(age), formatOrderFiringDuration(expected))
@@ -868,4 +919,17 @@ func formatOrderFiringDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm", int(d/time.Minute))
 	}
 	return d.String()
+}
+
+// patrolInterval is how often the controller looks for work to dispatch. It
+// bounds how late a healthy order can fire: nothing can be dispatched between
+// ticks, so the scheduler's own granularity is part of every legitimate gap.
+// A missing or unparseable value falls back to the runtime's own default via
+// PatrolIntervalDuration, so the check never assumes a tighter cadence than the
+// controller actually runs.
+func (c *OrderFiringCurrentCheck) patrolInterval() time.Duration {
+	if c.cfg == nil {
+		return (&config.DaemonConfig{}).PatrolIntervalDuration()
+	}
+	return c.cfg.Daemon.PatrolIntervalDuration()
 }
