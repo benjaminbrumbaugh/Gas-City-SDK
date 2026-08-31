@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +20,46 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
+}
+
+type responseRaceStore struct {
+	beads.Store
+	writer  beads.ConditionalWriter
+	arrived chan struct{}
+	release chan struct{}
+	lists   atomic.Int32
+}
+
+func (s *responseRaceStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	items, err := s.Store.List(query)
+	if s.lists.Add(1) <= 2 {
+		s.arrived <- struct{}{}
+		<-s.release
+	}
+	return items, err
+}
+
+func (s *responseRaceStore) ConditionalWriterHandle() (beads.ConditionalWriter, bool) {
+	return s.writer, s.writer != nil
+}
+
+type noConditionalResponseStore struct{ beads.Store }
+
+type failOnceScrubStore struct {
+	beads.Store
+	writer beads.ConditionalWriter
+	fail   atomic.Bool
+}
+
+func (s *failOnceScrubStore) Update(id string, opts beads.UpdateOpts) error {
+	if opts.Description != nil && s.fail.CompareAndSwap(true, false) {
+		return errors.New("injected scrub failure")
+	}
+	return s.Store.Update(id, opts)
+}
+
+func (s *failOnceScrubStore) ConditionalWriterHandle() (beads.ConditionalWriter, bool) {
+	return s.writer, s.writer != nil
 }
 
 func testRequestInput(now time.Time) RequestInput {
@@ -177,6 +219,235 @@ func TestClaimDeliveryAndResponseBoundaries(t *testing.T) {
 	}
 	if stored.State != StateCompleted {
 		t.Fatalf("after response state = %q, want completed", stored.State)
+	}
+}
+
+func TestRecordResponseExactReplaySurvivesServiceRestart(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	store := beads.NewMemStore()
+	service := NewService(store)
+	record, err := service.Enqueue(context.Background(), testRequestInput(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), record.ID, "dispatcher-a", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := Response{
+		RequestID:        claimed.Request.RequestID,
+		Attempt:          claimed.Request.Attempt,
+		CorrelationID:    claimed.Request.CorrelationID,
+		ResponseID:       "response-restart-1",
+		State:            "answered",
+		Summary:          "sensitive answer content",
+		ContentRetention: RetentionEphemeral,
+		ReceivedAt:       now.Add(2 * time.Second),
+	}
+	if err := service.RecordResponse(context.Background(), response); err != nil {
+		t.Fatalf("first RecordResponse: %v", err)
+	}
+
+	restarted := NewService(store)
+	if err := restarted.RecordResponse(context.Background(), response); err != nil {
+		t.Fatalf("exact replay after service restart: %v", err)
+	}
+	stored, err := store.Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitment := stored.Metadata["external_coordination.response_commitment"]
+	if !strings.HasPrefix(commitment, "sha256:") || len(commitment) != len("sha256:")+64 {
+		t.Fatalf("response commitment = %q, want canonical SHA-256 commitment", commitment)
+	}
+	if strings.Contains(fmt.Sprint(stored.Metadata), response.Summary) {
+		t.Fatalf("ephemeral response summary persisted in metadata: %v", stored.Metadata)
+	}
+}
+
+func TestRecordResponsePersistsCommitmentWithoutDurableResponseContent(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 15, 0, 0, time.UTC)
+	store := beads.NewMemStore()
+	service := NewService(store)
+	input := testRequestInput(now)
+	input.ContentRetention = RetentionDurable
+	record, err := service.Enqueue(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), record.ID, "dispatcher-a", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := Response{
+		RequestID:        claimed.Request.RequestID,
+		Attempt:          claimed.Attempt,
+		CorrelationID:    claimed.Request.CorrelationID,
+		ResponseID:       "response-durable-commitment",
+		State:            "answered",
+		Summary:          "durable but sensitive response content",
+		ContentRetention: RetentionDurable,
+		ReceivedAt:       now.Add(2 * time.Second),
+	}
+	if err := service.RecordResponse(context.Background(), response); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Metadata[metadataResponseCommitment] == "" || stored.Metadata["external_coordination.response_id"] != response.ResponseID {
+		t.Fatalf("durable response identity = %v", stored.Metadata)
+	}
+	if strings.Contains(fmt.Sprint(stored.Metadata), response.Summary) {
+		t.Fatalf("raw response summary persisted instead of commitment: %v", stored.Metadata)
+	}
+}
+
+func TestRecordResponseRetriesRequiredEphemeralScrubAfterTerminalCommit(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 30, 0, 0, time.UTC)
+	store := beads.NewMemStore()
+	service := NewService(store)
+	record, err := service.Enqueue(context.Background(), testRequestInput(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), record.ID, "dispatcher-a", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, ok := beads.ConditionalWriterFor(store)
+	if !ok {
+		t.Fatal("MemStore lost conditional writer")
+	}
+	failing := &failOnceScrubStore{Store: store, writer: writer}
+	failing.fail.Store(true)
+	response := Response{
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       claimed.Attempt,
+		CorrelationID: claimed.Request.CorrelationID,
+		ResponseID:    "response-scrub-retry",
+		State:         "answered",
+		Summary:       "ephemeral response content",
+		ReceivedAt:    now.Add(2 * time.Second),
+	}
+	if err := NewService(failing).RecordResponse(context.Background(), response); err == nil || !strings.Contains(err.Error(), "injected scrub failure") {
+		t.Fatalf("first RecordResponse error = %v, want injected scrub failure", err)
+	}
+	committed, err := store.Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committed.Metadata[metadataState] != string(StateCompleted) || committed.Metadata[metadataResponseCommitment] == "" {
+		t.Fatalf("terminal response was not committed before scrub: %v", committed.Metadata)
+	}
+	if committed.Metadata["external_coordination.response_scrub_pending"] != "true" {
+		t.Fatalf("scrub pending marker = %q, want true", committed.Metadata["external_coordination.response_scrub_pending"])
+	}
+
+	if err := NewService(failing).RecordResponse(context.Background(), response); err != nil {
+		t.Fatalf("exact replay did not retry scrub: %v", err)
+	}
+	scrubbed, err := NewService(store).Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scrubbed.Request.Prompt != "" {
+		t.Fatalf("prompt after scrub retry = %q, want empty", scrubbed.Request.Prompt)
+	}
+	stored, err := store.Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Metadata["external_coordination.response_scrub_pending"] != "" {
+		t.Fatalf("scrub pending marker after retry = %q, want cleared", stored.Metadata["external_coordination.response_scrub_pending"])
+	}
+}
+
+func TestRecordResponseFailsClosedWithoutConditionalWriter(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 45, 0, 0, time.UTC)
+	store := beads.NewMemStore()
+	service := NewService(store)
+	record, err := service.Enqueue(context.Background(), testRequestInput(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), record.ID, "dispatcher-a", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := Response{
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       claimed.Attempt,
+		CorrelationID: claimed.Request.CorrelationID,
+		ResponseID:    "response-unsupported",
+		ReceivedAt:    now.Add(2 * time.Second),
+	}
+	err = NewService(noConditionalResponseStore{Store: store}).RecordResponse(context.Background(), response)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("RecordResponse without conditional writer error = %v, want ErrUnavailable", err)
+	}
+	stored, err := service.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateRunning {
+		t.Fatalf("state after unsupported response write = %q, want running", stored.State)
+	}
+}
+
+func TestRecordResponseConcurrentOutcomesHaveOneWinner(t *testing.T) {
+	now := time.Date(2026, 8, 31, 13, 0, 0, 0, time.UTC)
+	store := beads.NewMemStore()
+	service := NewService(store)
+	input := testRequestInput(now)
+	input.IdempotencyKey = "response-race"
+	record, err := service.Enqueue(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), record.ID, "dispatcher-a", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, ok := beads.ConditionalWriterFor(store)
+	if !ok {
+		t.Fatal("MemStore lost conditional writer")
+	}
+	raceStore := &responseRaceStore{
+		Store:   store,
+		writer:  writer,
+		arrived: make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+	responses := []Response{
+		{RequestID: claimed.Request.RequestID, Attempt: claimed.Attempt, CorrelationID: claimed.Request.CorrelationID, ResponseID: "response-a", State: "answered", Summary: "answer a", ReceivedAt: now.Add(2 * time.Second)},
+		{RequestID: claimed.Request.RequestID, Attempt: claimed.Attempt, CorrelationID: claimed.Request.CorrelationID, ResponseID: "response-b", State: "answered", Summary: "answer b", ReceivedAt: now.Add(2 * time.Second)},
+	}
+	results := make(chan error, len(responses))
+	for _, response := range responses {
+		go func(response Response) {
+			results <- NewService(raceStore).RecordResponse(context.Background(), response)
+		}(response)
+	}
+	<-raceStore.arrived
+	<-raceStore.arrived
+	close(raceStore.release)
+
+	var succeeded, conflicted int
+	for range responses {
+		err := <-results
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, ErrNotQueued):
+			conflicted++
+		default:
+			t.Fatalf("RecordResponse race error = %v, want success or ErrNotQueued", err)
+		}
+	}
+	if succeeded != 1 || conflicted != 1 {
+		t.Fatalf("race results = %d success, %d conflict; want one each", succeeded, conflicted)
 	}
 }
 

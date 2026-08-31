@@ -2,6 +2,7 @@ package externalcoordination
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,13 +14,15 @@ import (
 )
 
 const (
-	metadataRequest   = "external_coordination.request"
-	metadataState     = "external_coordination.state"
-	metadataAttempt   = "external_coordination.attempt"
-	metadataClaimedBy = "external_coordination.claimed_by"
-	metadataClaimedAt = "external_coordination.claimed_at"
-	metadataDelivered = "external_coordination.delivered_at"
-	metadataError     = "external_coordination.error"
+	metadataRequest              = "external_coordination.request"
+	metadataState                = "external_coordination.state"
+	metadataAttempt              = "external_coordination.attempt"
+	metadataClaimedBy            = "external_coordination.claimed_by"
+	metadataClaimedAt            = "external_coordination.claimed_at"
+	metadataDelivered            = "external_coordination.delivered_at"
+	metadataError                = "external_coordination.error"
+	metadataResponseCommitment   = "external_coordination.response_commitment"
+	metadataResponseScrubPending = "external_coordination.response_scrub_pending"
 )
 
 var (
@@ -267,6 +270,16 @@ func (s *Service) RecordResponse(ctx context.Context, response Response) error {
 	if err != nil {
 		return err
 	}
+	commitment, err := responseCommitment(response)
+	if err != nil {
+		return err
+	}
+	if record.State == StateCompleted && record.responseCommitment == commitment {
+		if record.responseScrubPending {
+			return s.scrubContent(record.ID, response.ReceivedAt)
+		}
+		return nil
+	}
 	if record.State != StateRunning {
 		return fmt.Errorf("%w: cannot record response for state %s", ErrNotQueued, record.State)
 	}
@@ -276,24 +289,53 @@ func (s *Service) RecordResponse(ctx context.Context, response Response) error {
 	if response.CorrelationID == "" || response.CorrelationID != record.Request.CorrelationID {
 		return fmt.Errorf("%w: response correlation_id does not match request", ErrInvalidInput)
 	}
+	writer, ok := beads.ConditionalWriterFor(s.store)
+	if !ok {
+		return fmt.Errorf("%w: conditional response transition unavailable", ErrUnavailable)
+	}
 	status := "closed"
 	metadata := map[string]string{
-		metadataState:     string(StateCompleted),
-		metadataDelivered: zeroTime(response.ReceivedAt).UTC().Format(time.RFC3339Nano),
+		metadataState:              string(StateCompleted),
+		metadataDelivered:          zeroTime(response.ReceivedAt).UTC().Format(time.RFC3339Nano),
+		metadataResponseCommitment: commitment,
 	}
 	if response.ResponseID != "" {
 		metadata["external_coordination.response_id"] = response.ResponseID
 	}
-	if response.Summary != "" && response.ContentRetention != RetentionEphemeral {
-		metadata["external_coordination.response_summary"] = response.Summary
+	mustScrub := record.Request.ContentRetention == RetentionEphemeral || response.ContentRetention == RetentionEphemeral
+	if mustScrub {
+		metadata[metadataResponseScrubPending] = "true"
 	}
-	if err := s.store.Update(record.ID, beads.UpdateOpts{Status: &status, Metadata: metadata}); err != nil {
+	if err := writer.UpdateIfMatch(record.ID, record.revision, beads.UpdateOpts{Status: &status, Metadata: metadata}); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			current, readErr := s.findByRequestID(ctx, response.RequestID)
+			if readErr != nil {
+				return fmt.Errorf("re-read external coordination response %s after conflict: %w", record.ID, readErr)
+			}
+			if current.State == StateCompleted && current.responseCommitment == commitment {
+				if current.responseScrubPending {
+					return s.scrubContent(current.ID, response.ReceivedAt)
+				}
+				return nil
+			}
+			return fmt.Errorf("%w: cannot record response for state %s", ErrNotQueued, current.State)
+		}
 		return fmt.Errorf("record external coordination response %s: %w", record.ID, err)
 	}
-	if record.Request.ContentRetention == RetentionEphemeral || response.ContentRetention == RetentionEphemeral {
+	if mustScrub {
 		return s.scrubContent(record.ID, response.ReceivedAt)
 	}
 	return nil
+}
+
+func responseCommitment(response Response) (string, error) {
+	response.ReceivedAt = response.ReceivedAt.UTC()
+	canonical, err := json.Marshal(response)
+	if err != nil {
+		return "", fmt.Errorf("%w: canonicalize response: %w", ErrInvalidInput, err)
+	}
+	sum := sha256.Sum256(canonical)
+	return fmt.Sprintf("sha256:%x", sum), nil
 }
 
 func (s *Service) scrubContent(id string, now time.Time) error {
@@ -312,6 +354,7 @@ func (s *Service) scrubContent(id string, now time.Time) error {
 		Metadata: map[string]string{
 			metadataRequest:                          string(payload),
 			"external_coordination.content_released": zeroTime(now).UTC().Format(time.RFC3339Nano),
+			metadataResponseScrubPending:             "",
 		},
 	})
 }
@@ -456,14 +499,17 @@ func decodeRecord(item beads.Bead) (RequestRecord, error) {
 		return RequestRecord{}, fmt.Errorf("decode external coordination request %s: %w", item.ID, err)
 	}
 	return RequestRecord{
-		ID:          item.ID,
-		Request:     request,
-		State:       DeliveryState(defaultString(item.Metadata[metadataState], string(StateQueued))),
-		Attempt:     parseInt(item.Metadata[metadataAttempt]),
-		ClaimedBy:   item.Metadata[metadataClaimedBy],
-		ClaimedAt:   parseTime(item.Metadata[metadataClaimedAt]),
-		DeliveredAt: parseTime(item.Metadata[metadataDelivered]),
-		Error:       item.Metadata[metadataError],
+		ID:                   item.ID,
+		Request:              request,
+		State:                DeliveryState(defaultString(item.Metadata[metadataState], string(StateQueued))),
+		Attempt:              parseInt(item.Metadata[metadataAttempt]),
+		ClaimedBy:            item.Metadata[metadataClaimedBy],
+		ClaimedAt:            parseTime(item.Metadata[metadataClaimedAt]),
+		DeliveredAt:          parseTime(item.Metadata[metadataDelivered]),
+		Error:                item.Metadata[metadataError],
+		revision:             item.Revision,
+		responseCommitment:   item.Metadata[metadataResponseCommitment],
+		responseScrubPending: item.Metadata[metadataResponseScrubPending] == "true",
 	}, nil
 }
 
