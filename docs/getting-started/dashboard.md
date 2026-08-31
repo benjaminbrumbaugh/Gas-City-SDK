@@ -3,9 +3,20 @@ title: Web dashboard
 description: The supervisor hosts a built-in web dashboard for all your cities.
 ---
 
-The Gas City supervisor hosts a built-in web dashboard. It is a single-page app
-compiled into the `gc` binary and served by the supervisor on its own listener,
-so there is nothing extra to install or run.
+Gas City supports two dashboard modes. Upstream defaults to a single-page app
+compiled into `gc` and served from the supervisor root. This fork keeps that
+compatibility code but can disable only the embedded UI while retaining the
+supervisor API and run projections. Set a canonical external front door with:
+
+```toml
+[supervisor]
+embedded_dashboard = false
+dashboard_url = "http://localhost:8400/"
+```
+
+`gc dashboard` prefers the configured external URL. Without one, it advertises
+an embedded URL only after the actual root responds with HTML; `/api` health by
+itself is not evidence that the SPA is mounted.
 
 ## Open it
 
@@ -59,5 +70,8 @@ loopback (`127.0.0.1`). It is intended for local, single-operator use:
 
 ## Turn it off
 
-Set `GC_SUPERVISOR_DASHBOARD=0` before starting the supervisor to run a
-typed-API-only supervisor with no embedded dashboard.
+Set `embedded_dashboard = false` in `[supervisor]` to disable only the embedded
+SPA while retaining `/api` and run projections. Configure `dashboard_url` when
+an external dashboard should be opened and advertised. The legacy
+`GC_SUPERVISOR_DASHBOARD=0` escape hatch remains a stronger full disable that
+also removes the dashboard BFF `/api` plane.
