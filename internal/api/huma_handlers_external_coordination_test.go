@@ -119,17 +119,30 @@ func TestExternalCoordinationResponseRouteAcceptsCurrentExternalAdapterRegistrat
 	}
 }
 
-func TestExternalCoordinationResponseRouteRejectsOutcomeAfterCompletionAsConflict(t *testing.T) {
+func TestExternalCoordinationResponseRouteAcknowledgesExactReplayAndRejectsDivergenceAfterRestart(t *testing.T) {
 	state := newExternalCoordinationResponseTestState(t)
 	h := newTestCityHandler(t, state)
 	registration := registerExternalCoordinationResponseTestAdapter(t, h, state)
 	claimed := claimExternalCoordinationResponseTestRequest(t, state)
-	if response := postExternalCoordinationResponse(t, h, state, claimed, registration); response.Code != http.StatusOK {
+	receivedAt := time.Date(2026, 8, 31, 14, 0, 0, 0, time.UTC)
+	exactBody := externalCoordinationResponseTestBody(claimed, "response-1", "approved", receivedAt)
+	if response := postExternalCoordinationResponseBody(t, h, state, exactBody, "response-replay-1", registration); response.Code != http.StatusOK {
 		t.Fatalf("first POST /external-coordination/responses status = %d, want 200; body = %s", response.Code, response.Body.String())
 	}
-	response := postExternalCoordinationResponse(t, h, state, claimed, registration)
+	if response := postExternalCoordinationResponseBody(t, h, state, exactBody, "response-replay-1", registration); response.Code != http.StatusOK {
+		t.Fatalf("cached exact replay status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
+
+	// Build a new per-city Server, including a fresh process-local idempotency
+	// cache, over the same durable bead store and adapter registry.
+	restarted := newTestCityHandler(t, state)
+	if response := postExternalCoordinationResponseBody(t, restarted, state, exactBody, "response-replay-1", registration); response.Code != http.StatusOK {
+		t.Fatalf("exact replay after server restart status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
+	divergentBody := externalCoordinationResponseTestBody(claimed, "response-2", "denied", receivedAt)
+	response := postExternalCoordinationResponseBody(t, restarted, state, divergentBody, "response-divergent-1", registration)
 	if response.Code != http.StatusConflict {
-		t.Fatalf("duplicate POST /external-coordination/responses status = %d, want 409; body = %s", response.Code, response.Body.String())
+		t.Fatalf("divergent POST /external-coordination/responses status = %d, want 409; body = %s", response.Code, response.Body.String())
 	}
 	stored, err := externalcoordination.NewService(state.CityBeadStore()).Get(context.Background(), claimed.ID)
 	if err != nil {
@@ -297,9 +310,12 @@ func claimExternalCoordinationResponseTestRequest(t *testing.T, state State) ext
 	return claimed
 }
 
-func postExternalCoordinationResponse(t *testing.T, h http.Handler, state State, claimed externalcoordination.RequestRecord, registration coordinationCallbackRegistration) *httptest.ResponseRecorder {
+func externalCoordinationResponseTestBody(claimed externalcoordination.RequestRecord, responseID, summary string, receivedAt time.Time) string {
+	return fmt.Sprintf(`{"request_id":%q,"attempt":%d,"correlation_id":%q,"response_id":%q,"state":"answered","summary":%q,"follow_up_required":false,"received_at":%q}`, claimed.Request.RequestID, claimed.Request.Attempt, claimed.Request.CorrelationID, responseID, summary, receivedAt.UTC().Format(time.RFC3339Nano))
+}
+
+func postExternalCoordinationResponseBody(t *testing.T, h http.Handler, state State, body, idempotencyKey string, registration coordinationCallbackRegistration) *httptest.ResponseRecorder {
 	t.Helper()
-	body := fmt.Sprintf(`{"request_id":%q,"attempt":%d,"correlation_id":%q,"response_id":"response-1","state":"answered","follow_up_required":false,"received_at":%q}`, claimed.Request.RequestID, claimed.Request.Attempt, claimed.Request.CorrelationID, time.Now().UTC().Format(time.RFC3339Nano))
 	req := httptest.NewRequest(http.MethodPost, cityURL(state, "/external-coordination/responses"), strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-GC-Request", "coordination-response-auth")
@@ -307,7 +323,16 @@ func postExternalCoordinationResponse(t *testing.T, h http.Handler, state State,
 	req.Header.Set("X-GC-Coordination-Adapter", "hermes")
 	req.Header.Set("X-GC-Coordination-Adapter-Generation", fmt.Sprintf("%d", registration.Generation))
 	req.Header.Set("X-GC-Coordination-Adapter-Instance", registration.Instance)
+	if idempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
 	response := httptest.NewRecorder()
 	h.ServeHTTP(response, req)
 	return response
+}
+
+func postExternalCoordinationResponse(t *testing.T, h http.Handler, state State, claimed externalcoordination.RequestRecord, registration coordinationCallbackRegistration) *httptest.ResponseRecorder {
+	t.Helper()
+	body := externalCoordinationResponseTestBody(claimed, "response-1", "", time.Now())
+	return postExternalCoordinationResponseBody(t, h, state, body, "", registration)
 }

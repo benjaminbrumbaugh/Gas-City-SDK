@@ -172,6 +172,10 @@ type RequestRecord struct {
 	ClaimedAt   time.Time     `json:"claimed_at,omitempty"`
 	DeliveredAt time.Time     `json:"delivered_at,omitempty"`
 	Error       string        `json:"error,omitempty"`
+
+	revision             int64
+	responseCommitment   string
+	responseScrubPending bool
 }
 
 // DeliveryReceipt reports adapter acceptance, not external coordinator execution completion.
