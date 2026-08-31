@@ -81,9 +81,15 @@ Content-Type: application/json
 ```
 
 The response is correlated by the opaque `request_id` from the envelope; the API
-also accepts the durable request record ID. The causal lifecycle may be retained
-without retaining prompt or response content. External coordination is a
-conversation boundary, not a durable information store.
+also accepts the durable request record ID. Gas City persists a canonical
+SHA-256 commitment plus non-secret response identity/fence metadata, not the
+response summary. An exact replay is acknowledged after process restart; a
+replay whose commitment differs returns `409 Conflict`. If ephemeral content
+scrubbing fails after the terminal transition, the durable record remains
+scrub-pending and an exact retry resumes that scrub before it is acknowledged
+as settled. The causal lifecycle may therefore be retained without retaining
+prompt or response content. External coordination is a conversation boundary,
+not a durable information store.
 
 On graceful shutdown, unregister only the registration this process owns:
 
