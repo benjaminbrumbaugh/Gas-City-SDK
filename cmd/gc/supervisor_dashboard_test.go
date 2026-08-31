@@ -237,9 +237,10 @@ func TestAttachDashboardEmbeddedRootPassesAvailabilityProbe(t *testing.T) {
 	if !mounted {
 		t.Fatal("embedded dashboard was not mounted")
 	}
-	server := httptest.NewServer(mux.Handler())
-	defer server.Close()
-	if !dashboardHealthOK(server.URL) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	response := httptest.NewRecorder()
+	mux.Handler().ServeHTTP(response, request)
+	if !dashboardResponseAvailable(response.Code, response.Header().Get("Content-Type")) {
 		t.Fatal("real embedded root did not satisfy the browser-surface availability probe")
 	}
 }

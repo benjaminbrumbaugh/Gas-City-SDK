@@ -106,6 +106,9 @@ func dashboardHealthOK(baseURL string) bool {
 		return false
 	}
 	defer resp.Body.Close() //nolint:errcheck // read-only probe
-	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
-	return resp.StatusCode == http.StatusOK && strings.HasPrefix(contentType, "text/html")
+	return dashboardResponseAvailable(resp.StatusCode, resp.Header.Get("Content-Type"))
+}
+
+func dashboardResponseAvailable(status int, contentType string) bool {
+	return status == http.StatusOK && strings.HasPrefix(strings.ToLower(contentType), "text/html")
 }

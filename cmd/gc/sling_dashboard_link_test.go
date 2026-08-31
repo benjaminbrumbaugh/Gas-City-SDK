@@ -52,15 +52,23 @@ func registerSlingDashboardCity(t *testing.T, name string) string {
 
 // slingDashboardHealthServer serves GET / as an embedded HTML surface with the given status.
 func slingDashboardHealthServer(t *testing.T, status int) *httptest.Server {
+	return slingDashboardSurfaceServer(t, status, http.StatusNotFound)
+}
+
+func slingDashboardSurfaceServer(t *testing.T, rootStatus, apiStatus int) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/health" {
+			w.WriteHeader(apiStatus)
+			return
+		}
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(status)
-		if status == http.StatusOK {
+		w.WriteHeader(rootStatus)
+		if rootStatus == http.StatusOK {
 			w.Write([]byte(`<!doctype html><title>Gas City</title>`)) //nolint:errcheck
 		}
 	}))
@@ -260,14 +268,7 @@ func TestSlingSupervisorAliveUntil(t *testing.T) {
 }
 
 func TestDashboardHealthOKRejectsHealthyAPIWithoutRootHTML(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/health" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer srv.Close()
+	srv := slingDashboardSurfaceServer(t, http.StatusNotFound, http.StatusOK)
 	if dashboardHealthOK(srv.URL) {
 		t.Fatal("dashboardHealthOK = true when API is healthy but root SPA is absent")
 	}
