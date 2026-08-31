@@ -98,6 +98,32 @@ same_path() (
   [ "$(canonical_path "$left")" = "$(canonical_path "$right")" ]
 )
 
+# backup_name_for_path TARGET reads a `dolt backup -v` listing on stdin and
+# emits the first remote whose file:// URL resolves to TARGET. Backup coverage
+# is defined by the destination, not the remote's display name: bd legitimately
+# uses `default`, while the managed backup order uses `<db>-backup`.
+backup_name_for_path() (
+  target="$1"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    name="${line%%[[:space:]]*}"
+    [ -n "$name" ] || continue
+    url="${line#"$name"}"
+    url="${url#"${url%%[![:space:]]*}"}"
+    url="${url%\{\}}"
+    url="${url% }"
+    case "$url" in
+      file://*)
+        if same_path "${url#file://}" "$target"; then
+          printf '%s\n' "$name"
+          return 0
+        fi
+        ;;
+    esac
+  done
+  return 1
+)
+
 pid_is_running() (
   pid="$1"
 
