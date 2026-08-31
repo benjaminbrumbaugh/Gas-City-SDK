@@ -327,41 +327,6 @@ backup_url_from_list() {
     return 1
 }
 
-# backup_name_for_path reads a `dolt backup -v` listing on stdin and emits the
-# name of the first remote whose file:// URL resolves to the given path. It
-# exists because a database's backup can legitimately carry a name other than
-# the managed `<db>-backup` — `bd backup` configures one called `default` — and
-# such a remote IS coverage. Matching only on the managed name made the script
-# try to add a second remote at an address Dolt already has claimed, which Dolt
-# refuses outright, so the database silently lost all backup coverage
-# (gc-534qw). Matching is by resolved path, never by name, so this cannot widen
-# what counts as a valid destination.
-backup_name_for_path() {
-    local target="$1"
-    local line
-    local name
-    local url
-
-    while IFS= read -r line; do
-        [ -n "$line" ] || continue
-        name="${line%%[[:space:]]*}"
-        [ -n "$name" ] || continue
-        url="${line#"$name"}"
-        url="${url#"${url%%[![:space:]]*}"}"
-        url="${url%\{\}}"
-        url="${url% }"
-        case "$url" in
-            file://*)
-                if same_path "${url#file://}" "$target"; then
-                    printf '%s\n' "$name"
-                    return 0
-                fi
-                ;;
-        esac
-    done
-    return 1
-}
-
 backup_destination_is_safe() {
     local candidate="$1"
     local live_db="$2"

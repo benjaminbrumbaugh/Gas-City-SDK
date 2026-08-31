@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -328,40 +329,37 @@ func postExternalCoordinationResponse(t *testing.T, h http.Handler, state State,
 	return response
 }
 
-// bridgeCallbackServer stands in for a registered external coordination bridge.
-// It accepts the publish callback the city pushes to it and records what it
-// saw, so a test can assert that delivery was initiated BY THE CITY through the
-// registered callback rather than pulled by the coordinator.
-type bridgeCallbackServer struct {
-	*httptest.Server
+// bridgeCallbackAdapter stands in for a registered external coordination
+// bridge. It records what the city pushes so this handler-level test can assert
+// the registration-triggered causal chain without opening another loopback
+// listener. HTTP wire behavior remains owned by extmsg.HTTPAdapter tests.
+type bridgeCallbackAdapter struct {
+	name      string
+	caps      extmsg.AdapterCapabilities
 	mu        sync.Mutex
 	published []extmsg.PublishRequest
 }
 
-func newBridgeCallbackServer(t *testing.T) *bridgeCallbackServer {
-	t.Helper()
-	bridge := &bridgeCallbackServer{}
-	bridge.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/publish" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		var request extmsg.PublishRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		bridge.mu.Lock()
-		bridge.published = append(bridge.published, request)
-		bridge.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"message_id":"bridge-message-1","delivered":true}`))
-	}))
-	t.Cleanup(bridge.Close)
-	return bridge
+func (b *bridgeCallbackAdapter) Name() string { return b.name }
+
+func (b *bridgeCallbackAdapter) Capabilities() extmsg.AdapterCapabilities { return b.caps }
+
+func (b *bridgeCallbackAdapter) VerifyAndNormalizeInbound(context.Context, extmsg.InboundPayload) (*extmsg.ExternalInboundMessage, error) {
+	return nil, errors.New("inbound not supported by callback fixture")
 }
 
-func (b *bridgeCallbackServer) deliveries() []extmsg.PublishRequest {
+func (b *bridgeCallbackAdapter) Publish(_ context.Context, request extmsg.PublishRequest) (*extmsg.PublishReceipt, error) {
+	b.mu.Lock()
+	b.published = append(b.published, request)
+	b.mu.Unlock()
+	return &extmsg.PublishReceipt{MessageID: "bridge-message-1", Delivered: true}, nil
+}
+
+func (b *bridgeCallbackAdapter) EnsureChildConversation(context.Context, extmsg.ConversationRef, string) (*extmsg.ConversationRef, error) {
+	return nil, errors.New("child conversations not supported by callback fixture")
+}
+
+func (b *bridgeCallbackAdapter) deliveries() []extmsg.PublishRequest {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]extmsg.PublishRequest(nil), b.published...)
@@ -390,7 +388,12 @@ func TestExternalCoordinationDeliversQueuedRequestWhenAdapterRegistersAfterEnque
 	state := newExternalCoordinationResponseTestState(t)
 	srv := New(state)
 	h := newTestCityHandlerWith(t, state, srv)
-	bridge := newBridgeCallbackServer(t)
+	bridge := &bridgeCallbackAdapter{}
+	srv.newHTTPAdapter = func(name, _ string, caps extmsg.AdapterCapabilities) extmsg.TransportAdapter {
+		bridge.name = name
+		bridge.caps = caps
+		return bridge
+	}
 
 	body := `{"source_agent":"mayor","reason":"direct_request","prompt":"is the bridge reachable?","correlation_id":"corr-register-after-enqueue","idempotency_key":"idem-register-after-enqueue"}`
 	req := httptest.NewRequest(http.MethodPost, cityURL(state, "/external-coordination/requests"), strings.NewReader(body))
@@ -426,7 +429,7 @@ func TestExternalCoordinationDeliversQueuedRequestWhenAdapterRegistersAfterEnque
 		t.Fatalf("record before registration = state %q attempt %d, want queued/0", queued.State, queued.Attempt)
 	}
 
-	registerExternalCoordinationBridge(t, h, state, bridge.URL)
+	registerExternalCoordinationBridge(t, h, state, "http://127.0.0.1")
 	srv.waitForBackground()
 
 	delivered := bridge.deliveries()
@@ -459,7 +462,7 @@ func TestExternalCoordinationDeliversQueuedRequestWhenAdapterRegistersAfterEnque
 
 	// A second registration re-triggers the drain. The delivered request is no
 	// longer queued, so the coordinator must not be asked to take a second turn.
-	registerExternalCoordinationBridge(t, h, state, bridge.URL)
+	registerExternalCoordinationBridge(t, h, state, "http://127.0.0.1")
 	srv.waitForBackground()
 	if got := len(bridge.deliveries()); got != 1 {
 		t.Fatalf("bridge saw %d callback(s) after re-registering, want the original 1", got)
@@ -508,7 +511,12 @@ func TestExternalCoordinationRegistrationOfAnUnrelatedAdapterDoesNotDeliver(t *t
 	state := newExternalCoordinationResponseTestState(t)
 	srv := New(state)
 	h := newTestCityHandlerWith(t, state, srv)
-	bridge := newBridgeCallbackServer(t)
+	bridge := &bridgeCallbackAdapter{}
+	srv.newHTTPAdapter = func(name, _ string, caps extmsg.AdapterCapabilities) extmsg.TransportAdapter {
+		bridge.name = name
+		bridge.caps = caps
+		return bridge
+	}
 
 	body := `{"source_agent":"mayor","reason":"direct_request","prompt":"only hermes may answer","correlation_id":"corr-unrelated-adapter","idempotency_key":"idem-unrelated-adapter"}`
 	req := httptest.NewRequest(http.MethodPost, cityURL(state, "/external-coordination/requests"), strings.NewReader(body))
@@ -520,7 +528,7 @@ func TestExternalCoordinationRegistrationOfAnUnrelatedAdapterDoesNotDeliver(t *t
 		t.Fatalf("POST /external-coordination/requests status = %d, body = %s", response.Code, response.Body.String())
 	}
 
-	registerBody := fmt.Sprintf(`{"provider":"discord","account_id":"acct-1","name":"discord","callback_url":%q}`, bridge.URL)
+	registerBody := fmt.Sprintf(`{"provider":"discord","account_id":"acct-1","name":"discord","callback_url":%q}`, "http://127.0.0.1")
 	registerReq := httptest.NewRequest(http.MethodPost, cityURL(state, "/extmsg/adapters"), strings.NewReader(registerBody))
 	registerReq.Header.Set("Content-Type", "application/json")
 	registerReq.Header.Set("X-GC-Request", "coordination-unrelated-adapter-register")

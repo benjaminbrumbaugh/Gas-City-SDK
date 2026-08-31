@@ -554,7 +554,7 @@ func (s *Server) humaHandleExtMsgAdapterRegister(_ context.Context, input *ExtMs
 	if name == "" {
 		name = input.Body.Provider + "/" + input.Body.AccountID
 	}
-	adapter := extmsg.NewHTTPAdapter(name, input.Body.CallbackURL, input.Body.Capabilities)
+	adapter := s.newHTTPAdapter(name, input.Body.CallbackURL, input.Body.Capabilities)
 	key := extmsg.AdapterKey{Provider: input.Body.Provider, AccountID: input.Body.AccountID}
 	registration := reg.Register(key, adapter)
 	// Registration is the moment a queue that had nowhere to go becomes

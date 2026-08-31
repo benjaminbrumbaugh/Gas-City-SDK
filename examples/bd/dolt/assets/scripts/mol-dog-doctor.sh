@@ -173,8 +173,11 @@ if [ "${ORPHAN_COUNT:-0}" -gt 0 ]; then
 fi
 
 # Backup freshness: check newest backup artifact per database.
-# Every user database is in scope. DBs without a configured <db>-backup
-# remote are reported as a coverage gap rather than silently excluded —
+# Every user database is in scope. DBs without a remote whose file:// URL
+# resolves to the managed artifact path are reported as a coverage gap rather
+# than silently excluded. The name is not authoritative: bd uses `default`,
+# while the managed backup order uses `<db>-backup`.
+#
 # the exclusion is how unconfigured production DBs went unbacked-up until
 # journal corruption made them unrecoverable (#3176). mol-dog-backup.sh
 # auto-configures the remote on its next run, so this warning self-heals
@@ -184,7 +187,9 @@ BACKUP_STALE_ITEMS=""
 for db in $USER_DBS; do
     db_dir="$DOLT_DATA_DIR/$db"
     if [ -d "$db_dir/.dolt" ]; then
-        if (cd "$db_dir" && run_bounded 30 dolt backup 2>/dev/null | awk '{print $1}' | grep -qx "${db}-backup"); then
+        backup_target="$BACKUP_ARTIFACT_DIR/$db"
+        backup_list=$(cd "$db_dir" && run_bounded 30 dolt backup -v 2>/dev/null || true)
+        if [ -n "$(printf '%s\n' "$backup_list" | backup_name_for_path "$backup_target" || true)" ]; then
             BACKUP_ELIGIBLE_DBS="$BACKUP_ELIGIBLE_DBS $db"
         else
             append_backup_stale "$db backup remote missing"
