@@ -100,8 +100,13 @@ func TestExternalCoordinationRequestRouteRejectsCallerTargetOverride(t *testing.
 
 func TestExternalCoordinationResponseRouteAcceptsCurrentExternalAdapterRegistration(t *testing.T) {
 	state := newExternalCoordinationResponseTestState(t)
-	h := newTestCityHandler(t, state)
+	srv := New(state)
+	h := newTestCityHandlerWith(t, state, srv)
 	registration := registerExternalCoordinationResponseTestAdapter(t, h, state)
+	// Registering an adapter triggers a background drain. Let it finish
+	// before claiming by hand, or the drain and the test race for the
+	// same queued record and the claim below fails intermittently.
+	srv.waitForBackground()
 	if registration.Credential == "" || registration.Generation == 0 || registration.Instance == "" {
 		t.Fatal("registration is missing a callback credential, generation, or instance")
 	}
@@ -123,8 +128,13 @@ func TestExternalCoordinationResponseRouteAcceptsCurrentExternalAdapterRegistrat
 
 func TestExternalCoordinationResponseRouteAcknowledgesExactReplayAndRejectsDivergenceAfterRestart(t *testing.T) {
 	state := newExternalCoordinationResponseTestState(t)
-	h := newTestCityHandler(t, state)
+	srv := New(state)
+	h := newTestCityHandlerWith(t, state, srv)
 	registration := registerExternalCoordinationResponseTestAdapter(t, h, state)
+	// Registering an adapter triggers a background drain. Let it finish
+	// before claiming by hand, or the drain and the test race for the
+	// same queued record and the claim below fails intermittently.
+	srv.waitForBackground()
 	claimed := claimExternalCoordinationResponseTestRequest(t, state)
 	receivedAt := time.Date(2026, 8, 31, 14, 0, 0, 0, time.UTC)
 	exactBody := externalCoordinationResponseTestBody(claimed, "response-1", "approved", receivedAt)
@@ -157,9 +167,14 @@ func TestExternalCoordinationResponseRouteAcknowledgesExactReplayAndRejectsDiver
 
 func TestExternalCoordinationResponseRouteRejectsReplacedExternalAdapterRegistration(t *testing.T) {
 	state := newExternalCoordinationResponseTestState(t)
-	h := newTestCityHandler(t, state)
+	srv := New(state)
+	h := newTestCityHandlerWith(t, state, srv)
 	first := registerExternalCoordinationResponseTestAdapter(t, h, state)
 	second := registerExternalCoordinationResponseTestAdapter(t, h, state)
+	// Registering an adapter triggers a background drain. Let it finish
+	// before claiming by hand, or the drain and the test race for the
+	// same queued record and the claim below fails intermittently.
+	srv.waitForBackground()
 	if first.Credential == "" || second.Credential == "" || first.Credential == second.Credential || first.Generation >= second.Generation || first.Instance == second.Instance {
 		t.Fatal("replacement did not issue a distinct callback credential, generation, and instance")
 	}
