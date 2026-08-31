@@ -4,16 +4,27 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/supervisor"
 	"github.com/spf13/cobra"
 )
 
 // openDashboardURLHook opens the resolved dashboard URL in the user's browser.
 // It is a package variable so tests can stub the browser launch.
 var openDashboardURLHook = openURL
+
+func validateDashboardURL(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	u, err := url.Parse(trimmed)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+		return "", fmt.Errorf("invalid dashboard URL %q: use an absolute http(s) URL with a host and no credentials", raw)
+	}
+	return trimmed, nil
+}
 
 // newDashboardCmd creates the "gc dashboard" command group.
 //
@@ -27,13 +38,12 @@ func newDashboardCmd(stdout, stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dashboard",
 		Short: "Open the web dashboard in your browser",
-		Long: `Open the GC dashboard in your browser.
+		Long: `Open the configured Gas City dashboard in your browser.
 
-The dashboard SPA is embedded in the gc binary and served same-origin by the
-supervisor; it is no longer a separate static server. This command resolves the
-supervisor URL, opens it in your default browser, and prints it too (or tells
-you how to start the supervisor). Use --no-open to print the URL without
-launching a browser.`,
+When [supervisor] dashboard_url is set, this command opens that validated
+external front door. Otherwise it opens an embedded dashboard only when the
+resolved API origin actually serves the SPA root. Use --no-open to print the
+URL without launching a browser.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runDashboardNotice(apiURL, noOpen, stdout, stderr)
@@ -55,11 +65,11 @@ func newDashboardServeCmd(stdout, stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Print where the web dashboard is served",
-		Long: `Report the URL where the GC dashboard is served.
+		Long: `Report the configured Gas City dashboard URL.
 
-The dashboard SPA is embedded in the gc binary and served same-origin by the
-supervisor; "gc dashboard serve" no longer starts a static server. It resolves
-and prints the supervisor URL (or tells you how to start the supervisor).`,
+When [supervisor] dashboard_url is set, this command prints that external front
+door. Otherwise it prints an embedded dashboard origin only when the resolved
+API origin actually serves the SPA. It never starts a static server.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			// "serve" is the legacy print-only entry point: never open a browser.
@@ -77,10 +87,10 @@ func bindDashboardFlags(cmd *cobra.Command, apiURL *string, noOpen *bool) {
 
 // runDashboardNotice resolves where the supervisor serves the dashboard SPA,
 // opens it in the user's browser, and prints the URL. It is purely
-// informational and always exits 0: city/config resolution only feeds the
-// standalone-controller fallback, so a failure there is non-fatal — the command
-// falls back to live supervisor discovery and still prints a useful answer (the
-// supervisor URL, or how to start it).
+// informational and exits 0 when discovery or availability fails; malformed
+// explicit or configured URLs return an actionable error before any browser is
+// opened. City/config resolution only feeds the standalone-controller fallback,
+// so a failure there remains non-fatal.
 //
 // Browser-open is best-effort and only happens on the served path: when noOpen
 // is false and the URL actually resolves, it launches the browser via
@@ -88,16 +98,39 @@ func bindDashboardFlags(cmd *cobra.Command, apiURL *string, noOpen *bool) {
 // never errors the command. The not-running path (URL unresolvable) prints the
 // start hint and never opens a (dead) URL.
 func runDashboardNotice(apiURLOverride string, noOpen bool, stdout, stderr io.Writer) error {
-	// A city-resolution error (not in a city, or an unreadable city.toml) must
-	// not abort: the supervisor may be running regardless of the current dir.
-	cityPath, cfg, err := resolveDashboardContext(stderr)
-	if err != nil {
-		cityPath, cfg = "", nil
+	var apiURL string
+	configuredDashboard := false
+	if strings.TrimSpace(apiURLOverride) != "" {
+		var err error
+		apiURL, err = validateDashboardURL(apiURLOverride)
+		if err != nil {
+			return err
+		}
+		apiURL = strings.TrimRight(apiURL, "/")
+	} else if supCfg, err := supervisorLoadConfig(supervisor.ConfigPath()); err == nil && strings.TrimSpace(supCfg.Supervisor.DashboardURL) != "" {
+		apiURL, err = validateDashboardURL(supCfg.Supervisor.DashboardURL)
+		if err != nil {
+			return err
+		}
+		configuredDashboard = true
 	}
 
-	apiURL, err := resolveDashboardAPI(cityPath, cfg, apiURLOverride)
-	if err != nil {
-		fmt.Fprintf(stdout, "The dashboard is served by the gc supervisor; start it with %q, then open the printed URL.\n", "gc supervisor start") //nolint:errcheck // best-effort stdout
+	if apiURL == "" {
+		// A city-resolution error (not in a city, or an unreadable city.toml) must
+		// not abort: the supervisor may be running regardless of the current dir.
+		cityPath, cfg, err := resolveDashboardContext(stderr)
+		if err != nil {
+			cityPath, cfg = "", nil
+		}
+
+		apiURL, err = resolveDashboardAPI(cityPath, cfg, apiURLOverride)
+		if err != nil {
+			fmt.Fprintf(stdout, "The embedded dashboard is disabled or unavailable. Configure [supervisor] dashboard_url for an external dashboard front door.\n") //nolint:errcheck // best-effort stdout
+			return nil
+		}
+	}
+	if !configuredDashboard && !dashboardHealthOKHook(apiURL) {
+		fmt.Fprintf(stdout, "The embedded dashboard is disabled or unavailable. Configure [supervisor] dashboard_url for an external dashboard front door.\n") //nolint:errcheck // best-effort stdout
 		return nil
 	}
 
@@ -113,7 +146,11 @@ func runDashboardNotice(apiURLOverride string, noOpen bool, stdout, stderr io.Wr
 		return nil
 	}
 
-	fmt.Fprintf(stdout, "The dashboard is served by the gc supervisor at %s\n", apiURL) //nolint:errcheck // best-effort stdout
+	if configuredDashboard {
+		fmt.Fprintf(stdout, "The configured dashboard is at %s\n", apiURL) //nolint:errcheck // best-effort stdout
+		return nil
+	}
+	fmt.Fprintf(stdout, "The embedded dashboard is served by the gc supervisor at %s\n", apiURL) //nolint:errcheck // best-effort stdout
 	return nil
 }
 

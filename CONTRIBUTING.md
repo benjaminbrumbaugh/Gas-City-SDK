@@ -27,9 +27,12 @@ runs the fast CI-equivalent gates for local changes: `make lint`,
 `make vet`, and `make test` for Go changes, and `make check-docs` for
 Markdown/docs/spec changes.
 
-**Dashboard SPA.** The dashboard at `internal/api/dashboardspa/web/` is a
-TypeScript SPA that talks directly to the supervisor's OpenAPI-typed
-endpoints. When `internal/api/openapi.json` changes, the hook regenerates
+**Embedded dashboard compatibility.** The dashboard at
+`internal/api/dashboardspa/web/` is the upstream TypeScript SPA that talks
+directly to the supervisor's OpenAPI-typed endpoints. In Benjamin's fork it is
+retained compatibility code, not the generic product-dashboard work surface;
+ordinary UI work belongs in the separate `Gas-City-Dashboard` repository.
+When `internal/api/openapi.json` changes, the hook regenerates
 `internal/api/dashboardspa/web/shared/src/generated/gc-supervisor-client/`
 (the typed API client) and, when that or the SPA source changes, rebuilds
 `internal/api/dashboardspa/dist/` (the compiled bundle that the Go static

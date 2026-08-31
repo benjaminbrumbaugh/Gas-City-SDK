@@ -65,16 +65,20 @@ func dashboardEnabled() bool {
 // the host-side samplers read the supervisor's /v0 API back over loopback, so
 // the plane must know where to reach it. Operator identity is read from env with
 // neutral defaults applied inside the plane (ZERO hardcoded roles).
-func attachDashboard(mux *api.SupervisorMux, resolver api.CityResolver, readOnly bool, bind string, port int) (*dashboardbff.Plane, error) {
+func attachDashboard(mux *api.SupervisorMux, resolver api.CityResolver, readOnly bool, bind string, port int, embeddedUI bool) (*dashboardbff.Plane, bool, error) {
 	if !dashboardEnabled() {
-		return nil, nil
+		return nil, false, nil
+	}
+	plane := dashboardbff.New(dashboardDeps(resolver, readOnly, bind, port, mux.LoopbackTransport()))
+	mux.WithRunCensusSource(plane).WithAPIPlane(plane.Handler())
+	if !embeddedUI {
+		return plane, false, nil
 	}
 	spa, err := dashboardspa.NewStaticHandler()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	plane := dashboardbff.New(dashboardDeps(resolver, readOnly, bind, port, mux.LoopbackTransport()))
-	mux.WithRunCensusSource(plane).WithAPIPlane(plane.Handler()).WithStaticHandler(spa)
+	mux.WithStaticHandler(spa)
 	// Install the listener's link base alongside the SPA so per-city handlers
 	// can mint dashboard deep links (the sling response's dashboard_url).
 	// Standalone controller processes never call attachDashboard, so their
@@ -88,7 +92,7 @@ func attachDashboard(mux *api.SupervisorMux, resolver api.CityResolver, readOnly
 		base := dashboardLoopbackBaseURL(bind, port)
 		mux.WithDashboardBase(func() string { return base })
 	}
-	return plane, nil
+	return plane, true, nil
 }
 
 // newRunCensusPlane creates the unmounted dashboard plane a standalone
@@ -104,7 +108,10 @@ func newRunCensusPlane(mux *api.SupervisorMux, resolver api.CityResolver) *dashb
 	return plane
 }
 
-func writeSupervisorDashboardStartup(stdout io.Writer, mounted, readOnly bool, bind string, port int) {
+func writeSupervisorDashboardStartup(stdout io.Writer, mounted, readOnly bool, bind string, port int, configuredURL string) {
+	if writeConfiguredDashboardStartup(stdout, configuredURL) {
+		return
+	}
 	if !mounted {
 		return
 	}
@@ -113,6 +120,19 @@ func writeSupervisorDashboardStartup(stdout io.Writer, mounted, readOnly bool, b
 		dashTag = "  [read-only]"
 	}
 	fmt.Fprintf(stdout, "Dashboard:  %s/%s\n", dashboardLoopbackBaseURL(bind, port), dashTag) //nolint:errcheck
+}
+
+func writeConfiguredDashboardStartup(stdout io.Writer, configuredURL string) bool {
+	if strings.TrimSpace(configuredURL) == "" {
+		return false
+	}
+	dashboardURL, err := validateDashboardURL(configuredURL)
+	if err != nil {
+		fmt.Fprintf(stdout, "Dashboard:  unavailable (%v)\n", err) //nolint:errcheck // best-effort startup guidance
+		return true
+	}
+	fmt.Fprintf(stdout, "Dashboard:  %s\n", dashboardURL) //nolint:errcheck // best-effort startup guidance
+	return true
 }
 
 // dashboardDeps builds the plane's dependencies. Extracted so a regression test
@@ -184,15 +204,24 @@ func dashboardLoopbackBaseURL(bind string, port int) string {
 // config-load failure simply skips the hint (the foreground supervisor log and
 // "gc dashboard" still surface the URL), so it never affects start success.
 func printDashboardStartHint(stdout io.Writer) {
-	if !dashboardEnabled() {
-		return
-	}
 	cfg, err := supervisorLoadConfig(supervisor.ConfigPath())
 	if err != nil {
 		return
 	}
-	url := dashboardLoopbackBaseURL(cfg.Supervisor.BindOrDefault(), cfg.Supervisor.PortOrDefault())
-	fmt.Fprintf(stdout, "Dashboard:  %s/\n", url) //nolint:errcheck // best-effort stdout
+	if writeConfiguredDashboardStartup(stdout, cfg.Supervisor.DashboardURL) {
+		return
+	}
+	if !dashboardEnabled() {
+		return
+	}
+	if !cfg.Supervisor.EmbeddedDashboardEnabled() {
+		return
+	}
+	baseURL := dashboardLoopbackBaseURL(cfg.Supervisor.BindOrDefault(), cfg.Supervisor.PortOrDefault())
+	if !dashboardHealthOKHook(baseURL) {
+		return
+	}
+	fmt.Fprintf(stdout, "Dashboard:  %s/\n", baseURL) //nolint:errcheck // best-effort stdout
 }
 
 // runCwdAllowedRootsFromEnv parses RUN_CWD_ALLOWED_ROOTS (PATH-style,

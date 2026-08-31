@@ -16,4 +16,9 @@ The live workspace owns `city.toml`, active agents/rigs, operational scripts, an
 
 ## Dashboard warning
 
-`internal/api/dashboardspa` is the upstream embedded dashboard bundled with `gc`. It is extraneous and unused for Benjamin's owned-dashboard cutover; read the marker in that directory before touching it.
+`internal/api/dashboardspa` is the upstream embedded dashboard bundled with
+`gc`. It is retained for upstream compatibility, but it is not Benjamin's
+dashboard product and is disabled in his supervisor configuration. Generic
+dashboard work belongs in
+`/Users/benjaminbrumbaugh/Documents/Gas City/Gas-City-Dashboard`; read the
+marker in the retained SPA directory before touching it.

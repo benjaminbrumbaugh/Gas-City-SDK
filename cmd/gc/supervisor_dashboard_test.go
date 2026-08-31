@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/api"
 	"github.com/gastownhall/gascity/internal/api/dashboardbff"
+	"github.com/gastownhall/gascity/internal/supervisor"
 )
 
 type fakeDashResolver struct{ cities []api.CityInfo }
@@ -169,6 +172,29 @@ func TestDashboardCityResolverCitiesEmpty(t *testing.T) {
 // samplers dial is browser-reachable only on the supervisor host, so a remote
 // /v0 sling caller would receive a dashboard_url pointing at its own machine.
 // Wildcard responses omit dashboard_url instead (silent degradation).
+func TestAttachDashboardConfigDisabledKeepsBFFWithoutSPA(t *testing.T) {
+	t.Setenv("GC_SUPERVISOR_DASHBOARD", "")
+	mux := newTestSupervisorMuxForDashboard().WithAnyHostAllowed()
+	plane, mounted, err := attachDashboard(mux, fakeDashResolver{}, false, "127.0.0.1", 8372, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plane == nil || mounted {
+		t.Fatalf("plane, mounted = %v, %t; want non-nil, false", plane, mounted)
+	}
+	for path, want := range map[string]int{"/api/health": http.StatusOK, "/": http.StatusNotFound} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.Handler().ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Fatalf("GET %s = %d (%q), want %d", path, rec.Code, rec.Body.String(), want)
+		}
+	}
+	if got := mux.DashboardBaseURL(); got != "" {
+		t.Fatalf("DashboardBaseURL = %q, want empty", got)
+	}
+}
+
 func TestAttachDashboardInstallsDashboardBase(t *testing.T) {
 	cases := map[string]struct {
 		bind string
@@ -187,17 +213,35 @@ func TestAttachDashboardInstallsDashboardBase(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("GC_SUPERVISOR_DASHBOARD", "")
 			mux := newTestSupervisorMuxForDashboard()
-			plane, err := attachDashboard(mux, fakeDashResolver{}, false, tc.bind, 8372)
+			plane, mounted, err := attachDashboard(mux, fakeDashResolver{}, false, tc.bind, 8372, true)
 			if err != nil {
 				t.Fatalf("attachDashboard: %v", err)
 			}
-			if plane == nil {
-				t.Fatal("attachDashboard returned nil plane with dashboard enabled")
+			if plane == nil || !mounted {
+				t.Fatal("attachDashboard did not mount the embedded dashboard")
 			}
 			if got := mux.DashboardBaseURL(); got != tc.want {
 				t.Fatalf("DashboardBaseURL for bind %q = %q, want %q", tc.bind, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAttachDashboardEmbeddedRootPassesAvailabilityProbe(t *testing.T) {
+	t.Setenv("GC_SUPERVISOR_DASHBOARD", "")
+	mux := newTestSupervisorMuxForDashboard().WithAnyHostAllowed()
+	_, mounted, err := attachDashboard(mux, fakeDashResolver{}, false, "127.0.0.1", 8372, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mounted {
+		t.Fatal("embedded dashboard was not mounted")
+	}
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	response := httptest.NewRecorder()
+	mux.Handler().ServeHTTP(response, request)
+	if !dashboardResponseAvailable(response.Code, response.Header().Get("Content-Type")) {
+		t.Fatal("real embedded root did not satisfy the browser-surface availability probe")
 	}
 }
 
@@ -207,12 +251,12 @@ func TestAttachDashboardInstallsDashboardBase(t *testing.T) {
 func TestAttachDashboardDisabledLeavesNoDashboardBase(t *testing.T) {
 	t.Setenv("GC_SUPERVISOR_DASHBOARD", "0")
 	mux := newTestSupervisorMuxForDashboard()
-	plane, err := attachDashboard(mux, fakeDashResolver{}, false, "127.0.0.1", 8372)
+	plane, mounted, err := attachDashboard(mux, fakeDashResolver{}, false, "127.0.0.1", 8372, true)
 	if err != nil {
 		t.Fatalf("attachDashboard: %v", err)
 	}
-	if plane != nil {
-		t.Fatal("attachDashboard returned a plane with the dashboard disabled")
+	if plane != nil || mounted {
+		t.Fatal("attachDashboard enabled dashboard components under full disable")
 	}
 	if got := mux.DashboardBaseURL(); got != "" {
 		t.Fatalf("DashboardBaseURL = %q, want empty when the dashboard is disabled", got)
@@ -234,14 +278,69 @@ func TestDashboardEnabledToggle(t *testing.T) {
 	}
 }
 
-func TestWriteSupervisorDashboardStartupOnlyAdvertisesMountedDashboard(t *testing.T) {
+func TestPrintDashboardStartHintUsesDurablePolicy(t *testing.T) {
+	oldLoad := supervisorLoadConfig
+	oldHealth := dashboardHealthOKHook
+	t.Cleanup(func() {
+		supervisorLoadConfig = oldLoad
+		dashboardHealthOKHook = oldHealth
+	})
+	disabled := false
+	supervisorLoadConfig = func(string) (supervisor.Config, error) {
+		return supervisor.Config{Supervisor: supervisor.Section{EmbeddedDashboard: &disabled}}, nil
+	}
 	var out bytes.Buffer
-	writeSupervisorDashboardStartup(&out, false, false, "127.0.0.1", 8372)
+	printDashboardStartHint(&out)
+	if out.Len() != 0 {
+		t.Fatalf("disabled hint = %q, want empty", out.String())
+	}
+
+	supervisorLoadConfig = func(string) (supervisor.Config, error) {
+		return supervisor.Config{Supervisor: supervisor.Section{DashboardURL: "http://localhost:8400/"}}, nil
+	}
+	t.Setenv("GC_SUPERVISOR_DASHBOARD", "0")
+	printDashboardStartHint(&out)
+	if got := out.String(); got != "Dashboard:  http://localhost:8400/\n" {
+		t.Fatalf("configured hint = %q", got)
+	}
+
+	out.Reset()
+	t.Setenv("GC_SUPERVISOR_DASHBOARD", "")
+	supervisorLoadConfig = func(string) (supervisor.Config, error) {
+		return supervisor.Config{Supervisor: supervisor.Section{Bind: "127.0.0.1", Port: 8372}}, nil
+	}
+	var probed string
+	dashboardHealthOKHook = func(baseURL string) bool {
+		probed = baseURL
+		return true
+	}
+	printDashboardStartHint(&out)
+	if probed != "http://127.0.0.1:8372" || out.String() != "Dashboard:  http://127.0.0.1:8372/\n" {
+		t.Fatalf("enabled hint probed %q and printed %q", probed, out.String())
+	}
+}
+
+func TestWriteSupervisorDashboardStartupOnlyAdvertisesAvailableDashboard(t *testing.T) {
+	var out bytes.Buffer
+	writeSupervisorDashboardStartup(&out, false, false, "127.0.0.1", 8372, "")
 	if out.Len() != 0 {
 		t.Fatalf("disabled dashboard output = %q, want empty", out.String())
 	}
 
-	writeSupervisorDashboardStartup(&out, true, true, "127.0.0.1", 8372)
+	writeSupervisorDashboardStartup(&out, false, false, "127.0.0.1", 8372, "http://localhost:8400/")
+	wantExternal := "Dashboard:  http://localhost:8400/\n"
+	if out.String() != wantExternal {
+		t.Fatalf("external dashboard output = %q, want %q", out.String(), wantExternal)
+	}
+
+	out.Reset()
+	writeSupervisorDashboardStartup(&out, false, false, "127.0.0.1", 8372, "javascript:alert(1)")
+	if !strings.Contains(out.String(), "invalid dashboard URL") {
+		t.Fatalf("invalid external dashboard output = %q", out.String())
+	}
+
+	out.Reset()
+	writeSupervisorDashboardStartup(&out, true, true, "127.0.0.1", 8372, "")
 	want := "Dashboard:  http://127.0.0.1:8372/  [read-only]\n"
 	if out.String() != want {
 		t.Fatalf("mounted dashboard output = %q, want %q", out.String(), want)
