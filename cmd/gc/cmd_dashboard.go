@@ -128,10 +128,10 @@ func runDashboardNotice(apiURLOverride string, noOpen bool, stdout, stderr io.Wr
 			fmt.Fprintf(stdout, "The embedded dashboard is disabled or unavailable. Configure [supervisor] dashboard_url for an external dashboard front door.\n") //nolint:errcheck // best-effort stdout
 			return nil
 		}
-		if !dashboardHealthOKHook(apiURL) {
-			fmt.Fprintf(stdout, "The embedded dashboard is disabled or unavailable. Configure [supervisor] dashboard_url for an external dashboard front door.\n") //nolint:errcheck // best-effort stdout
-			return nil
-		}
+	}
+	if !configuredDashboard && !dashboardHealthOKHook(apiURL) {
+		fmt.Fprintf(stdout, "The embedded dashboard is disabled or unavailable. Configure [supervisor] dashboard_url for an external dashboard front door.\n") //nolint:errcheck // best-effort stdout
+		return nil
 	}
 
 	// The URL is live (supervisor/standalone/override resolved): open it in the

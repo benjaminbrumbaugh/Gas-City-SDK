@@ -98,6 +98,23 @@ func TestRunDashboardNoticeExplicitAPIOverridesConfiguredDashboardURL(t *testing
 	}
 }
 
+func TestRunDashboardNoticeExplicitAPIRequiresEmbeddedRoot(t *testing.T) {
+	configureIsolatedRuntimeEnv(t)
+	t.Chdir(t.TempDir())
+	opened := stubDashboardOpen(t)
+	dashboardHealthOKHook = func(string) bool { return false }
+	var stdout bytes.Buffer
+	if err := runDashboardNotice("http://127.0.0.1:9372", false, &stdout, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if *opened != "" {
+		t.Fatalf("opened = %q, want no browser launch for an API-only origin", *opened)
+	}
+	if !strings.Contains(stdout.String(), "disabled or unavailable") {
+		t.Fatalf("notice = %q", stdout.String())
+	}
+}
+
 func TestRunDashboardNoticePrintsSupervisorURL(t *testing.T) {
 	configureIsolatedRuntimeEnv(t)
 	t.Chdir(t.TempDir())
