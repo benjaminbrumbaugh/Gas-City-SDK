@@ -3748,14 +3748,50 @@ func codexTranscriptTailContainsTurnAborted(tail string) bool {
 // "(main)", "⏱️ Jun 4 02:57:04", or the "✻ Worked for 3m 38s" done marker.
 var claudeBusySpinnerRe = regexp.MustCompile(`\([0-9]+[ms][^)]*[·•]`)
 
+// interruptHintRe matches an agent TUI's "<key> to interrupt" busy footer
+// without hardcoding which key is shown (gc-tqi6x).
+//
+// The reason is in the shipped codex TUI. Grepping
+// @openai/codex-darwin-arm64 .../bin/codex (codex-cli 0.146.1) for the three
+// literals this package matched found NONE of them present:
+//
+//	"esc to interrupt"               ABSENT
+//	"Press Esc or Ctrl+C to cancel"  ABSENT
+//	"[current working directory "    ABSENT
+//
+// What codex ships is the bare fragment " to interrupt", with the keycap
+// rendered separately — because codex's shortcuts are user-remappable ("remap
+// TUI shortcuts" is a command in the same binary), so the key in the hint is
+// resolved at runtime from the active keymap. codex DOES ship contiguous
+// literals for its FIXED hints ("esc to close", "esc to clear notes"), which is
+// what makes the split on the interrupt hint meaningful rather than incidental:
+// that one is composed precisely because its key is not fixed.
+//
+// Requiring the literal "esc" therefore bound busy detection to one keymap, and
+// measured on this city that cost 13 unconfirmed submits out of 20 to the
+// codex-backed Mayor (65%) against 2 of 47 for every claude-family agent
+// combined — each one re-pasting a nudge that had already landed.
+//
+// A keycap is still REQUIRED rather than matching " to interrupt" anywhere,
+// because paneBusy reads 120 captured lines including scrollback: ordinary prose
+// ("we may need to interrupt the loop") would otherwise read as busy, and a
+// false positive is worse than the bug it fixes — it makes WaitForIdle never
+// return, so the agent is never nudged at all, and it lets submit verification
+// confirm a paste that never submitted (the ga-bwm stall this verification
+// exists to catch). The keycap set is grounded in what codex actually ships —
+// "esc", "Esc", "ctrl+c", "Ctrl+C", "^C" — plus the ⎋/⌃ glyph forms other TUIs
+// use. It is a strict WIDENING of the old literal: every string "esc to
+// interrupt" matched still matches.
+var interruptHintRe = regexp.MustCompile(`(?:^|[\s(\[│•·|,])(?:\^[A-Za-z]|⌃[A-Za-z]|⎋|[Ee]sc|ESC|[Cc]trl\+[A-Za-z]) +to interrupt`)
+
 // paneContainsBusyIndicator checks captured pane lines for signs that the agent
 // is actively processing. Agent TUIs surface this differently: older Claude Code
-// and Codex show "esc to interrupt"; current Claude Code shows a live spinner
-// with an elapsed timer + token stream (claudeBusySpinnerRe); Gemini shows its
-// own cancel / shell-tool strings.
+// and Codex show a "<key> to interrupt" footer (interruptHintRe); current
+// Claude Code shows a live spinner with an elapsed timer + token stream
+// (claudeBusySpinnerRe); Gemini shows its own cancel / shell-tool strings.
 func paneContainsBusyIndicator(lines []string) bool {
 	for _, line := range lines {
-		if strings.Contains(line, "esc to interrupt") ||
+		if interruptHintRe.MatchString(line) ||
 			strings.Contains(line, "Press Esc or Ctrl+C to cancel") ||
 			strings.Contains(line, "[current working directory ") ||
 			claudeBusySpinnerRe.MatchString(line) {

@@ -77,10 +77,77 @@ func TestCodexSubmitIsVerified(t *testing.T) {
 // TestCodexBusyIndicatorIsReadable is the premise the eligibility above rests
 // on: if codex's indicator string ever stops matching, verification would report
 // every codex submit as unconfirmed and the queue would re-paste every nudge
-// three times before dead-lettering it.
+// three times before dead-lettering it. Measured on this city: 13 of 20 nudge
+// shadows to the codex-backed Mayor carried ErrNudgeSubmitUnconfirmed (65%),
+// against 2 of 47 for every claude-family agent combined (gc-tqi6x).
+//
+// The fixture this test used to assert on — "  working  (esc to interrupt)" —
+// was INVENTED, and the shipped codex TUI does not contain that string. See
+// interruptHintFragment for the grep. The cases below are derived from the
+// literals codex-cli 0.146.1 actually ships, so this test now checks the real
+// contract rather than an assumption about it.
 func TestCodexBusyIndicatorIsReadable(t *testing.T) {
-	if !paneContainsBusyIndicator([]string{"  working  (esc to interrupt)"}) {
-		t.Fatal("codex's busy indicator no longer matches; submit verification for codex would report every delivery unconfirmed")
+	// The fragment codex ships, with the keycap rendered separately. The keycap
+	// is resolved from the active keymap, so each of these is a legitimate
+	// rendering of the same hint and every one must read as busy.
+	for _, line := range []string{
+		"  esc to interrupt",
+		"  Esc to interrupt",
+		"  ⎋ to interrupt",
+		"  ctrl+c to interrupt",
+		"◦ Working (2m 48s • esc to interrupt)",
+		"  ⏎ to queue message   esc to interrupt   100% context left",
+	} {
+		if !paneContainsBusyIndicator([]string{line}) {
+			t.Errorf("codex busy footer %q did not read as busy; submit verification\n"+
+				"would report every codex delivery unconfirmed and the queue would\n"+
+				"re-paste each nudge until its attempts ran out", line)
+		}
+	}
+}
+
+// TestCodexBusyDetectionDoesNotDependOnTheKeycap is the regression this bead
+// turns on. Requiring the literal "esc" bound busy detection to one keymap;
+// codex renders the key from the ACTIVE keymap and ships only " to interrupt".
+// A remapped interrupt key must not silently disable submit verification.
+func TestCodexBusyDetectionDoesNotDependOnTheKeycap(t *testing.T) {
+	// No "esc" anywhere, and no elapsed-timer parens for claudeBusySpinnerRe to
+	// fall back on — so this line can only pass on the keycap-independent match.
+	line := "  ^C to interrupt"
+	if !paneContainsBusyIndicator([]string{line}) {
+		t.Fatalf("busy detection still depends on the keycap: %q read as idle.\n"+
+			"codex's interrupt key is user-remappable, so matching the literal\n"+
+			"\"esc to interrupt\" reports a busy pane as idle whenever the binding differs", line)
+	}
+}
+
+// The widening must not make IDLE codex chrome read as busy. A false positive
+// here is worse than the bug: WaitForIdle would never return, so the agent would
+// never be nudged at all. These are codex's own idle-side footer hints, from the
+// same shipped binary.
+func TestCodexIdleFooterHintsAreNotBusy(t *testing.T) {
+	for _, line := range []string{
+		"  ⏎ to submit message",
+		"  ⏎ to queue message",
+		"  ? for shortcuts",
+		"  / for commands",
+		"  ! for shell commands",
+		"  100% context left",
+		"  Interrupt the active turn.",
+		"  esc to close",
+		"  esc to clear notes",
+		// SCROLLBACK PROSE. paneBusy reads 120 captured lines, so an agent's own
+		// transcript is in scope. These contain "to interrupt" but no keycap in
+		// front of it, and must not read as busy — otherwise WaitForIdle never
+		// returns and submit verification confirms a paste that never submitted.
+		"  we may need to interrupt the loop here",
+		"  the handler is allowed to interrupt a running turn",
+		"  // Callers must never try to interrupt mid-write.",
+	} {
+		if paneContainsBusyIndicator([]string{line}) {
+			t.Errorf("idle codex chrome %q read as BUSY; a false positive here stops\n"+
+				"WaitForIdle from ever returning, so the agent is never nudged", line)
+		}
 	}
 }
 
