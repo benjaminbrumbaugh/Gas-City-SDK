@@ -1140,6 +1140,15 @@ func unclaimWorkAssignedToRetiredSessionBead(
 			}
 		}
 	})
+	// Work is released; mail must be re-ADDRESSED instead, because a mail
+	// bead's assignee is its delivery route. See session_mail_rehome.go.
+	//
+	// fallbackRoute is a WORK run_target and callers legitimately pass ""
+	// (`gc session close` does), but the session bead still names a mailbox in
+	// its own template/agent_name. Prefer that over closing a message no one
+	// asked to close: an unroutable close is the last resort, not the default.
+	rehomeMailAssignedToRetiredSession(cityPath, cfg, store, rigStores, identifiers, sessionBead.ID,
+		firstNonEmptyRoute(fallbackRoute, retiredSessionFallbackRoute(sessionBead)), time.Now(), stderr)
 }
 
 // releaseUnexecutedClaimsOnDrainAck gives back every in_progress WORK bead this
@@ -1278,6 +1287,10 @@ func reassignWorkAssignedToRetiredSessionBead(
 			}
 		}
 	})
+	// The successor session is a live mailbox, so mail addressed to the
+	// retiring one is re-addressed straight to it rather than to the pool
+	// route. See session_mail_rehome.go.
+	rehomeMailAssignedToRetiredSession(cityPath, cfg, store, rigStores, identifiers, retiredSession.ID, newSessionID, time.Now(), stderr)
 }
 
 // reassignWorkAssignedToRetiredSessionInfo is the session.Info form of
@@ -1332,6 +1345,10 @@ func reassignWorkAssignedToRetiredSessionInfo(
 			}
 		}
 	})
+	// The successor session is a live mailbox, so mail addressed to the
+	// retiring one is re-addressed straight to it rather than to the pool
+	// route. See session_mail_rehome.go.
+	rehomeMailAssignedToRetiredSession(cityPath, cfg, store, rigStores, identifiers, retiredSession.ID, newSessionID, time.Now(), stderr)
 }
 
 // unclaimWorkAssignedToRetiredSessionInfo is the session.Info form of
@@ -1404,6 +1421,14 @@ func unclaimWorkAssignedToRetiredSessionInfo(
 	if !complete {
 		fmt.Fprintf(stderr, "session beads: the release sweep for retired session %s could not resolve this city's leg set; not reporting a clean repair\n", retiredSession.ID) //nolint:errcheck
 		res.Failed++
+	}
+	// Work is released; mail must be re-ADDRESSED instead, because a mail
+	// bead's assignee is its delivery route. A rehome failure counts toward
+	// this sweep's Failed so a caller cannot read a clean repair off a
+	// retirement that left mail stranded. See session_mail_rehome.go.
+	mailRoute := firstNonEmptyRoute(fallbackRoute, retiredSessionFallbackRouteInfo(retiredSession))
+	if mailRes := rehomeMailAssignedToRetiredSession(cityPath, cfg, store, rigStores, identifiers, retiredSession.ID, mailRoute, time.Now(), stderr); mailRes.Failed > 0 {
+		res.Failed += mailRes.Failed
 	}
 	return res
 }

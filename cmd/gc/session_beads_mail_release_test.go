@@ -185,8 +185,23 @@ func TestUnclaimWorkAssignedToRetiredSessionBeadLeavesMailBeadUntouched(t *testi
 	if err != nil {
 		t.Fatalf("get mail bead: %v", err)
 	}
-	if gotMail.Assignee != sessionBead.ID {
-		t.Fatalf("mail bead Assignee = %q, want unchanged %q (orphan-release must never touch a mail wisp)", gotMail.Assignee, sessionBead.ID)
+	// The ra-59207 invariant is that the WORK release must never DESTROY a mail
+	// wisp's route to an inbox — releasing it clears the assignee, and the
+	// assignee is the route. This originally asserted the assignee was
+	// unchanged, which is stronger than the invariant and turned out to be the
+	// next bug: a message left addressed to a session that has retired is
+	// deliverable to nobody, `gc doctor session-model` reports it forever with
+	// no remedy, and nothing ever clears it (gc-p0hf4). Retirement now
+	// re-ADDRESSES mail to a live mailbox instead. What must never happen is
+	// still asserted here, and is what a re-release regression would produce.
+	if gotMail.Assignee == "" {
+		t.Fatalf("mail bead Assignee was cleared: orphan-release must never destroy a mail wisp's only route to an inbox")
+	}
+	if gotMail.Assignee != "fallback/worker" {
+		t.Fatalf("mail bead Assignee = %q, want the live fallback route %q", gotMail.Assignee, "fallback/worker")
+	}
+	if gotMail.Status != "open" {
+		t.Fatalf("mail bead Status = %q, want it still deliverable (%q)", gotMail.Status, "open")
 	}
 
 	gotWork, err := store.Get(work.ID)
