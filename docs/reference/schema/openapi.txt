@@ -3074,6 +3074,45 @@
         ],
         "type": "object"
       },
+      "ExtMsgAdapterActivateInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Account ID.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "generation": {
+            "description": "Exact registration generation.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instance": {
+            "description": "Exact registration instance.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "name": {
+            "description": "Exact adapter name returned by registration.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "provider": {
+            "description": "Provider name.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "account_id",
+          "name",
+          "generation",
+          "instance"
+        ],
+        "type": "object"
+      },
       "ExtMsgAdapterRegisterInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -3499,6 +3538,9 @@
             "format": "int64",
             "type": "integer"
           },
+          "configured": {
+            "type": "boolean"
+          },
           "delivery": {
             "type": "string"
           },
@@ -3510,6 +3552,9 @@
           },
           "logical_role": {
             "type": "string"
+          },
+          "registered": {
+            "type": "boolean"
           },
           "session_policy": {
             "type": "string"
@@ -3529,6 +3574,8 @@
         },
         "required": [
           "available",
+          "configured",
+          "registered",
           "logical_role",
           "target",
           "adapter",
@@ -10797,6 +10844,9 @@
           "delivered_at": {
             "format": "date-time",
             "type": "string"
+          },
+          "delivery_indeterminate": {
+            "type": "boolean"
           },
           "error": {
             "type": "string"
@@ -37484,6 +37534,179 @@
           }
         },
         "summary": "Register an external messaging adapter"
+      }
+    },
+    "/v0/city/{cityName}/extmsg/adapters/activate": {
+      "post": {
+        "operationId": "post-v0-city-by-city-name-extmsg-adapters-activate",
+        "parameters": [
+          {
+            "description": "Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.",
+            "in": "header",
+            "name": "X-GC-Request",
+            "required": true,
+            "schema": {
+              "description": "Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.",
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "City name.",
+            "in": "path",
+            "name": "cityName",
+            "required": true,
+            "schema": {
+              "description": "City name.",
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bearer credential returned by the exact pending registration.",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "description": "Bearer credential returned by the exact pending registration.",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtMsgAdapterActivateInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OKResponseBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Forbidden",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Not Found",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Unprocessable Entity",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Post v0 city by city name extmsg adapters activate"
       }
     },
     "/v0/city/{cityName}/extmsg/bind": {

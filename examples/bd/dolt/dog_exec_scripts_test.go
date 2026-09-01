@@ -5000,7 +5000,7 @@ printf '%s	%s\n' "${GC_TEST_DU_KIB:-0}" "${3:-${2:-${1:-}}}"
 	if got := strings.Count(readLog(), "mail send mayor -s Dolt backup size warning [MEDIUM]"); got != 1 {
 		t.Fatalf("first size warning mails = %d, want 1\n%s", got, readLog())
 	}
-	if !strings.Contains(readLog(), "request queued outside help through HCA") {
+	if !strings.Contains(readLog(), "request queued outside help through external coordination") {
 		t.Fatalf("size warning must tell Mayor how to escalate for help:\n%s", readLog())
 	}
 	for _, want := range []string{
@@ -5653,8 +5653,8 @@ set -euo pipefail
 case "$1" in
   backup)
     case "$(basename "$PWD")" in
-      prod) printf 'prod-backup\n' ;;
-      archive) printf 'archive-backup\n' ;;
+      prod) printf 'prod-backup file://%s/prod {}\n' "$GC_CITY_PATH/.dolt-backup" ;;
+      archive) printf 'archive-backup file://%s/archive {}\n' "$GC_CITY_PATH/.dolt-backup" ;;
     esac
     exit 0
     ;;
@@ -5763,7 +5763,7 @@ set -euo pipefail
 case "$1" in
   backup)
     if [ "$(basename "$PWD")" = "prod" ]; then
-      printf 'prod-backup\n'
+      printf 'prod-backup file://%s/prod {}\n' "$GC_CITY_PATH/.dolt-backup"
     fi
     exit 0
     ;;
@@ -5794,6 +5794,57 @@ exit 0
 	}
 	if !strings.Contains(string(gcLog), "prod backup missing") {
 		t.Fatalf("doctor did not warn about prod (eligible: has prod-backup remote, no artifact); scope filter should not exclude it:\n%s", gcLog)
+	}
+}
+
+// TestDoctorAcceptsManagedBackupPathUnderAlias keeps the doctor's coverage
+// check aligned with mol-dog-backup.sh. bd names its backup remote "default";
+// that is valid coverage when (and only when) it resolves to the database's
+// managed artifact path.
+func TestDoctorAcceptsManagedBackupPathUnderAlias(t *testing.T) {
+	cityPath := t.TempDir()
+	dataDir := filepath.Join(cityPath, "dolt-data")
+	artifactDir := filepath.Join(cityPath, ".dolt-backup")
+	if err := os.MkdirAll(filepath.Join(dataDir, "prod", ".dolt"), 0o755); err != nil {
+		t.Fatalf("mkdir prod: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(artifactDir, "prod"), 0o755); err != nil {
+		t.Fatalf("mkdir backup artifact: %v", err)
+	}
+	freshBackup := filepath.Join(artifactDir, "prod", "manifest")
+	writeTestFile(t, freshBackup, "backup")
+
+	binDir := t.TempDir()
+	gcLogPath := writeDogFakeGC(t, binDir)
+	writeExecutable(t, filepath.Join(binDir, "dolt"), fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "backup -v")
+    printf 'default file://%s {}\n'
+    exit 0
+    ;;
+  *"COUNT(*) FROM information_schema.PROCESSLIST"*)
+    printf 'COUNT(*)\n1\n'
+    exit 0
+    ;;
+  *"SHOW DATABASES"*)
+    printf 'Database\nprod\n'
+    exit 0
+    ;;
+esac
+exit 0
+`, filepath.Join(artifactDir, "prod")))
+
+	out := runDogScript(t, "mol-dog-doctor.sh", binDir, cityPath, dataDir, doctorBackupStaleEnv)
+	if !strings.Contains(out, "server: ok") {
+		t.Fatalf("unexpected doctor output:\n%s", out)
+	}
+	gcLog, err := os.ReadFile(gcLogPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read gc log: %v", err)
+	}
+	if strings.Contains(string(gcLog), "backup remote missing") {
+		t.Fatalf("doctor rejected a remote whose alias resolves to the managed backup path:\n%s", gcLog)
 	}
 }
 
@@ -5865,8 +5916,8 @@ set -euo pipefail
 case "$1" in
   backup)
     case "$(basename "$PWD")" in
-      prod) printf 'prod-backup\n' ;;
-      prod_dev) printf 'prod_dev-backup\n' ;;
+      prod) printf 'prod-backup file://%s/prod {}\n' "$GC_CITY_PATH/.dolt-backup" ;;
+      prod_dev) printf 'prod_dev-backup file://%s/prod_dev {}\n' "$GC_CITY_PATH/.dolt-backup" ;;
     esac
     exit 0
     ;;

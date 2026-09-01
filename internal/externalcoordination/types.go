@@ -7,7 +7,6 @@ package externalcoordination
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
@@ -172,10 +171,15 @@ type RequestRecord struct {
 	ClaimedAt   time.Time     `json:"claimed_at,omitempty"`
 	DeliveredAt time.Time     `json:"delivered_at,omitempty"`
 	Error       string        `json:"error,omitempty"`
+	// DeliveryIndeterminate means the callback may have accepted this exact
+	// attempt but its receipt was lost or unreadable. A retry must preserve the
+	// same attempt and idempotency identity so a late response remains valid.
+	DeliveryIndeterminate bool `json:"delivery_indeterminate,omitempty"`
 
-	revision             int64
-	responseCommitment   string
-	responseScrubPending bool
+	revision               int64
+	responseCommitment     string
+	responseCommitmentSalt string
+	responseScrubPending   bool
 }
 
 // DeliveryReceipt reports adapter acceptance, not external coordinator execution completion.
@@ -221,14 +225,14 @@ type Store interface {
 	Claim(context.Context, string, string, time.Time) (RequestRecord, error)
 	Complete(context.Context, string, DeliveryReceipt, time.Time) error
 	RecordResponse(context.Context, Response) error
+	MarkDeliveryIndeterminate(context.Context, string, error, time.Time) error
 	Fail(context.Context, string, error, time.Time) error
 	Cancel(context.Context, string, time.Time) error
 }
 
 // Service is the concrete durable request queue.
 type Service struct {
-	store   beads.Store
-	claimMu sync.Mutex
+	store beads.Store
 }
 
 // NewService creates a durable external coordination request service over the city's bead store.

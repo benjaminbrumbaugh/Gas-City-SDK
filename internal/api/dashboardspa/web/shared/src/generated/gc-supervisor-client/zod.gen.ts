@@ -532,6 +532,14 @@ export const zExecutionStepStalledPayload = z.object({
     session_id: z.string()
 });
 
+export const zExtMsgAdapterActivateInputBody = z.object({
+    account_id: z.string().min(1),
+    generation: z.coerce.bigint().gte(BigInt(1)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    instance: z.string().min(1),
+    name: z.string().min(1),
+    provider: z.string().min(1)
+});
+
 export const zExtMsgAdapterRegisterInputBody = z.object({
     account_id: z.string().min(1),
     callback_url: z.string().optional(),
@@ -631,10 +639,12 @@ export const zExternalCoordinationCapability = z.object({
     available: z.boolean(),
     capabilities: zExternalCoordinationCapabilities,
     config_revision: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    configured: z.boolean(),
     delivery: z.string(),
     instruction: z.string(),
     interrupt_policy: z.string(),
     logical_role: z.string(),
+    registered: z.boolean(),
     session_policy: z.string(),
     target: z.string(),
     triggers: z.array(z.string()).nullable()
@@ -3888,6 +3898,7 @@ export const zRequestRecord = z.object({
     claimed_at: z.iso.datetime().optional(),
     claimed_by: z.string().optional(),
     delivered_at: z.iso.datetime().optional(),
+    delivery_indeterminate: z.boolean().optional(),
     error: z.string().optional(),
     id: z.string(),
     request: zRequest,
@@ -8733,6 +8744,22 @@ export const zRegisterExtmsgAdapterPath = z.object({
  * Created
  */
 export const zRegisterExtmsgAdapterResponse = zExtMsgAdapterRegisterOutputBody;
+
+export const zPostV0CityByCityNameExtmsgAdaptersActivateBody = zExtMsgAdapterActivateInputBody;
+
+export const zPostV0CityByCityNameExtmsgAdaptersActivateHeaders = z.object({
+    'X-GC-Request': z.string().min(1),
+    Authorization: z.string()
+});
+
+export const zPostV0CityByCityNameExtmsgAdaptersActivatePath = z.object({
+    cityName: z.string().min(1).regex(/\S/)
+});
+
+/**
+ * OK
+ */
+export const zPostV0CityByCityNameExtmsgAdaptersActivateResponse = zOkResponseBody;
 
 export const zPostV0CityByCityNameExtmsgBindBody = zExtMsgBindInputBody;
 

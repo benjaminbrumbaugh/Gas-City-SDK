@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/extmsg"
 	"github.com/gastownhall/gascity/internal/featureflags"
 	"github.com/gastownhall/gascity/internal/rollout"
 	"github.com/gastownhall/gascity/internal/sling"
@@ -63,6 +64,7 @@ type Server struct {
 	runCensusSource RunCensusSource
 
 	backgroundTasks sync.WaitGroup
+	newHTTPAdapter  func(string, string, extmsg.AdapterCapabilities) extmsg.TransportAdapter
 
 	// sessionLogSearchPaths overrides the default search paths for Claude
 	// session JSONL files. Nil means use worker.DefaultSearchPaths().
@@ -257,6 +259,9 @@ func newServer(state State, readOnly bool) *Server {
 		rigIdem:        newRigIdemIndex(),
 		webhookDedup:   newWebhookDedupCache(defaultWebhookDedupTTL),
 		webhookLimiter: newWebhookRateLimiter(),
+		newHTTPAdapter: func(name, callbackURL string, capabilities extmsg.AdapterCapabilities) extmsg.TransportAdapter {
+			return extmsg.NewHTTPAdapter(name, callbackURL, capabilities)
+		},
 	}
 	// Latch the rollout snapshot once: prefer the State's boot latch (the
 	// production controllerState); fall back to resolving from Config() for

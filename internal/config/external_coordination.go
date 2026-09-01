@@ -35,8 +35,16 @@ type ExternalCoordinationCapabilities struct {
 
 // ExternalCoordinationCapability is the runtime-visible hint an orchestrator can
 // use to discover when and how external coordination should be used.
+//
+// Available is deliberately a conjunction of Configured and Registered. The two
+// halves are reported separately because they fail for different reasons and
+// have different repairs: Configured=false is a city.toml problem, while
+// Configured=true with Registered=false means the bridge has not (re-)attached
+// its callback to this controller.
 type ExternalCoordinationCapability struct {
 	Available       bool                             `json:"available"`
+	Configured      bool                             `json:"configured"`
+	Registered      bool                             `json:"registered"`
 	LogicalRole     string                           `json:"logical_role"`
 	Target          string                           `json:"target"`
 	Adapter         string                           `json:"adapter"`
@@ -74,16 +82,33 @@ func (c ExternalCoordinationConfig) EffectiveSessionPolicy() string {
 	return "resume_or_create"
 }
 
+// Configured reports whether the table declares a complete delivery target. It
+// is configuration evidence only: nothing here proves a live adapter is
+// attached, and on its own it cannot carry a request.
+func (c ExternalCoordinationConfig) Configured() bool {
+	return c.Enabled && strings.TrimSpace(c.Target) != "" && strings.TrimSpace(c.Adapter) != ""
+}
+
 // Capability returns the compact external coordination description intended for diagnostics
 // and prompt assembly. It deliberately describes exceptional communication,
 // not a periodic status-reporting loop.
-func (c ExternalCoordinationConfig) Capability() ExternalCoordinationCapability {
+//
+// adapterRegistered must report whether a transport adapter is registered right
+// now for the configured (provider, account_id). It is a required argument
+// rather than a field the caller may forget: adapter registrations are
+// in-memory and do not survive a controller restart, so a signifier derived
+// from configuration alone announced available=true while the registry was
+// empty and everything enqueued in that window sat undelivered.
+func (c ExternalCoordinationConfig) Capability(adapterRegistered bool) ExternalCoordinationCapability {
 	triggers := append([]string(nil), c.Triggers...)
 	if len(triggers) == 0 {
 		triggers = []string{"outside_help", "escalation", "direct_request", "large_summary", "authorization", "ambiguity"}
 	}
+	configured := c.Configured()
 	return ExternalCoordinationCapability{
-		Available:       c.Enabled && strings.TrimSpace(c.Target) != "" && strings.TrimSpace(c.Adapter) != "",
+		Available:       configured && adapterRegistered,
+		Configured:      configured,
+		Registered:      adapterRegistered,
 		LogicalRole:     "external-coordination",
 		Target:          strings.TrimSpace(c.Target),
 		Adapter:         strings.TrimSpace(c.Adapter),

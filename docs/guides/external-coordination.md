@@ -111,10 +111,28 @@ the current replacement registration.
 
 ## CLI
 
-Use `gc coordination show` to inspect configuration,
+Use `gc coordination show` to inspect the signifier,
 `gc coordination request` to queue work, and `gc coordination list` to inspect
 durable request state. Routine patrol and health status stay in Gas City’s
 normal beads, events, and dashboard surfaces.
+
+### Reading the signifier
+
+`gc coordination show` reports three separate booleans, because configuration
+and reachability fail for different reasons and have different repairs:
+
+| Field | Meaning |
+|-------|---------|
+| `configured` | `[external_coordination]` is enabled and names a target and adapter. |
+| `registered` | A transport adapter is registered right now for the configured `(provider, account_id)`. |
+| `available` | `configured` **and** `registered` — a request enqueued now has something to carry it. |
+
+Adapter registrations are in-memory and do not survive a controller restart, so
+`configured: true` with `registered: false` is a real and recurring state: the
+city is set up correctly but its bridge has not re-attached its callback.
+Requests enqueued in that window are not lost — they stay durably queued and
+the registration drain delivers them once an adapter appears — but nothing is
+being delivered until then. Treat only `available: true` as ready.
 
 ## Hermes
 

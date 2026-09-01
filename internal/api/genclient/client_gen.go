@@ -1900,6 +1900,24 @@ type ExecutionStepStalledPayload struct {
 	SessionId  string  `json:"session_id"`
 }
 
+// ExtMsgAdapterActivateInputBody defines model for ExtMsgAdapterActivateInputBody.
+type ExtMsgAdapterActivateInputBody struct {
+	// AccountId Account ID.
+	AccountId string `json:"account_id"`
+
+	// Generation Exact registration generation.
+	Generation int64 `json:"generation"`
+
+	// Instance Exact registration instance.
+	Instance string `json:"instance"`
+
+	// Name Exact adapter name returned by registration.
+	Name string `json:"name"`
+
+	// Provider Provider name.
+	Provider string `json:"provider"`
+}
+
 // ExtMsgAdapterRegisterInputBody defines model for ExtMsgAdapterRegisterInputBody.
 type ExtMsgAdapterRegisterInputBody struct {
 	// AccountId Account ID.
@@ -2098,10 +2116,12 @@ type ExternalCoordinationCapability struct {
 	Available       bool                             `json:"available"`
 	Capabilities    ExternalCoordinationCapabilities `json:"capabilities"`
 	ConfigRevision  int64                            `json:"config_revision"`
+	Configured      bool                             `json:"configured"`
 	Delivery        string                           `json:"delivery"`
 	Instruction     string                           `json:"instruction"`
 	InterruptPolicy string                           `json:"interrupt_policy"`
 	LogicalRole     string                           `json:"logical_role"`
+	Registered      bool                             `json:"registered"`
 	SessionPolicy   string                           `json:"session_policy"`
 	Target          string                           `json:"target"`
 	Triggers        *[]string                        `json:"triggers"`
@@ -3430,14 +3450,15 @@ type RequestFailedPayloadOperation string
 
 // RequestRecord defines model for RequestRecord.
 type RequestRecord struct {
-	Attempt     int64      `json:"attempt"`
-	ClaimedAt   *time.Time `json:"claimed_at,omitempty"`
-	ClaimedBy   *string    `json:"claimed_by,omitempty"`
-	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
-	Error       *string    `json:"error,omitempty"`
-	Id          string     `json:"id"`
-	Request     Request    `json:"request"`
-	State       string     `json:"state"`
+	Attempt               int64      `json:"attempt"`
+	ClaimedAt             *time.Time `json:"claimed_at,omitempty"`
+	ClaimedBy             *string    `json:"claimed_by,omitempty"`
+	DeliveredAt           *time.Time `json:"delivered_at,omitempty"`
+	DeliveryIndeterminate *bool      `json:"delivery_indeterminate,omitempty"`
+	Error                 *string    `json:"error,omitempty"`
+	Id                    string     `json:"id"`
+	Request               Request    `json:"request"`
+	State                 string     `json:"state"`
 }
 
 // Response defines model for Response.
@@ -9457,6 +9478,15 @@ type RegisterExtmsgAdapterParams struct {
 	IdempotencyKey *string `json:"Idempotency-Key,omitempty"`
 }
 
+// PostV0CityByCityNameExtmsgAdaptersActivateParams defines parameters for PostV0CityByCityNameExtmsgAdaptersActivate.
+type PostV0CityByCityNameExtmsgAdaptersActivateParams struct {
+	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+	XGCRequest string `json:"X-GC-Request"`
+
+	// Authorization Bearer credential returned by the exact pending registration.
+	Authorization string `json:"Authorization"`
+}
+
 // PostV0CityByCityNameExtmsgBindParams defines parameters for PostV0CityByCityNameExtmsgBind.
 type PostV0CityByCityNameExtmsgBindParams struct {
 	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
@@ -10299,6 +10329,9 @@ type DeleteV0CityByCityNameExtmsgAdaptersJSONRequestBody = ExtMsgAdapterUnregist
 
 // RegisterExtmsgAdapterJSONRequestBody defines body for RegisterExtmsgAdapter for application/json ContentType.
 type RegisterExtmsgAdapterJSONRequestBody = ExtMsgAdapterRegisterInputBody
+
+// PostV0CityByCityNameExtmsgAdaptersActivateJSONRequestBody defines body for PostV0CityByCityNameExtmsgAdaptersActivate for application/json ContentType.
+type PostV0CityByCityNameExtmsgAdaptersActivateJSONRequestBody = ExtMsgAdapterActivateInputBody
 
 // PostV0CityByCityNameExtmsgBindJSONRequestBody defines body for PostV0CityByCityNameExtmsgBind for application/json ContentType.
 type PostV0CityByCityNameExtmsgBindJSONRequestBody = ExtMsgBindInputBody
@@ -19321,6 +19354,11 @@ type ClientInterface interface {
 
 	RegisterExtmsgAdapter(ctx context.Context, cityName string, params *RegisterExtmsgAdapterParams, body RegisterExtmsgAdapterJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// PostV0CityByCityNameExtmsgAdaptersActivateWithBody request with any body
+	PostV0CityByCityNameExtmsgAdaptersActivateWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameExtmsgAdaptersActivateParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostV0CityByCityNameExtmsgAdaptersActivate(ctx context.Context, cityName string, params *PostV0CityByCityNameExtmsgAdaptersActivateParams, body PostV0CityByCityNameExtmsgAdaptersActivateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// PostV0CityByCityNameExtmsgBindWithBody request with any body
 	PostV0CityByCityNameExtmsgBindWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameExtmsgBindParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -20582,6 +20620,30 @@ func (c *Client) RegisterExtmsgAdapterWithBody(ctx context.Context, cityName str
 
 func (c *Client) RegisterExtmsgAdapter(ctx context.Context, cityName string, params *RegisterExtmsgAdapterParams, body RegisterExtmsgAdapterJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewRegisterExtmsgAdapterRequest(c.Server, cityName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameExtmsgAdaptersActivateWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameExtmsgAdaptersActivateParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameExtmsgAdaptersActivateRequestWithBody(c.Server, cityName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameExtmsgAdaptersActivate(ctx context.Context, cityName string, params *PostV0CityByCityNameExtmsgAdaptersActivateParams, body PostV0CityByCityNameExtmsgAdaptersActivateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameExtmsgAdaptersActivateRequest(c.Server, cityName, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -25781,6 +25843,75 @@ func NewRegisterExtmsgAdapterRequestWithBody(server string, cityName string, par
 
 			req.Header.Set("Idempotency-Key", headerParam1)
 		}
+
+	}
+
+	return req, nil
+}
+
+// NewPostV0CityByCityNameExtmsgAdaptersActivateRequest calls the generic PostV0CityByCityNameExtmsgAdaptersActivate builder with application/json body
+func NewPostV0CityByCityNameExtmsgAdaptersActivateRequest(server string, cityName string, params *PostV0CityByCityNameExtmsgAdaptersActivateParams, body PostV0CityByCityNameExtmsgAdaptersActivateJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostV0CityByCityNameExtmsgAdaptersActivateRequestWithBody(server, cityName, params, "application/json", bodyReader)
+}
+
+// NewPostV0CityByCityNameExtmsgAdaptersActivateRequestWithBody generates requests for PostV0CityByCityNameExtmsgAdaptersActivate with any type of body
+func NewPostV0CityByCityNameExtmsgAdaptersActivateRequestWithBody(server string, cityName string, params *PostV0CityByCityNameExtmsgAdaptersActivateParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/extmsg/adapters/activate", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Request", headerParam0)
+
+		var headerParam1 string
+
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "Authorization", params.Authorization, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("Authorization", headerParam1)
 
 	}
 
@@ -33646,6 +33777,11 @@ type ClientWithResponsesInterface interface {
 
 	RegisterExtmsgAdapterWithResponse(ctx context.Context, cityName string, params *RegisterExtmsgAdapterParams, body RegisterExtmsgAdapterJSONRequestBody, reqEditors ...RequestEditorFn) (*RegisterExtmsgAdapterResponse, error)
 
+	// PostV0CityByCityNameExtmsgAdaptersActivateWithBodyWithResponse request with any body
+	PostV0CityByCityNameExtmsgAdaptersActivateWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameExtmsgAdaptersActivateParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameExtmsgAdaptersActivateResponse, error)
+
+	PostV0CityByCityNameExtmsgAdaptersActivateWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameExtmsgAdaptersActivateParams, body PostV0CityByCityNameExtmsgAdaptersActivateJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameExtmsgAdaptersActivateResponse, error)
+
 	// PostV0CityByCityNameExtmsgBindWithBodyWithResponse request with any body
 	PostV0CityByCityNameExtmsgBindWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameExtmsgBindParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameExtmsgBindResponse, error)
 
@@ -35514,6 +35650,35 @@ func (r RegisterExtmsgAdapterResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r RegisterExtmsgAdapterResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PostV0CityByCityNameExtmsgAdaptersActivateResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *OKResponseBody
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON401 *ErrorModel
+	ApplicationproblemJSON403 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r PostV0CityByCityNameExtmsgAdaptersActivateResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostV0CityByCityNameExtmsgAdaptersActivateResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -39393,6 +39558,23 @@ func (c *ClientWithResponses) RegisterExtmsgAdapterWithResponse(ctx context.Cont
 		return nil, err
 	}
 	return ParseRegisterExtmsgAdapterResponse(rsp)
+}
+
+// PostV0CityByCityNameExtmsgAdaptersActivateWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameExtmsgAdaptersActivateResponse
+func (c *ClientWithResponses) PostV0CityByCityNameExtmsgAdaptersActivateWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameExtmsgAdaptersActivateParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameExtmsgAdaptersActivateResponse, error) {
+	rsp, err := c.PostV0CityByCityNameExtmsgAdaptersActivateWithBody(ctx, cityName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameExtmsgAdaptersActivateResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostV0CityByCityNameExtmsgAdaptersActivateWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameExtmsgAdaptersActivateParams, body PostV0CityByCityNameExtmsgAdaptersActivateJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameExtmsgAdaptersActivateResponse, error) {
+	rsp, err := c.PostV0CityByCityNameExtmsgAdaptersActivate(ctx, cityName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameExtmsgAdaptersActivateResponse(rsp)
 }
 
 // PostV0CityByCityNameExtmsgBindWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameExtmsgBindResponse
@@ -43925,6 +44107,81 @@ func ParseRegisterExtmsgAdapterResponse(rsp *http.Response) (*RegisterExtmsgAdap
 			return nil, err
 		}
 		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostV0CityByCityNameExtmsgAdaptersActivateResponse parses an HTTP response from a PostV0CityByCityNameExtmsgAdaptersActivateWithResponse call
+func ParsePostV0CityByCityNameExtmsgAdaptersActivateResponse(rsp *http.Response) (*PostV0CityByCityNameExtmsgAdaptersActivateResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostV0CityByCityNameExtmsgAdaptersActivateResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest OKResponseBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest ErrorModel

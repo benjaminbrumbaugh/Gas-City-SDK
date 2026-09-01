@@ -1028,6 +1028,29 @@ export type ExecutionStepStalledPayload = {
     session_id: string;
 };
 
+export type ExtMsgAdapterActivateInputBody = {
+    /**
+     * Account ID.
+     */
+    account_id: string;
+    /**
+     * Exact registration generation.
+     */
+    generation: number;
+    /**
+     * Exact registration instance.
+     */
+    instance: string;
+    /**
+     * Exact adapter name returned by registration.
+     */
+    name: string;
+    /**
+     * Provider name.
+     */
+    provider: string;
+};
+
 export type ExtMsgAdapterRegisterInputBody = {
     /**
      * Account ID.
@@ -1288,10 +1311,12 @@ export type ExternalCoordinationCapability = {
     available: boolean;
     capabilities: ExternalCoordinationCapabilities;
     config_revision: number;
+    configured: boolean;
     delivery: string;
     instruction: string;
     interrupt_policy: string;
     logical_role: string;
+    registered: boolean;
     session_policy: string;
     target: string;
     triggers: Array<string> | null;
@@ -2867,6 +2892,7 @@ export type RequestRecord = {
     claimed_at?: string;
     claimed_by?: string;
     delivered_at?: string;
+    delivery_indeterminate?: boolean;
     error?: string;
     id: string;
     request: Request;
@@ -12883,6 +12909,70 @@ export type RegisterExtmsgAdapterResponses = {
 };
 
 export type RegisterExtmsgAdapterResponse = RegisterExtmsgAdapterResponses[keyof RegisterExtmsgAdapterResponses];
+
+export type PostV0CityByCityNameExtmsgAdaptersActivateData = {
+    body: ExtMsgAdapterActivateInputBody;
+    headers: {
+        /**
+         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+         */
+        'X-GC-Request': string;
+        /**
+         * Bearer credential returned by the exact pending registration.
+         */
+        Authorization: string;
+    };
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/extmsg/adapters/activate';
+};
+
+export type PostV0CityByCityNameExtmsgAdaptersActivateErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Unauthorized
+     */
+    401: ErrorModel;
+    /**
+     * Forbidden
+     */
+    403: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type PostV0CityByCityNameExtmsgAdaptersActivateError = PostV0CityByCityNameExtmsgAdaptersActivateErrors[keyof PostV0CityByCityNameExtmsgAdaptersActivateErrors];
+
+export type PostV0CityByCityNameExtmsgAdaptersActivateResponses = {
+    /**
+     * OK
+     */
+    200: OkResponseBody;
+};
+
+export type PostV0CityByCityNameExtmsgAdaptersActivateResponse = PostV0CityByCityNameExtmsgAdaptersActivateResponses[keyof PostV0CityByCityNameExtmsgAdaptersActivateResponses];
 
 export type PostV0CityByCityNameExtmsgBindData = {
     body: ExtMsgBindInputBody;

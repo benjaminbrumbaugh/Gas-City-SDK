@@ -48,9 +48,15 @@ func newExternalCoordinationShowCmd(stdout, _ io.Writer) *cobra.Command {
 			if jsonOutput {
 				return json.NewEncoder(stdout).Encode(capability)
 			}
-			_, _ = fmt.Fprintf(stdout, "available: %t\nrole: %s\ntarget: %s\nadapter: %s\nconfig revision: %d\ndelivery: %s\ninterrupt policy: %s\nsession policy: %s\n", capability.Available, capability.LogicalRole, capability.Target, capability.Adapter, capability.ConfigRevision, capability.Delivery, capability.InterruptPolicy, capability.SessionPolicy)
+			_, _ = fmt.Fprintf(stdout, "available: %t\nconfigured: %t\nregistered: %t\nrole: %s\ntarget: %s\nadapter: %s\nconfig revision: %d\ndelivery: %s\ninterrupt policy: %s\nsession policy: %s\n", capability.Available, capability.Configured, capability.Registered, capability.LogicalRole, capability.Target, capability.Adapter, capability.ConfigRevision, capability.Delivery, capability.InterruptPolicy, capability.SessionPolicy)
 			if capability.Triggers != nil {
 				_, _ = fmt.Fprintf(stdout, "triggers: %s\n", strings.Join(*capability.Triggers, ", "))
+			}
+			// Name the one failure an operator can act on. Configured but not
+			// registered is the state a controller restart leaves behind, and
+			// it looks identical to healthy in every field above.
+			if capability.Configured && !capability.Registered {
+				_, _ = fmt.Fprintf(stdout, "status: configured but unreachable -- no adapter is registered for this target; requests will stay queued until the bridge registers its callback\n")
 			}
 			_, _ = fmt.Fprintf(stdout, "instruction: %s\n", capability.Instruction)
 			return nil

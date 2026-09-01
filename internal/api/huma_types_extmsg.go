@@ -211,6 +211,21 @@ type ExtMsgAdapterRegisterOutput struct {
 	}
 }
 
+// ExtMsgAdapterActivateInput completes the two-step remote adapter handshake.
+// The credential is accepted only in the Authorization header and is never
+// persisted or returned again.
+type ExtMsgAdapterActivateInput struct {
+	CityScope
+	Authorization string `header:"Authorization" required:"true" doc:"Bearer credential returned by the exact pending registration."`
+	Body          struct {
+		Provider   string `json:"provider" minLength:"1" doc:"Provider name."`
+		AccountID  string `json:"account_id" minLength:"1" doc:"Account ID."`
+		Name       string `json:"name" minLength:"1" doc:"Exact adapter name returned by registration."`
+		Generation uint64 `json:"generation" minimum:"1" doc:"Exact registration generation."`
+		Instance   string `json:"instance" minLength:"1" doc:"Exact registration instance."`
+	}
+}
+
 // ExtMsgAdapterUnregisterInput is the Huma input for DELETE /v0/city/{cityName}/extmsg/adapters.
 type ExtMsgAdapterUnregisterInput struct {
 	CityScope
