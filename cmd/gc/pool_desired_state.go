@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
+	"log"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/agentutil"
@@ -10,6 +13,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
+	"github.com/gastownhall/gascity/internal/worktree"
 )
 
 // SessionRequest represents a single session the reconciler should start.
@@ -26,6 +30,14 @@ type SessionRequest struct {
 	WorkPack      string // pack route key from the work bead, when known
 	WorkWorkspace string // explicit pack workspace route key from the work bead, when known
 	WorkStoreRef  string // city or rig:<name> store reference for WorkBeadID when known
+	// WorktreeSpec is the single-owner evidence published by the provisioner.
+	// When present, the pool path verifies it before publishing work_dir on a
+	// session bead; a mismatch fails the whole atomic metadata update.
+	WorktreeSpec *worktree.Spec
+	// WorktreeError carries incomplete/conflicting worktree evidence discovered
+	// while building demand. The realization path fails closed before creating
+	// or updating a session bead.
+	WorktreeError string
 	// BrainParentSID is gc.brain_parent_sid from the driving work bead, when
 	// set: the parent session to fork this launch off of (warm-arm fork-launch).
 	BrainParentSID string
@@ -43,6 +55,101 @@ func beadPriority(b beads.Bead) int {
 		return *b.Priority
 	}
 	return 0
+}
+
+// legacyWorkDirNoticeSeen deduplicates the unmanaged-workspace notice keyed by
+// work bead ID. worktreeSpecForBead runs for every ready bead on every
+// scale-check tick and nothing backfills ownership metadata onto beads that
+// never published it, so an unguarded log line would repeat for the life of
+// the process.
+var legacyWorkDirNoticeSeen sync.Map // work bead ID -> struct{}
+
+// worktreeSpecForBead reconstructs the exact single-owner verification input
+// from metadata published after gc worktree ensure succeeds. A work_dir with
+// incomplete or conflicting evidence is an error, never permission to launch
+// a session into an unverified directory.
+func worktreeSpecForBead(bead beads.Bead, storeRef string) (*worktree.Spec, error) {
+	canonicalPath := strings.TrimSpace(bead.Metadata[beadmeta.WorkDirMetadataKey])
+	legacyPath := strings.TrimSpace(bead.Metadata[beadmeta.LegacyWorkDirMetadataKey])
+	if canonicalPath != "" && legacyPath != "" && canonicalPath != legacyPath {
+		return nil, fmt.Errorf("work bead %s has conflicting %s=%q and %s=%q",
+			bead.ID, beadmeta.WorkDirMetadataKey, canonicalPath, beadmeta.LegacyWorkDirMetadataKey, legacyPath)
+	}
+	path := canonicalPath
+	pathKey := beadmeta.WorkDirMetadataKey
+	if path == "" {
+		path = legacyPath
+		pathKey = beadmeta.LegacyWorkDirMetadataKey
+	}
+	if path == "" {
+		return nil, nil
+	}
+	values := []struct {
+		key   string
+		value string
+	}{
+		{beadmeta.WorktreeRepoMetadataKey, bead.Metadata[beadmeta.WorktreeRepoMetadataKey]},
+		{beadmeta.WorktreeRootMetadataKey, bead.Metadata[beadmeta.WorktreeRootMetadataKey]},
+		{beadmeta.WorkBranchMetadataKey, bead.Metadata[beadmeta.WorkBranchMetadataKey]},
+		{beadmeta.WorktreeBaseRefMetadataKey, bead.Metadata[beadmeta.WorktreeBaseRefMetadataKey]},
+		{beadmeta.WorktreeBaseSHAMetadataKey, bead.Metadata[beadmeta.WorktreeBaseSHAMetadataKey]},
+		{beadmeta.WorktreeCreatorMetadataKey, bead.Metadata[beadmeta.WorktreeCreatorMetadataKey]},
+		{beadmeta.WorktreeOwnerMetadataKey, bead.Metadata[beadmeta.WorktreeOwnerMetadataKey]},
+		{beadmeta.WorktreeGenerationMetadataKey, bead.Metadata[beadmeta.WorktreeGenerationMetadataKey]},
+		{beadmeta.WorktreeLifecycleMetadataKey, bead.Metadata[beadmeta.WorktreeLifecycleMetadataKey]},
+	}
+	missing := make([]string, 0, len(values))
+	for _, item := range values {
+		if strings.TrimSpace(item.value) == "" {
+			missing = append(missing, item.key)
+		}
+	}
+	if len(missing) == len(values) {
+		// A bead carrying work_dir without any ownership evidence is not
+		// incomplete evidence -- it never claimed to publish any. Recipe steps
+		// are still minted this way (stampDrainItemRecipe in
+		// internal/dispatch/drain.go copies both work_dir spellings and none
+		// of the nine ownership keys), so treat it as an unmanaged workspace
+		// and let the seat spawn as it always did, instead of erroring it into
+		// permanent starvation.
+		if _, dup := legacyWorkDirNoticeSeen.LoadOrStore(bead.ID, struct{}{}); !dup {
+			log.Printf("worktreeSpecForBead: work bead %s has %s=%q with no worktree ownership metadata; treating as unmanaged",
+				bead.ID, pathKey, path)
+		}
+		return nil, nil
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("work bead %s has %s=%q but is missing %s",
+			bead.ID, beadmeta.WorkDirMetadataKey, path, missing[0])
+	}
+	// The bead's own gc.root_store_ref is the canonical spelling
+	// ("city:<name>", "rig:<name>") and is what the creating side recorded in
+	// the workspace provenance. The caller's storeRef is a probe shorthand
+	// ("city"), so verification against durable provenance compares unequal
+	// strings and refuses a workspace that is in fact ours. Prefer the bead's
+	// value and keep the shorthand only as a fallback for beads that carry no
+	// canonical ref.
+	resolvedStoreRef := strings.TrimSpace(bead.Metadata[beadmeta.RootStoreRefMetadataKey])
+	if resolvedStoreRef == "" {
+		resolvedStoreRef = strings.TrimSpace(storeRef)
+	}
+	if resolvedStoreRef == "" {
+		return nil, fmt.Errorf("work bead %s has %s=%q but no store reference", bead.ID, beadmeta.WorkDirMetadataKey, path)
+	}
+	return &worktree.Spec{
+		RepoDir:    strings.TrimSpace(bead.Metadata[beadmeta.WorktreeRepoMetadataKey]),
+		Root:       strings.TrimSpace(bead.Metadata[beadmeta.WorktreeRootMetadataKey]),
+		Path:       path,
+		Branch:     strings.TrimSpace(bead.Metadata[beadmeta.WorkBranchMetadataKey]),
+		Base:       strings.TrimSpace(bead.Metadata[beadmeta.WorktreeBaseRefMetadataKey]),
+		BaseSHA:    strings.TrimSpace(bead.Metadata[beadmeta.WorktreeBaseSHAMetadataKey]),
+		BeadID:     strings.TrimSpace(bead.ID),
+		StoreRef:   resolvedStoreRef,
+		Creator:    strings.TrimSpace(bead.Metadata[beadmeta.WorktreeCreatorMetadataKey]),
+		Owner:      strings.TrimSpace(bead.Metadata[beadmeta.WorktreeOwnerMetadataKey]),
+		Generation: strings.TrimSpace(bead.Metadata[beadmeta.WorktreeGenerationMetadataKey]),
+		Lifecycle:  strings.TrimSpace(bead.Metadata[beadmeta.WorktreeLifecycleMetadataKey]),
+	}, nil
 }
 
 // PoolDesiredState holds the desired state for a single agent template.
@@ -444,6 +551,8 @@ func computePoolDesiredStatesAt(
 			workWorkspace := ""
 			workStoreRef := ""
 			workParentSID := ""
+			var worktreeSpec *worktree.Spec
+			worktreeError := ""
 			if len(residualWorkBeadIDs) > j {
 				workBeadID = residualWorkBeadIDs[j]
 				if demand.Titles != nil {
@@ -461,6 +570,12 @@ func computePoolDesiredStatesAt(
 				if demand.ParentSIDs != nil {
 					workParentSID = strings.TrimSpace(demand.ParentSIDs[workBeadID])
 				}
+				if demand.WorktreeSpecs != nil {
+					worktreeSpec = demand.WorktreeSpecs[workBeadID]
+				}
+				if demand.WorktreeErrors != nil {
+					worktreeError = strings.TrimSpace(demand.WorktreeErrors[workBeadID])
+				}
 			}
 			req := SessionRequest{
 				Template:       template,
@@ -471,6 +586,8 @@ func computePoolDesiredStatesAt(
 				WorkWorkspace:  workWorkspace,
 				WorkStoreRef:   workStoreRef,
 				BrainParentSID: workParentSID,
+				WorktreeSpec:   worktreeSpec,
+				WorktreeError:  worktreeError,
 			}
 			allRequests = append(allRequests, req)
 			usage.accept(req, limits)
@@ -539,6 +656,17 @@ func requestWithScaleDemandProvenance(request SessionRequest, demand scaleCheckD
 	request.WorkWorkspace = strings.TrimSpace(demand.Workspaces[workBeadID])
 	request.WorkStoreRef = strings.TrimSpace(demand.StoreRefs[workBeadID])
 	request.BrainParentSID = strings.TrimSpace(demand.ParentSIDs[workBeadID])
+	// Worktree evidence is per-bead like every field above it. Carrying the
+	// previous bead's spec into a rebound request would hand the session a
+	// workspace verified for other work.
+	request.WorktreeSpec = nil
+	request.WorktreeError = ""
+	if demand.WorktreeSpecs != nil {
+		request.WorktreeSpec = demand.WorktreeSpecs[workBeadID]
+	}
+	if demand.WorktreeErrors != nil {
+		request.WorktreeError = strings.TrimSpace(demand.WorktreeErrors[workBeadID])
+	}
 	return request
 }
 

@@ -226,7 +226,10 @@
               "routing-outcomes",
               "coordination-list",
               "coordination-request",
-              "coordination-show"
+              "coordination-show",
+              "worktree-cleanup",
+              "worktree-ensure",
+              "worktree-verify"
             ]
           },
           "event_id": {

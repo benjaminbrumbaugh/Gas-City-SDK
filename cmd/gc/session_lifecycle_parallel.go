@@ -217,8 +217,11 @@ type preparedStart struct {
 	liveHash      string
 	provisionHash string
 	launchHash    string
-	// promptDelivered reports whether THIS incarnation actually delivers the
-	// rendered startup prompt (S19 confirmation signal 1). It is the pure
+	// promptDelivered reports whether a delivery mechanism was selected for
+	// THIS incarnation's rendered startup prompt (S19 confirmation signal 1)
+	// — a pure routing decision, not I/O: it means delivery was
+	// selected/attempted, not that the runtime received or the agent
+	// consumed the prompt (gastownhall/gascity#5236). It is the pure
 	// promptDelivery decision AND-ed with the fresh-launch condition, i.e. the
 	// exact complement of the resume override below — so a resume that swaps in
 	// restartPromptNudge and re-sets GC_STARTUP_PROMPT_DELIVERED for hooks stamps
@@ -964,7 +967,10 @@ func buildPreparedStartWithWorkDirResolver(
 	workDirResolver taskWorkDirResolver,
 ) (*preparedStart, sessionpkg.Info, error) {
 	tp := candidate.tp
-	agentCfg, delivery := templateParamsToConfigWithDelivery(tp)
+	agentCfg, delivery, err := templateParamsToConfigWithDelivery(tp)
+	if err != nil {
+		return nil, candidate.info, err
+	}
 
 	// Apply template_overrides from bead metadata. These are per-session
 	// schema option overrides (e.g., {"model":"opus","effort":"high"}) that
@@ -1288,6 +1294,17 @@ func resolvePreparedTaskWorkDir(
 	store beads.Store,
 	workDirResolver taskWorkDirResolver,
 ) string {
+	// Prepared drain items only: the item step's copied metadata can still name
+	// the launcher checkout before prepare-worktree runs. Deliberately NOT the
+	// full resolveTaskBeadWorkDir chain — that would put the trigger bead ahead
+	// of the snapshot resolver for every pool session.
+	if triggerID := strings.TrimSpace(candidate.info.TriggerBeadID); triggerID != "" && store != nil {
+		if trigger, err := store.Get(triggerID); err == nil {
+			if workDir := resolveDrainSourceWorkDir(cityPath, store, trigger); workDir != "" {
+				return workDir
+			}
+		}
+	}
 	if workDirResolver != nil {
 		if workDir := workDirResolver(candidate, cfg); workDir != "" {
 			return workDir
