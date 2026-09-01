@@ -25,6 +25,7 @@ import (
 	"github.com/gastownhall/gascity/internal/storeref"
 	"github.com/gastownhall/gascity/internal/suspensionstate"
 	workdirutil "github.com/gastownhall/gascity/internal/workdir"
+	"github.com/gastownhall/gascity/internal/worktree"
 )
 
 // storeScopedBeadKey identifies an assigned-work bead by its store ref and ID.
@@ -175,12 +176,14 @@ type defaultScaleCheckTarget struct {
 }
 
 type scaleCheckDemand struct {
-	Count       int
-	WorkBeadIDs []string
-	Titles      map[string]string
-	Packs       map[string]string
-	Workspaces  map[string]string
-	StoreRefs   map[string]string
+	Count          int
+	WorkBeadIDs    []string
+	Titles         map[string]string
+	Packs          map[string]string
+	Workspaces     map[string]string
+	StoreRefs      map[string]string
+	WorktreeSpecs  map[string]*worktree.Spec
+	WorktreeErrors map[string]string
 	// ParentSIDs maps work-bead id → gc.brain_parent_sid, carrying the fork
 	// parent through to the new pool session bead so the launch path can fork
 	// the warm arm off its pre-built brain.
@@ -791,18 +794,18 @@ func buildDesiredStateWithSessionBeadsAt(
 		// correct, and any bead missed by a partial query simply gets stamped
 		// on a later tick.
 		stampRunSessionIdentity(assignedWorkBeads, assignedWorkStores, sessionBeads, stderr)
-		// Re-home work pre-assigned to a legacy bound form of a now-unbound pool
-		// agent onto the canonical identity, so the canonical session the
-		// awake/scale accounting wakes for it can actually surface and claim it
-		// (the agent-side work_query/claim path matches identities by raw string).
+		// Re-home work pre-assigned to a legacy template identity onto the
+		// configured canonical identity, so the canonical session the awake/scale
+		// accounting wakes for it can actually surface and claim it (the
+		// agent-side work_query/claim path matches identities by raw string).
 		canonicalizeLegacyBoundAssignedWork(cfg, assignedWorkBeads, assignedWorkStores, sessionBeads, stderr)
-		// Re-home open, unassigned work still routed to a legacy bound form of a
-		// now-unbound pool agent. This is the demand/claim half of the migration:
-		// empty-assignee open work never enters the assigned-work collection above,
-		// and the canonical pool-demand probe below (defaultScaleCheckCounts) plus
-		// the worker work_query/claim path match gc.routed_to canonically by raw
-		// string, so the route must be canonicalized before demand is counted or
-		// the cold pool never wakes for it.
+		// Re-home open, unassigned work still routed to a legacy template identity.
+		// This is the demand/claim half of the migration: empty-assignee open work
+		// never enters the assigned-work collection above, and the canonical
+		// pool-demand probe below (defaultScaleCheckCounts) plus the worker
+		// work_query/claim path match gc.routed_to canonically by raw string, so
+		// the route must be canonicalized before demand is counted or the cold
+		// pool never wakes for it.
 		subPhaseStart = time.Now()
 		var unassignedRoutedPartial bool
 		unassignedRoutedBeads, unassignedRoutedStores, unassignedRoutedStoreRefs, unassignedRoutedPartial = collectOpenUnassignedRoutedWork(cityPath, cfg, store, rigStores, suspendedRigPaths, stderr)
@@ -1891,6 +1894,18 @@ func defaultScaleCheckCountsAndDemand(cfg *config.City, targets []defaultScaleCh
 				entry.StoreRefs = make(map[string]string)
 			}
 			entry.StoreRefs[b.ID] = group.storeKey
+			spec, specErr := worktreeSpecForBead(b, group.storeKey)
+			if specErr != nil {
+				if entry.WorktreeErrors == nil {
+					entry.WorktreeErrors = make(map[string]string)
+				}
+				entry.WorktreeErrors[b.ID] = specErr.Error()
+			} else if spec != nil {
+				if entry.WorktreeSpecs == nil {
+					entry.WorktreeSpecs = make(map[string]*worktree.Spec)
+				}
+				entry.WorktreeSpecs[b.ID] = spec
+			}
 			if parentSID := strings.TrimSpace(b.Metadata[beadmeta.BrainParentSIDMetadataKey]); parentSID != "" {
 				if entry.ParentSIDs == nil {
 					entry.ParentSIDs = make(map[string]string)
@@ -1926,6 +1941,12 @@ func mergeScaleCheckDemand(existing, incoming scaleCheckDemand, count int) scale
 	if existing.ParentSIDs == nil && len(incoming.ParentSIDs) > 0 {
 		existing.ParentSIDs = make(map[string]string, len(incoming.ParentSIDs))
 	}
+	if existing.WorktreeSpecs == nil && len(incoming.WorktreeSpecs) > 0 {
+		existing.WorktreeSpecs = make(map[string]*worktree.Spec, len(incoming.WorktreeSpecs))
+	}
+	if existing.WorktreeErrors == nil && len(incoming.WorktreeErrors) > 0 {
+		existing.WorktreeErrors = make(map[string]string, len(incoming.WorktreeErrors))
+	}
 	for _, id := range incoming.WorkBeadIDs[:limit] {
 		if strings.TrimSpace(id) == "" {
 			continue
@@ -1946,6 +1967,16 @@ func mergeScaleCheckDemand(existing, incoming scaleCheckDemand, count int) scale
 		if incoming.ParentSIDs != nil {
 			if sid := incoming.ParentSIDs[id]; sid != "" {
 				existing.ParentSIDs[id] = sid
+			}
+		}
+		if incoming.WorktreeSpecs != nil {
+			if spec := incoming.WorktreeSpecs[id]; spec != nil {
+				existing.WorktreeSpecs[id] = spec
+			}
+		}
+		if incoming.WorktreeErrors != nil {
+			if worktreeErr := incoming.WorktreeErrors[id]; worktreeErr != "" {
+				existing.WorktreeErrors[id] = worktreeErr
 			}
 		}
 	}
@@ -3192,6 +3223,13 @@ func realizePoolDesiredSessionsAt(
 		// (poolTriggerMetadata via selectOrPlanPoolSessionBead), which also
 		// resolves the work dir off the base agent plus the per-slot name.
 		if bound, err := bindPoolSessionTriggerBead(bp, cfgAgent, qualifiedInstance, sbInfo, item.request); err != nil {
+			if errors.Is(err, errPoolTriggerWorktreeEvidence) {
+				// Unusable ownership evidence is not a partial bind: a reused
+				// session left in desired would restart against its previous
+				// binding's work dir.
+				fmt.Fprintf(stderr, "buildDesiredState: pool %q session %s trigger bead %s: %v (skipping)\n", qualifiedName, sbInfo.ID, item.request.WorkBeadID, err) //nolint:errcheck
+				continue
+			}
 			fmt.Fprintf(stderr, "buildDesiredState: pool %q session %s trigger bead %s: %v (continuing without trigger env)\n", qualifiedName, sbInfo.ID, item.request.WorkBeadID, err) //nolint:errcheck
 		} else {
 			sbInfo = bound
@@ -3333,7 +3371,10 @@ func bindPoolSessionTriggerBead(bp *agentBuildParams, cfgAgent *config.Agent, qu
 	if info.ID == "" {
 		return info, nil
 	}
-	workDir := poolTriggerWorkDir(bp, cfgAgent, qualifiedName, request)
+	workDir, err := verifiedPoolTriggerWorkDir(bp, cfgAgent, qualifiedName, request)
+	if err != nil {
+		return info, err
+	}
 	patch := computePoolTriggerBindingPatch(info, request, workDir)
 	if len(patch) == 0 {
 		return info, nil
@@ -3343,9 +3384,20 @@ func bindPoolSessionTriggerBead(bp *agentBuildParams, cfgAgent *config.Agent, qu
 	}
 	boundInfo, err := sessionFrontDoor(bp.beadStore).UpdateMetadataInfo(info, patch)
 	if err != nil {
-		return info, err
+		return info, bindWriteFailure(request, err)
 	}
 	return boundInfo, nil
+}
+
+// bindWriteFailure marks a failed binding write on a managed-worktree
+// request. The verified workspace never reached the session bead, so the
+// stamped binding still names the previous bead's work dir and the caller
+// must skip the item rather than reuse it.
+func bindWriteFailure(request SessionRequest, err error) error {
+	if request.WorktreeSpec == nil {
+		return err
+	}
+	return fmt.Errorf("%w: binding write failed: %w", errPoolTriggerWorktreeEvidence, err)
 }
 
 // namedTriggerRefIsSameStore reports whether a named session's stamped
@@ -3430,11 +3482,73 @@ func bindNamedSessionTriggerBead(store beads.Store, info session.Info, cityName 
 	return sessionFrontDoor(store).UpdateMetadataInfo(info, patch)
 }
 
+// errPoolTriggerWorktreeEvidence marks a bind failure caused by unusable
+// worktree ownership evidence. The caller must skip such an item rather than
+// continue without trigger env: continuing would restart a reused session
+// against whatever work dir its previous binding left behind.
+var errPoolTriggerWorktreeEvidence = errors.New("pool trigger worktree evidence")
+
+func verifiedPoolTriggerWorkDir(bp *agentBuildParams, cfgAgent *config.Agent, qualifiedName string, request SessionRequest) (string, error) {
+	if strings.TrimSpace(request.WorktreeError) != "" {
+		return "", fmt.Errorf("%w invalid: %s", errPoolTriggerWorktreeEvidence, request.WorktreeError)
+	}
+	if request.WorktreeSpec == nil {
+		return poolTriggerWorkDir(bp, cfgAgent, qualifiedName, request), nil
+	}
+	spec := *request.WorktreeSpec
+	workID := strings.TrimSpace(request.WorkBeadID)
+	if workID == "" || strings.TrimSpace(spec.BeadID) != workID {
+		return "", fmt.Errorf("%w: bead %q does not match request bead %q", errPoolTriggerWorktreeEvidence, spec.BeadID, workID)
+	}
+	storeRef := strings.TrimSpace(request.WorkStoreRef)
+	if storeRef != "" && canonicalEvidenceStoreRef(spec.StoreRef) != canonicalEvidenceStoreRef(storeRef) {
+		return "", fmt.Errorf("%w: store %q does not match request store %q", errPoolTriggerWorktreeEvidence, spec.StoreRef, storeRef)
+	}
+	report, err := worktree.Verify(spec)
+	if err != nil {
+		return "", fmt.Errorf("%w: verification failed: %w", errPoolTriggerWorktreeEvidence, err)
+	}
+	return report.Path, nil
+}
+
+// canonicalEvidenceStoreRef collapses the spellings one store answers to, so
+// the evidence guard can compare a request against workspace provenance. The
+// two sides speak different vocabularies: demand records a probe shorthand
+// ("city", or a bare rig name from the cold-wake probe's activeStores) while
+// the worktree spec carries the bead's canonical gc.root_store_ref
+// ("city:<name>", "rig:<name>"). Comparing those literally refuses a workspace
+// that is in fact ours. Collapsing them keeps the cross-store guard closed:
+// two different rigs still never compare equal.
+func canonicalEvidenceStoreRef(storeRef string) string {
+	storeRef = strings.TrimSpace(storeRef)
+	switch {
+	case storeRef == "":
+		return ""
+	case storeRef == "city", strings.HasPrefix(storeRef, "city:"), storeref.IsClassRef(storeRef):
+		return "city"
+	case strings.HasPrefix(storeRef, "rig:"):
+		return "rig:" + strings.TrimSpace(strings.TrimPrefix(storeRef, "rig:"))
+	default:
+		// The only bare names in the demand vocabulary are rig names.
+		//
+		// A rig literally named "city" is ambiguous here, because the city
+		// store's own probe ref is the bare string "city". That ambiguity is
+		// older and wider than this guard: the same collision already exists
+		// in every demand key built from the probe vocabulary. Nothing is
+		// reserved at config validation. This guard resolves it fail-closed,
+		// refusing the workspace rather than binding a session to a store it
+		// cannot prove it owns.
+		return "rig:" + storeRef
+	}
+}
+
 func poolTriggerWorkDir(bp *agentBuildParams, cfgAgent *config.Agent, qualifiedName string, request SessionRequest) string {
 	if bp == nil || cfgAgent == nil || strings.TrimSpace(request.WorkBeadID) == "" {
 		return ""
 	}
-	base, err := resolveConfiguredWorkDir(bp.cityPath, bp.cityName, qualifiedName, cfgAgent, bp.rigs)
+	// Pure path computation: this feeds a metadata patch, so it must never
+	// create directories (gc-r9fx dry-run purity).
+	base, err := resolveConfiguredWorkDirPath(bp.cityPath, bp.cityName, qualifiedName, cfgAgent, bp.rigs)
 	if err != nil || strings.TrimSpace(base) == "" {
 		return ""
 	}
@@ -4185,7 +4299,11 @@ func selectOrPlanPoolSessionBead(
 		return session.Info{}, 0, nil, err
 	}
 	_, qualifiedInstance, poolSlot := poolDesiredRequestIdentity(cfgAgent, slot)
-	metadata := poolTriggerMetadata(bp, cfgAgent, qualifiedInstance, request)
+	metadata, err := poolTriggerMetadata(bp, cfgAgent, qualifiedInstance, request)
+	if err != nil {
+		delete(usedSlots, slot)
+		return session.Info{}, 0, nil, err
+	}
 
 	if bp.poolScaleCheckPartialTemplates[template] {
 		delete(usedSlots, slot)
@@ -4421,10 +4539,10 @@ func claimFreshPoolSlotInfo(bp *agentBuildParams, cfgAgent *config.Agent, usedSl
 	return 0, fmt.Errorf("%w: pool template %q has no free concrete slot", errPoolSessionNameUnavailable, cfgAgent.QualifiedName())
 }
 
-func poolTriggerMetadata(bp *agentBuildParams, cfgAgent *config.Agent, qualifiedName string, request SessionRequest) map[string]string {
+func poolTriggerMetadata(bp *agentBuildParams, cfgAgent *config.Agent, qualifiedName string, request SessionRequest) (map[string]string, error) {
 	workID := strings.TrimSpace(request.WorkBeadID)
 	if workID == "" {
-		return nil
+		return nil, nil
 	}
 	metadata := map[string]string{
 		beadmeta.TriggerBeadIDMetadataKey: workID,
@@ -4441,11 +4559,15 @@ func poolTriggerMetadata(bp *agentBuildParams, cfgAgent *config.Agent, qualified
 	if workspace := packWorkspaceSlug(request); workspace != "" {
 		metadata[beadmeta.PackWorkspaceMetadataKey] = workspace
 	}
-	if workDir := poolTriggerWorkDir(bp, cfgAgent, qualifiedName, request); workDir != "" {
+	workDir, err := verifiedPoolTriggerWorkDir(bp, cfgAgent, qualifiedName, request)
+	if err != nil {
+		return nil, err
+	}
+	if workDir != "" {
 		metadata[beadmeta.WorkDirMetadataKey] = workDir
 		metadata[beadmeta.LegacyWorkDirMetadataKey] = workDir
 	}
-	return metadata
+	return metadata, nil
 }
 
 // executePlannedPoolSessionBeadCreate materializes a pool session bead from a
@@ -4895,19 +5017,21 @@ func stampRunRootFromStep(store beads.Store, step beads.Bead, sessionName, workD
 }
 
 // canonicalizeLegacyBoundAssignedWork re-homes the Assignee and gc.routed_to of
-// actionable pool work that is pre-assigned to a legacy bound form of a
-// configured unbound pool agent (e.g. "dir/binding.name") to that agent's
-// current canonical identity ("dir/name").
+// actionable pool work that is pre-assigned to a legacy template identity to
+// that agent's current canonical identity. It handles both legacy bound forms
+// for a now-unbound agent (e.g. "dir/binding.name" -> "dir/name") and legacy
+// unbound forms for a now-binding-qualified import (e.g.
+// "dir/name" -> "dir/binding.name").
 //
-// Why: after a bound→unbound agent migration, the awake/scale accounting wakes
-// a canonical pool session for work persisted under the legacy bound identity
-// (it normalizes template identities), but the woken session's work_query and
+// Why: after a binding-prefix migration, the awake/scale accounting wakes a
+// canonical pool session for work persisted under the legacy identity (it
+// normalizes template identities), but the woken session's work_query and
 // `gc hook --claim` path match assignees and routes by raw string. A canonical
-// session can derive neither the old binding name nor the legacy assignee, so
-// the triggering bead would surface to no one and stay unclaimed. Re-homing the
-// persisted identity to canonical makes the bead behave exactly like ordinary
-// canonical pool work, which the existing surface/claim machinery already
-// resumes — closing the agent-side half of the migration recovery loop.
+// session cannot derive the old spelling, so the triggering bead would surface
+// to no one and stay unclaimed. Re-homing the persisted identity to canonical
+// makes the bead behave exactly like ordinary canonical pool work, which the
+// existing surface/claim machinery already resumes — closing the agent-side half
+// of the migration recovery loop.
 //
 // The live-session guard preserves the resume tier: work a still-running
 // session already owns under the legacy identity is left untouched so its own
@@ -4979,18 +5103,19 @@ func canonicalizeLegacyBoundAssignedWork(cfg *config.City, workBeads []beads.Bea
 }
 
 // canonicalizeLegacyBoundUnassignedRoutedWork rewrites the gc.routed_to of open,
-// unassigned pool work that is still routed to the legacy bound form of a
-// now-unbound pool agent ("dir/binding.name") onto the agent's current canonical
-// identity ("dir/name").
+// unassigned pool work that is still routed to a legacy template identity onto
+// the agent's current canonical identity. It handles both legacy bound forms for
+// a now-unbound agent ("dir/binding.name" -> "dir/name") and legacy unbound
+// forms for a now-binding-qualified import ("dir/name" -> "dir/binding.name").
 //
-// This closes the demand/claim half of the bound→unbound migration that the
-// assignee-keyed canonicalizeLegacyBoundAssignedWork cannot reach: open work with
-// an empty assignee never enters the assigned-work collection, and the canonical
+// This closes the demand/claim half of the migration that the assignee-keyed
+// canonicalizeLegacyBoundAssignedWork cannot reach: open work with an empty
+// assignee never enters the assigned-work collection, and the canonical
 // pool-demand probe (EffectivePoolDemandQuery), the worker work_query
 // (EffectiveWorkQuery Tier 3), and the claim predicate (hookClaimMatchesRoute)
 // all match gc.routed_to against the canonical target by raw string. A bead still
-// routed to "dir/binding.name" is therefore invisible to the canonical "dir/name"
-// pool — it neither contributes scale demand nor can be claimed — so migration-era
+// routed to the legacy spelling is therefore invisible to the canonical pool —
+// it neither contributes scale demand nor can be claimed — so migration-era
 // ready work stays stuck until its route is canonicalized. Rewriting the route in
 // place lets every existing canonical-only path surface it, keeping the legacy
 // awareness confined to this migration pass instead of spread across the demand,
@@ -5000,10 +5125,9 @@ func canonicalizeLegacyBoundAssignedWork(cfg *config.City, workBeads []beads.Bea
 // unassigned work has no live owner to strand, so rewriting its route can only
 // make it discoverable. Idempotent by design: it writes only when the canonical
 // identity differs from the persisted route, so steady-state reconciles perform
-// no writes, and a route that is already canonical, resolves to no configured
-// agent, or still matches a configured bound agent is left untouched. A write
-// failure is logged and skipped — recovery is best-effort and must never block
-// reconciliation.
+// no writes, and a route that is already canonical or resolves to no configured
+// agent is left untouched. A write failure is logged and skipped — recovery is
+// best-effort and must never block reconciliation.
 func canonicalizeLegacyBoundUnassignedRoutedWork(cfg *config.City, workBeads []beads.Bead, workStores []beads.Store, stderr io.Writer) {
 	if cfg == nil || len(workBeads) != len(workStores) {
 		return
@@ -5020,14 +5144,12 @@ func canonicalizeLegacyBoundUnassignedRoutedWork(cfg *config.City, workBeads []b
 		if routedTo == "" {
 			continue
 		}
-		// Cheap pre-filter: a legacy bound form is "dir/binding.name", so only a
-		// route whose local segment carries the binding-separator dot can be one.
-		// Canonical unbound routes ("dir/name") skip the per-bead agent scan in
-		// normalizeAgentTemplateIdentity, keeping the steady-state cost off the
-		// full open-routed backlog.
-		if _, local := config.ParseQualifiedName(routedTo); !strings.Contains(local, ".") {
-			continue
-		}
+		// No cheap pre-filter here: the import direction's legacy form is a bare
+		// "dir/name" with no binding-separator dot to key on, so every open routed
+		// bead must reach normalizeAgentTemplateIdentity. The former dot filter kept
+		// the per-bead agent scan off the steady-state backlog; if that cost bites,
+		// narrow it by config shape (any agent with a BindingName) rather than by
+		// route spelling.
 		canonicalRouted := normalizeAgentTemplateIdentity(cfg, routedTo)
 		if canonicalRouted == "" || canonicalRouted == routedTo {
 			continue

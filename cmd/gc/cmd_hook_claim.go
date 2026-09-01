@@ -83,7 +83,7 @@ var hookClaimNonTurnEnvMarkers = []string{
 	"GC_HOOK_EVENT_NAME",
 }
 
-var hookClaimCommandRunnerWithEnvContext = beads.ExecCommandRunnerWithEnvContext
+var hookClaimCommandRunnerWithEnvContext = beads.ExecCommandRunnerWithExactEnvContext
 
 // hookClaimNonTurnMarker returns the first non-turn marker present in env, or ""
 // when this invocation looks like a real agent turn.
@@ -1921,6 +1921,13 @@ func hookClaimBdStoreContext(ctx context.Context, dir string, env []string, acto
 	return beads.NewBdStore(dir, hookClaimCommandRunnerWithEnvContext(ctx, hookClaimEnvMap(env, dir, actor)))
 }
 
+// hookClaimEnvMap projects the query environment into the exact environment the
+// claim mutation runs in. Because hookClaimCommandRunnerWithEnvContext REPLACES
+// the child environment rather than layering onto the parent, whatever this
+// returns is all the child bd sees: a nil env yields no BEADS_DIR, leaving the
+// child to fall back to cwd discovery. Production never takes that path —
+// claimHookWorkWithRunner always supplies the query env or the selected store's
+// env — but a caller passing nil gets cwd discovery, not the ambient selector.
 func hookClaimEnvMap(env []string, dir string, actor string) map[string]string {
 	env = workQueryEnvForDir(env, dir)
 	out := make(map[string]string, len(env)+1)
@@ -2040,18 +2047,28 @@ func hookClaimHasIdentity(assignee string, identities []string) bool {
 
 // hookRouteIdentitiesEqual reports whether two route/identity strings refer
 // to the same qualified agent, tolerating the tmux-safe session-name
-// encoding (/ -> --, . -> __) alongside the canonical slash-qualified form.
-// gc.routed_to is always written in canonical form, but comparison
-// candidates built from a runtime session name (sessionForQuery) are
-// dash-encoded, so the two spellings must compare equal. This is the single
+// encoding (/ -> --, . -> __) alongside the canonical slash-qualified form,
+// and case (config-sourced and session-derived spellings of the same agent
+// are not guaranteed identical case - ga-lmy6yj). This is the single
 // route-spelling matcher shared by the claim path (hookClaimMatchesRoute)
 // and the display path (hookCandidateVisible) per ga-1xaqgo.2 - do not fork
 // a second one.
+//
+// This deliberately does NOT collapse the legacy bound-template spelling
+// ("dir/binding.name") onto its unbound form ("dir/name"): that migration is
+// owned by canonicalizeLegacyBoundUnassignedRoutedWork (build_desired_state.go),
+// which rewrites the bead's persisted route as an explicit, auditable step.
+// Treating the two spellings as always-already-equal here would let a claim
+// bypass that migration instead of triggering it (see
+// TestCanonicalizeLegacyBoundUnassignedRoutedWorkCanonicalWorkerClaims).
 func hookRouteIdentitiesEqual(a, b string) bool {
 	if a == b {
 		return true
 	}
-	return agent.UnsanitizeQualifiedNameFromSession(a) == agent.UnsanitizeQualifiedNameFromSession(b)
+	return strings.EqualFold(
+		agent.UnsanitizeQualifiedNameFromSession(a),
+		agent.UnsanitizeQualifiedNameFromSession(b),
+	)
 }
 
 func hookClaimMatchesRoute(candidate beads.Bead, routeTargets []string) bool {
