@@ -189,6 +189,7 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 	register(newProviderCatalogReadinessAdvisoryCheck(cityPath))
 	register(expandedConfigLoadCheck{})
 	register(&doctor.ImplicitImportCacheCheck{})
+	register(doctor.NewRepoCachePinCheck())
 	register(&doctor.DeprecatedAttachmentFieldsCheck{})
 
 	// Config-dependent checks run only when city.toml loaded cleanly. If it
