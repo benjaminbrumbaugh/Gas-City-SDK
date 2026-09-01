@@ -33,6 +33,21 @@ SPIKE_THRESHOLD="${GC_JSONL_SPIKE_THRESHOLD:-20}"  # percentage (0-100)
 # every cycle; raising the floor to 100 keeps the check meaningful on real
 # data while suppressing stand-up flares. Set to 0 to disable.
 MIN_PREV_FOR_SPIKE_CHECK="${GC_JSONL_MIN_PREV_FOR_SPIKE:-100}"
+# A spike must ALSO clear an absolute row count, not just a percentage. The
+# baseline floor above is necessary but not sufficient: a store sitting just
+# past it still turns ordinary work into a page. On 2026-08-31 the Dashboard
+# store went 103 -> 125 and mailed a HIGH escalation at 21% > 20%; read-back
+# explained all 25 new rows as two mol-polecat-work graph instantiations, three
+# convoys, three patrol/session molecules and two real bugs, with six graph
+# steps already closed. Store health was good and no session storm existed
+# (gc-pdyfp.1).
+#
+# Twenty-two rows is what bounded orchestration LOOKS like on a small rig, and
+# on a 103-row baseline it is unavoidably a 21% move. Percentage alone cannot
+# separate that from the failure this check exists for — the hundreds-of-
+# sessions spawn storms — because those differ in ABSOLUTE size, not in ratio.
+# Requiring both keeps the storms and drops the noise. Set to 0 to disable.
+MIN_DELTA_FOR_SPIKE="${GC_JSONL_MIN_DELTA_FOR_SPIKE:-50}"  # absolute rows
 MAX_PUSH_FAILURES="${GC_JSONL_MAX_PUSH_FAILURES:-3}"
 PUSH_RETRY_DELAY_MIN="${GC_JSONL_PUSH_RETRY_DELAY_MIN:-1}"
 PUSH_RETRY_DELAY_SPAN="${GC_JSONL_PUSH_RETRY_DELAY_SPAN:-4}"
@@ -471,7 +486,7 @@ send_spike_alert() {
 
     "$ESCALATE_SCRIPT" \
         --subject "ESCALATION: JSONL spike detected [HIGH]" \
-        --message "Database: $db, prev: $prev_count, current: $current_count, delta: ${delta}%, threshold: ${threshold}%" \
+        --message "Database: $db, prev: $prev_count, current: $current_count, delta: ${delta}%, threshold: ${threshold}%, rows added: $((current_count - prev_count)), absolute floor: ${MIN_DELTA_FOR_SPIKE}" \
         2>/dev/null
 }
 
@@ -1008,13 +1023,22 @@ while IFS= read -r DB; do
         if [ "$DELTA" -lt 0 ]; then
             DELTA=$(( -DELTA ))
         fi
-        if [ "$DELTA" -gt "$SPIKE_THRESHOLD" ] && should_halt_for_jsonl_spike "$DB" "$PREV_COUNT" "$FILTERED_COUNT" "$SPIKE_THRESHOLD"; then
+        ABS_DELTA=$(( FILTERED_COUNT - PREV_COUNT ))
+        if [ "$ABS_DELTA" -lt 0 ]; then
+            ABS_DELTA=$(( -ABS_DELTA ))
+        fi
+        # BOTH gates, deliberately. The percentage says the move is large
+        # relative to the store; the absolute count says it is large at all.
+        # Bounded orchestration on a small rig clears the first and not the
+        # second; a session-spawn storm clears both by a wide margin.
+        if [ "$DELTA" -gt "$SPIKE_THRESHOLD" ] && [ "$ABS_DELTA" -ge "$MIN_DELTA_FOR_SPIKE" ] \
+            && should_halt_for_jsonl_spike "$DB" "$PREV_COUNT" "$FILTERED_COUNT" "$SPIKE_THRESHOLD"; then
             HALTED=1
             HALT_DB="$DB"
             HALT_PREV_COUNT="$PREV_COUNT"
             HALT_CURRENT_COUNT="$FILTERED_COUNT"
             HALT_DELTA="$DELTA"
-            echo "jsonl-export: HALTED — spike in $DB (${DELTA}% > ${SPIKE_THRESHOLD}%)"
+            echo "jsonl-export: HALTED — spike in $DB (${DELTA}% > ${SPIKE_THRESHOLD}%, +${ABS_DELTA} rows >= ${MIN_DELTA_FOR_SPIKE})"
             break
         fi
     fi

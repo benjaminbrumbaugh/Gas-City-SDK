@@ -11472,3 +11472,111 @@ exit 0
 		t.Fatalf("cross-rig-deps summary missing or wrong (subshell counter regression?)\nwant substring: %q\ngot output:\n%s\nbd log:\n%s", want, out, logData)
 	}
 }
+
+// gc-pdyfp.1: on 2026-08-31 the Dashboard store went 103 -> 125 records and the
+// monitor mailed a HIGH escalation at 21% > 20%. Read-back explained all 25 new
+// rows as two mol-polecat-work graph instantiations, three convoys, three
+// patrol/session molecules and two real bugs, with six graph steps already
+// closed. Store health was good and there was no session storm.
+//
+// Twenty-two rows is what bounded orchestration LOOKS like on a small rig, and
+// on a 103-row baseline it is unavoidably a 21% move. The existing
+// MIN_PREV_FOR_SPIKE floor of 100 did not help precisely because 103 clears it.
+//
+// Percentage alone cannot separate this from the failure the check exists for —
+// hundreds-of-sessions spawn storms — because those differ in ABSOLUTE size, not
+// in ratio. Hence a second, absolute gate.
+func TestJsonlExportDoesNotPageOnBoundedWorkflowGrowth(t *testing.T) {
+	cityDir := t.TempDir()
+	binDir := t.TempDir()
+	stateDir := t.TempDir()
+	gcLog := filepath.Join(t.TempDir(), "gc.log")
+	mailLog := filepath.Join(t.TempDir(), "gc-mail.log")
+	archiveRepo := filepath.Join(cityDir, "archive")
+
+	// The incident's own numbers.
+	initSeedArchive(t, archiveRepo, 103)
+	writeMultiRecordDoltStub(t, binDir, 125)
+	writeJsonlExportGCStub(t, binDir)
+
+	env := jsonlExportEnv(t, cityDir, binDir, stateDir, archiveRepo, gcLog, mailLog)
+
+	runScript(t, coreScriptPath("jsonl-export.sh"), env)
+
+	mailData, err := os.ReadFile(mailLog)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ReadFile(mail log): %v", err)
+	}
+	if strings.Contains(string(mailData), "ESCALATION: JSONL spike") {
+		t.Fatalf("103->125 (+22 rows, 21%%) paged a human. That is two workflow "+
+			"instantiations on a small rig, not a spike; mail log:\n%s", mailData)
+	}
+}
+
+// The other half: the check must still catch what it exists for. A store that
+// jumps by hundreds of rows clears both gates by a wide margin.
+func TestJsonlExportStillPagesOnLargeUnexplainedGrowth(t *testing.T) {
+	cityDir := t.TempDir()
+	binDir := t.TempDir()
+	stateDir := t.TempDir()
+	gcLog := filepath.Join(t.TempDir(), "gc.log")
+	mailLog := filepath.Join(t.TempDir(), "gc-mail.log")
+	archiveRepo := filepath.Join(cityDir, "archive")
+
+	// A session-spawn storm: same small baseline, an order of magnitude more rows.
+	initSeedArchive(t, archiveRepo, 103)
+	writeMultiRecordDoltStub(t, binDir, 900)
+	writeJsonlExportGCStub(t, binDir)
+
+	env := jsonlExportEnv(t, cityDir, binDir, stateDir, archiveRepo, gcLog, mailLog)
+
+	runScript(t, coreScriptPath("jsonl-export.sh"), env)
+
+	mailData, err := os.ReadFile(mailLog)
+	if err != nil {
+		t.Fatalf("ReadFile(mail log): %v", err)
+	}
+	mail := string(mailData)
+	if !strings.Contains(mail, "ESCALATION: JSONL spike") {
+		t.Fatalf("103->900 (+797 rows) did not page. Widening the gate for bounded "+
+			"growth must not blunt the storm detection it exists for; mail log:\n%s", mail)
+	}
+	// The alert must carry enough to classify it without going back to the
+	// store: the operator's triage of the false page started from a message
+	// that reported only a percentage.
+	for _, want := range []string{"rows added: 797", "absolute floor:"} {
+		if !strings.Contains(mail, want) {
+			t.Errorf("alert does not carry %q, so a reader cannot tell bounded growth "+
+				"from a storm without re-reading the store:\n%s", want, mail)
+		}
+	}
+}
+
+// The absolute floor must be configurable, and setting it to 0 must restore the
+// old percentage-only behavior for anyone who wants it.
+func TestJsonlExportAbsoluteFloorIsConfigurable(t *testing.T) {
+	cityDir := t.TempDir()
+	binDir := t.TempDir()
+	stateDir := t.TempDir()
+	gcLog := filepath.Join(t.TempDir(), "gc.log")
+	mailLog := filepath.Join(t.TempDir(), "gc-mail.log")
+	archiveRepo := filepath.Join(cityDir, "archive")
+
+	initSeedArchive(t, archiveRepo, 103)
+	writeMultiRecordDoltStub(t, binDir, 125)
+	writeJsonlExportGCStub(t, binDir)
+
+	env := jsonlExportEnv(t, cityDir, binDir, stateDir, archiveRepo, gcLog, mailLog)
+	env["GC_JSONL_MIN_DELTA_FOR_SPIKE"] = "0"
+
+	runScript(t, coreScriptPath("jsonl-export.sh"), env)
+
+	mailData, err := os.ReadFile(mailLog)
+	if err != nil {
+		t.Fatalf("ReadFile(mail log): %v", err)
+	}
+	if !strings.Contains(string(mailData), "ESCALATION: JSONL spike") {
+		t.Fatalf("with the absolute floor disabled the old percentage-only behavior "+
+			"should return, so 103->125 should page; mail log:\n%s", mailData)
+	}
+}
