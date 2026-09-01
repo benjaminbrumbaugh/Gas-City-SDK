@@ -223,7 +223,7 @@ func TestClaimDeliveryAndResponseBoundaries(t *testing.T) {
 }
 
 func TestRecordResponseExactReplaySurvivesServiceRestart(t *testing.T) {
-	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	store := beads.NewMemStore()
 	service := NewService(store)
 	record, err := service.Enqueue(context.Background(), testRequestInput(now))
@@ -266,7 +266,7 @@ func TestRecordResponseExactReplaySurvivesServiceRestart(t *testing.T) {
 }
 
 func TestRecordResponsePersistsCommitmentWithoutDurableResponseContent(t *testing.T) {
-	now := time.Date(2026, 8, 31, 12, 15, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	store := beads.NewMemStore()
 	service := NewService(store)
 	input := testRequestInput(now)
@@ -305,7 +305,7 @@ func TestRecordResponsePersistsCommitmentWithoutDurableResponseContent(t *testin
 }
 
 func TestRecordResponseRetriesRequiredEphemeralScrubAfterTerminalCommit(t *testing.T) {
-	now := time.Date(2026, 8, 31, 12, 30, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	store := beads.NewMemStore()
 	service := NewService(store)
 	record, err := service.Enqueue(context.Background(), testRequestInput(now))
@@ -365,7 +365,7 @@ func TestRecordResponseRetriesRequiredEphemeralScrubAfterTerminalCommit(t *testi
 }
 
 func TestRecordResponseFailsClosedWithoutConditionalWriter(t *testing.T) {
-	now := time.Date(2026, 8, 31, 12, 45, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	store := beads.NewMemStore()
 	service := NewService(store)
 	record, err := service.Enqueue(context.Background(), testRequestInput(now))
@@ -396,8 +396,45 @@ func TestRecordResponseFailsClosedWithoutConditionalWriter(t *testing.T) {
 	}
 }
 
+func TestRecordResponseResolvesConditionalWriterThroughDeclaredStoreWrapper(t *testing.T) {
+	now := time.Now().UTC()
+	store := beads.NewMemStore()
+	service := NewService(store)
+	record, err := service.Enqueue(context.Background(), testRequestInput(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), record.ID, "dispatcher-a", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// WorkStore has the same capability-hiding Store embedding and declared
+	// resolution target as the production city bead-policy wrapper.
+	wrapped := beads.WorkStore{Store: store}
+	err = NewService(wrapped).RecordResponse(context.Background(), Response{
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       claimed.Attempt,
+		CorrelationID: claimed.Request.CorrelationID,
+		ResponseID:    "response-policy-wrapper",
+		State:         "answered",
+		Summary:       "wrapped store response",
+		ReceivedAt:    now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("RecordResponse through declared store wrapper: %v", err)
+	}
+	stored, err := service.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateCompleted {
+		t.Fatalf("state after wrapped response = %q, want completed", stored.State)
+	}
+}
+
 func TestRecordResponseConcurrentOutcomesHaveOneWinner(t *testing.T) {
-	now := time.Date(2026, 8, 31, 13, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	store := beads.NewMemStore()
 	service := NewService(store)
 	input := testRequestInput(now)
