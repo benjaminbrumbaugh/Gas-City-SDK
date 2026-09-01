@@ -609,3 +609,112 @@ func TestEnqueuePingsWakeSocket(t *testing.T) {
 		t.Fatal("wakeCh not signaled after enqueue")
 	}
 }
+
+// TestDispatchAllQueuedNudgesCountsRecipientsWithNoOpenSession pins gc-py7pc.
+//
+// This loop is driven by OPEN SESSIONS, not by the queue: it walks each open
+// session and asks "is there anything for you?". A pending nudge addressed to
+// an agent with no open session is therefore never enumerated at all — not
+// delivered, not skipped, not counted — so it sits at the zero-value
+// last_attempt_at until it expires while `gc session nudge` has already told
+// the sender it was queued fine.
+//
+// The observable cost was a "MAYOR STAND-DOWN — STOP EDITING NOW" nudge to
+// gastown.slit, sent while two sessions were writing one worktree, sitting
+// unattempted for sixteen hours because slit's session had exited. It also
+// made the mayor look like the only reachable recipient in the city, when the
+// real distinction was that its patrol wisp is the one always-open session.
+//
+// Delivering to a session that does not exist is impossible and this does not
+// claim to. What must not survive is the silence.
+func TestDispatchAllQueuedNudgesCountsRecipientsWithNoOpenSession(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+
+	dir := t.TempDir()
+	// Fresh, so the TTL sweep leaves it pending: this is the live-and-stranded
+	// case, not the expired-orphan case covered above.
+	item := newQueuedNudge("gastown.slit", "MAYOR STAND-DOWN — STOP EDITING NOW", time.Now())
+	if err := enqueueQueuedNudge(dir, item); err != nil {
+		t.Fatalf("enqueueQueuedNudge: %v", err)
+	}
+
+	// One open session for an UNRELATED agent. Without it the test would pass
+	// against a counter that merely fired whenever no sessions existed; with
+	// it, the counter has to be about the queue's uncovered recipients.
+	bead := beads.Bead{
+		ID:     "session-1",
+		Status: "open",
+		Metadata: map[string]string{
+			"session_name": "worker-session",
+			"agent_name":   "worker",
+			"template":     "worker",
+		},
+	}
+	snapshot := newSessionBeadSnapshot([]beads.Bead{bead})
+
+	delivered, err := dispatchAllQueuedNudges(dir, supervisorCfg(), nil, nil, runtime.NewFake(), snapshot, nil)
+	if err != nil {
+		t.Fatalf("dispatchAllQueuedNudges: %v", err)
+	}
+	if delivered != 0 {
+		t.Fatalf("delivered = %d, want 0", delivered)
+	}
+
+	state, err := nudgequeue.LoadState(dir)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	// Delivery semantics are deliberately unchanged: the item is still pending
+	// and still unattempted. Only its visibility changes.
+	if len(state.Pending) != 1 {
+		t.Fatalf("pending = %d, want 1 (the fix must not drop or fake-deliver the item)", len(state.Pending))
+	}
+	if got := state.DispatchSkips["no-open-session"]; got != 1 {
+		t.Fatalf("DispatchSkips[no-open-session] = %d, want 1 (a stranded recipient must be counted, not invisible); skips=%v",
+			got, state.DispatchSkips)
+	}
+	// The open-but-unrelated session must still be reported as not-matched, or
+	// the two conditions collapse into one and the operator learns nothing:
+	// "nothing is queued for anyone" and "something is queued for an agent that
+	// is not running" are different problems with different remedies.
+	if got := state.DispatchSkips["not-matched"]; got != 1 {
+		t.Fatalf("DispatchSkips[not-matched] = %d, want 1; skips=%v", got, state.DispatchSkips)
+	}
+}
+
+// A recipient that DOES have an open session must never be counted as
+// stranded, or the counter becomes noise and gets ignored — which is how the
+// original silence would simply reappear one level up.
+func TestDispatchAllQueuedNudgesDoesNotCountCoveredRecipients(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+
+	dir := t.TempDir()
+	item := newQueuedNudge("worker", "hello", time.Now())
+	if err := enqueueQueuedNudge(dir, item); err != nil {
+		t.Fatalf("enqueueQueuedNudge: %v", err)
+	}
+	bead := beads.Bead{
+		ID:     "session-1",
+		Status: "open",
+		Metadata: map[string]string{
+			"session_name": "worker-session",
+			"agent_name":   "worker",
+			"template":     "worker",
+		},
+	}
+	snapshot := newSessionBeadSnapshot([]beads.Bead{bead})
+
+	if _, err := dispatchAllQueuedNudges(dir, supervisorCfg(), nil, nil, runtime.NewFake(), snapshot, nil); err != nil {
+		t.Fatalf("dispatchAllQueuedNudges: %v", err)
+	}
+	state, err := nudgequeue.LoadState(dir)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := state.DispatchSkips["no-open-session"]; got != 0 {
+		t.Fatalf("DispatchSkips[no-open-session] = %d, want 0 for a recipient whose session is open; skips=%v",
+			got, state.DispatchSkips)
+	}
+}
