@@ -320,6 +320,42 @@ func TestEmittingClassStoreReadyConditionalWritePreservesPolicyAndEmission(t *te
 	}
 }
 
+func TestEmittingClassStoreConditionalWritePreservesEmission(t *testing.T) {
+	cityPath := t.TempDir()
+	leaf := beads.NewMemStore()
+	opened, err := beads.OpenStoreAtForCity(context.Background(), beads.StoreOpenOptions{
+		ScopeRoot:         cityPath,
+		Provider:          "file",
+		ConditionalWrites: gate.Require,
+		OpenFileStore:     func() (beads.Store, error) { return leaf, nil },
+	})
+	if err != nil {
+		t.Fatalf("open stamped store: %v", err)
+	}
+	wrapped := splitClassRoutes(opened.Store).withCLIEmission(cityPath).stores[coordclass.ClassGraph]
+	writer, ok := beads.ConditionalWriterFor(wrapped)
+	if !ok {
+		t.Fatal("ConditionalWriterFor(emitting wrapper) = unavailable")
+	}
+	if any(writer) != any(wrapped) {
+		t.Fatalf("conditional writer = %T, want the emitting wrapper", writer)
+	}
+
+	bead := seedClassBead(t, leaf, "conditional")
+	title := "routed after revision fence"
+	if err := writer.UpdateIfMatch(bead.ID, bead.Revision, beads.UpdateOpts{Title: &title}); err != nil {
+		t.Fatalf("UpdateIfMatch: %v", err)
+	}
+	updated, err := leaf.Get(bead.ID)
+	if err != nil || updated.Title != title {
+		t.Fatalf("conditional update did not land: bead=%+v err=%v", updated, err)
+	}
+	gotEvents := beadEvents(readCityJournal(t, cityPath))
+	if len(gotEvents) != 1 || gotEvents[0].Type != events.BeadUpdated || gotEvents[0].Subject != bead.ID {
+		t.Fatalf("conditional update events = %s, want one bead.updated for %s", eventSummary(gotEvents), bead.ID)
+	}
+}
+
 // GATE 2 (the control). The CONTROLLER's routes — the ones openStorageRoutes
 // builds, which never carry an emit target — stay silent under a
 // reconcile-shaped absorption, even when the resolver is handed a live

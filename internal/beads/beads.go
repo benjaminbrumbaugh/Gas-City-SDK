@@ -365,7 +365,13 @@ func ConditionalWriterFor(store Store) (ConditionalWriter, bool) {
 	if store == nil {
 		return nil, false
 	}
+	outer := store
 	store = followConditionalWritesResolveTarget(store)
+	if outer != store {
+		if provider, ok := outer.(ConditionalWriterHandleProvider); ok {
+			return provider.ConditionalWriterHandle()
+		}
+	}
 	if writer, ok := store.(ConditionalWriter); ok {
 		return writer, true
 	}
