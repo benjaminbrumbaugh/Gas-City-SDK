@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
@@ -185,6 +186,10 @@ func dispatchAllQueuedNudges(cityPath string, cfg *config.City, store, sessStore
 	// tick would multiply lock contention against the claim path below for
 	// no benefit (the counters only need tick-granularity, not per-item).
 	skipCounts := make(map[string]int64)
+	// coveredAgents records which pending-queue recipients were matched by SOME
+	// open session this tick. See the no-open-session accounting after the loop
+	// for why the negative space matters.
+	coveredAgents := make(map[string]bool, len(pendingAgents))
 	for _, info := range sessionBeads.OpenInfos() {
 		target := resolveNudgeTargetFromSessionInfo(cityPath, cfg, info)
 		if target.sessionName == "" {
@@ -202,7 +207,7 @@ func dispatchAllQueuedNudges(cityPath string, cfg *config.City, store, sessStore
 		for _, key := range target.queueKeys() {
 			if pendingAgents[key] {
 				matched = true
-				break
+				coveredAgents[key] = true
 			}
 		}
 		if !matched {
@@ -252,6 +257,38 @@ func dispatchAllQueuedNudges(cityPath string, cfg *config.City, store, sessStore
 			detail = err.Error()
 		}
 		logNudgeDispatchSkip(debugOut, reason, target.agentKey(), target.sessionName, detail)
+	}
+	// THE UNCOVERED REMAINDER (gc-py7pc). This loop is driven by OPEN SESSIONS,
+	// not by the queue: it asks each open session "is there anything for you?".
+	// A pending nudge whose addressee has no open session is therefore never
+	// enumerated at all — not delivered, not skipped, not counted — and it sits
+	// at last_attempt_at=0001-01-01T00:00:00Z until it expires, while
+	// `gc session nudge` has already told the sender it was queued fine.
+	//
+	// That silence had teeth: a "MAYOR STAND-DOWN — STOP EDITING NOW" nudge to
+	// gastown.slit, sent while two sessions were writing one worktree, sat
+	// unattempted for sixteen hours because slit's session had exited. The
+	// mayor looked like the only reachable recipient in the city purely because
+	// its patrol wisp is the one session that is always open.
+	//
+	// Delivery to a session that does not exist is impossible and this does not
+	// attempt it. What it removes is the invisibility: the recipients nobody
+	// could have delivered to are now counted under `no-open-session`, so
+	// `gc nudge status` distinguishes "nothing was queued" from "something was
+	// queued for an agent that is not running". Sorted so the debug stream is
+	// deterministic.
+	if len(pendingAgents) > len(coveredAgents) {
+		uncovered := make([]string, 0, len(pendingAgents)-len(coveredAgents))
+		for agent := range pendingAgents {
+			if !coveredAgents[agent] {
+				uncovered = append(uncovered, agent)
+			}
+		}
+		sort.Strings(uncovered)
+		for _, agent := range uncovered {
+			skipCounts["no-open-session"]++
+			logNudgeDispatchSkip(debugOut, "no-open-session", agent, "", "")
+		}
 	}
 	if err := recordNudgeDispatchSkips(cityPath, skipCounts); err != nil && firstErr == nil {
 		firstErr = fmt.Errorf("recording nudge dispatch skip counters: %w", err)
