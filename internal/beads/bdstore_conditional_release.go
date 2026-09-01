@@ -57,6 +57,17 @@ func (s *BdStore) conditionalReleaseUnsupported() bool {
 	return s.condReleaseLatchedUnsupported
 }
 
+// releaseClearedIdentityKeys are the metadata keys that name a bead's owning
+// session and must be cleared whenever the assignment is. They are listed here
+// rather than taken from beadmeta so this package keeps its existing import
+// surface; the guard test pins them against the canonical constants.
+var releaseClearedIdentityKeys = []string{
+	"gc.session_id",
+	"gc.session_name",
+	"gc.sessionId",
+	"gc.sessionName",
+}
+
 // latchConditionalReleaseUnsupported records that bd does not understand the
 // conditional-release flags, sending every later release straight to the SQL
 // fallback.
@@ -80,13 +91,31 @@ func (s *BdStore) releaseIfCurrentViaBdVerb(id, expectedAssignee string) (releas
 	// --assignee "" is how bd clears an assignment; the paired --status open
 	// completes the same swap the SQL statement performed, and both --if-* flags
 	// carry the preconditions bd now evaluates server-side.
-	out, runErr := s.runBDTransientWriteOutput(
+	//
+	// The session identity is cleared in the SAME update, which is the point:
+	// this call already carries the compare-and-set, so the assignee and the
+	// keys that name the same owner move together or not at all. Releasing the
+	// assignee alone left every released bead still naming its previous owner
+	// (gc-sjy6f) — twelve of them were live in this city's store, and orphan and
+	// liveness checks read a bead with a session name as HELD, so a released
+	// bead that still names an owner is invisible to the assignee and busy to
+	// the metadata at the same time.
+	//
+	// Both camelCase variants go too. They are a read fallback —
+	// routingdecision resolves identity as firstWorkStateValue(snake, camel) —
+	// so clearing only the snake keys would promote a stale camel value to
+	// being the answer.
+	args := []string{
 		"update", id,
 		"--if-assignee", expectedAssignee,
 		"--if-status", "in_progress",
 		"--status", "open",
 		"--assignee", "",
-	)
+	}
+	for _, key := range releaseClearedIdentityKeys {
+		args = append(args, "--set-metadata", key+"=")
+	}
+	out, runErr := s.runBDTransientWriteOutput(args...)
 	if runErr == nil {
 		return true, true, nil
 	}

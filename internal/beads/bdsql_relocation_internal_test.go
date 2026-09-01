@@ -362,9 +362,16 @@ func TestReleaseIfCurrentIsByteIdenticalWithoutRelocation(t *testing.T) {
 	if !released {
 		t.Fatal("ReleaseIfCurrent released = false, want true")
 	}
+	// The four --set-metadata clears are load-bearing, not noise: the release
+	// carries the compare-and-set, so the assignee and the keys naming the same
+	// owner must move in the SAME update or a released bead keeps naming its
+	// previous owner (gc-sjy6f). Do not trim them to shorten the argv.
 	want := [][]string{
 		{"bd", "show", "--json", "gcg-abc123"},
-		{"bd", "update", "gcg-abc123", "--if-assignee", "worker-1", "--if-status", "in_progress", "--status", "open", "--assignee", ""},
+		{
+			"bd", "update", "gcg-abc123", "--if-assignee", "worker-1", "--if-status", "in_progress", "--status", "open", "--assignee", "",
+			"--set-metadata", "gc.session_id=", "--set-metadata", "gc.session_name=", "--set-metadata", "gc.sessionId=", "--set-metadata", "gc.sessionName=",
+		},
 	}
 	if len(runner.calls) != len(want) {
 		t.Fatalf("calls = %v, want exactly %v", runner.calls, want)

@@ -1206,6 +1206,14 @@ func (s *SQLiteStore) ReleaseIfCurrent(id, expectedAssignee string) (bool, error
 		before := b
 		b.Status = "open"
 		b.Assignee = ""
+		// The owner is recorded in the metadata as well as the assignee, and a
+		// release that clears one and not the other leaves the bead free to the
+		// assignee and held to every check that reads the session keys
+		// (gc-sjy6f). Cleared inside the same transaction as the assignee, so
+		// the two cannot diverge.
+		for _, key := range releaseClearedIdentityKeys {
+			delete(b.Metadata, key)
+		}
 		b.UpdatedAt = time.Now()
 		if err := s.upsertBeadTx(ctx, tx, b); err != nil {
 			return err

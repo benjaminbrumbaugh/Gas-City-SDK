@@ -120,7 +120,14 @@ func TestReleaseIfCurrentPrefersTheNativeVerb(t *testing.T) {
 	if !released {
 		t.Fatal("ReleaseIfCurrent released = false, want true")
 	}
-	want := []string{"bd", "update", "bd-42", "--if-assignee", "worker-1", "--if-status", "in_progress", "--status", "open", "--assignee", ""}
+	// The four --set-metadata clears are load-bearing, not noise: the release
+	// carries the compare-and-set, so the assignee and the keys naming the same
+	// owner must move in the SAME update or a released bead keeps naming its
+	// previous owner (gc-sjy6f). Do not trim them to shorten the argv.
+	want := []string{
+		"bd", "update", "bd-42", "--if-assignee", "worker-1", "--if-status", "in_progress", "--status", "open", "--assignee", "",
+		"--set-metadata", "gc.session_id=", "--set-metadata", "gc.session_name=", "--set-metadata", "gc.sessionId=", "--set-metadata", "gc.sessionName=",
+	}
 	calls := runner.releaseVerbArgv()
 	if len(calls) != 1 {
 		t.Fatalf("calls = %v, want exactly one", calls)
