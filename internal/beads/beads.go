@@ -356,15 +356,16 @@ type ConditionalWriterHandleProvider interface {
 // ConditionalWriterFor returns the conditional-write capability for store when
 // one is available. It preserves ordinary ConditionalWriter implementations and
 // lets wrappers expose a delegated handle without claiming the interface
-// globally — mirroring GraphApplyFor. It does NOT unwrap the class_store.go
-// typed wrappers (WorkStore, GraphStore, …): those embed the Store interface, so
-// optional capabilities are not promoted through them and a direct assertion on
-// the wrapper fails. A caller holding a typed class wrapper must pass its
-// unwrapped .Store field to this helper, exactly as with GraphApplyFor.
+// globally — mirroring GraphApplyFor. Wrappers that explicitly implement
+// ConditionalWritesResolveTargeter are followed through the same bounded,
+// cycle-safe seam used by ResolveConditionalWriter. This preserves the direct
+// capability query independently of rollout policy while preventing typed and
+// policy wrappers from accidentally hiding an underlying atomic writer.
 func ConditionalWriterFor(store Store) (ConditionalWriter, bool) {
 	if store == nil {
 		return nil, false
 	}
+	store = followConditionalWritesResolveTarget(store)
 	if writer, ok := store.(ConditionalWriter); ok {
 		return writer, true
 	}

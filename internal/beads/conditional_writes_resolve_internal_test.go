@@ -460,6 +460,27 @@ func TestResolveConditionalWriterFollowsDeclaredResolveTarget(t *testing.T) {
 	})
 }
 
+func TestConditionalWriterForFollowsDeclaredResolveTarget(t *testing.T) {
+	t.Parallel()
+	mem := NewMemStore()
+	inner := &resolveTargetWrapper{Store: mem, target: mem}
+	outer := &resolveTargetWrapper{Store: inner, target: inner}
+
+	writer, ok := ConditionalWriterFor(outer)
+	if !ok {
+		t.Fatal("ConditionalWriterFor(declared wrappers) = unavailable")
+	}
+	if got, ok := writer.(*MemStore); !ok || got != mem {
+		t.Fatalf("writer = %T, want innermost *MemStore", writer)
+	}
+
+	cyclic := &resolveTargetWrapper{Store: mem}
+	cyclic.target = cyclic
+	if writer, ok := ConditionalWriterFor(cyclic); ok || writer != nil {
+		t.Fatalf("ConditionalWriterFor(cyclic wrapper) = (%T, %v), want unavailable", writer, ok)
+	}
+}
+
 func TestResolveConditionalWriterDegradeEmissionLatchedOnce(t *testing.T) {
 	t.Parallel()
 	var fired []ConditionalWritesDegrade
