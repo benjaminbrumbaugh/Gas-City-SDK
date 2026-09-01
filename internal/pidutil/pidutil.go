@@ -166,6 +166,8 @@ func AliveWithStartTime(pid int, startTime string) bool {
 	return current == startTime
 }
 
+var cmdlineForPID = Cmdline
+
 // AliveWithCmdline reports whether a PID exists, is not a zombie, and its
 // command line satisfies match.
 //
@@ -185,7 +187,7 @@ func AliveWithCmdline(pid int, match func([]string) bool) bool {
 	if match == nil {
 		return false
 	}
-	argv, err := Cmdline(pid)
+	argv, err := cmdlineForPID(pid)
 	if err != nil {
 		return false
 	}
