@@ -718,3 +718,108 @@ func TestDispatchAllQueuedNudgesDoesNotCountCoveredRecipients(t *testing.T) {
 			got, state.DispatchSkips)
 	}
 }
+
+// TestDispatchAllQueuedNudgesServesAllRecipientKinds is gc-py7pc's acceptance
+// case: a queue holding recipients of all three kinds — the mayor, a city-scope
+// agent, and a rig-scoped agent — must serve every one of them.
+//
+// The bead was filed as "only gastown.mayor's nudges are ever attempted", and
+// that premise was wrong in a way worth pinning permanently. There is no
+// recipient filter and the mayor is not special; it merely owned the one
+// always-open session in the city (a patrol wisp), and dispatch is driven by
+// open sessions. Any agent with a live session is served, and the mayor with a
+// dead one would not be.
+//
+// So this test gives all three kinds a live session and asserts all three are
+// delivered. Without the kinds enumerated explicitly, a future change that
+// special-cased an agent-name shape — exactly what this bead was reported as —
+// would pass every other test in this file.
+func TestDispatchAllQueuedNudgesServesAllRecipientKinds(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	clearInheritedCityRoutingEnv(t)
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+
+	store := openNudgeBeadStore(dir)
+	fake := runtime.NewFake()
+	mgr := newSessionManagerWithConfig(dir, store.Store, fake, nil)
+
+	// The three kinds, named as they appear in this city: the mayor, the
+	// city-scope writer, and a rig-qualified agent.
+	kinds := []struct {
+		label     string
+		agentName string
+		message   string
+	}{
+		{"mayor", "gastown.mayor", "mayor: reconcile the backlog"},
+		{"city-scope", "city-worker", "city-worker: which files are you holding"},
+		{"rig-scoped", "Gas-City-Dashboard/gastown.witness", "witness: stop escalating gcd-635"},
+	}
+
+	activity := map[string]time.Time{}
+	for _, k := range kinds {
+		info, err := mgr.CreateSession(context.Background(), session.CreateOptions{
+			Template: "worker", Title: k.label, Command: "codex", WorkDir: dir, Provider: "codex",
+			Hints:     runtime.Config{WorkDir: dir},
+			ExtraMeta: map[string]string{"session_origin": "manual", "agent_name": k.agentName},
+		})
+		if err != nil {
+			t.Fatalf("%s: CreateSession: %v", k.label, err)
+		}
+		if err := mgr.Start(context.Background(), info.ID, "", runtime.Config{WorkDir: dir}); err != nil {
+			t.Fatalf("%s: Start: %v", k.label, err)
+		}
+		activity[info.SessionName] = time.Now().Add(-10 * time.Second)
+		if err := enqueueQueuedNudge(dir, newQueuedNudge(k.agentName, k.message, time.Now().Add(-time.Minute))); err != nil {
+			t.Fatalf("%s: enqueueQueuedNudge: %v", k.label, err)
+		}
+	}
+	fake.Activity = activity
+
+	snapshot, err := loadSessionBeadSnapshot(store.Store)
+	if err != nil {
+		t.Fatalf("loadSessionBeadSnapshot: %v", err)
+	}
+
+	delivered, err := dispatchAllQueuedNudges(dir, supervisorCfg(), store.Store, store.Store, fake, snapshot, nil)
+	if err != nil {
+		t.Fatalf("dispatchAllQueuedNudges: %v", err)
+	}
+	if delivered != len(kinds) {
+		t.Fatalf("delivered = %d, want %d (every recipient kind must be served, not just the mayor)", delivered, len(kinds))
+	}
+
+	// Each kind's own message must have gone out. A count alone would pass if
+	// one recipient were served three times.
+	var sent []string
+	for _, call := range fake.Calls {
+		if call.Method == "Nudge" {
+			sent = append(sent, call.Message)
+		}
+	}
+	for _, k := range kinds {
+		found := false
+		for _, msg := range sent {
+			if strings.Contains(msg, k.message) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s recipient %q was never nudged; sent=%v", k.label, k.agentName, sent)
+		}
+	}
+
+	// And nothing may be left stranded or counted as unreachable.
+	state, err := nudgequeue.LoadState(dir)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if len(state.Pending) != 0 {
+		t.Fatalf("pending = %d, want 0 (queue not drained): %+v", len(state.Pending), state.Pending)
+	}
+	if got := state.DispatchSkips["no-open-session"]; got != 0 {
+		t.Fatalf("DispatchSkips[no-open-session] = %d, want 0 — every recipient had a live session", got)
+	}
+}

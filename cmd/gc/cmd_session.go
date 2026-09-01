@@ -2792,6 +2792,17 @@ type sessionNudgeJSON struct {
 	Delivery      string `json:"delivery"`
 	Queued        bool   `json:"queued"`
 	Outcome       string `json:"outcome"`
+
+	// AttemptProspect says whether a QUEUED nudge has any prospect of being
+	// attempted: "reachable", "no-open-session", or "unknown". Empty for a
+	// nudge that was delivered live rather than queued.
+	//
+	// It exists because `queued` and `ok` both stayed true for an item nothing
+	// would ever enumerate. Dispatch walks open sessions asking "is anything
+	// queued for you?", so a nudge addressed to an agent with no open session
+	// is never enumerated at all, and the sender was told only that the
+	// enqueue worked (gc-py7pc).
+	AttemptProspect string `json:"attempt_prospect,omitempty"`
 }
 
 // cmdSessionNudge is the CLI entry point for "gc session nudge".
