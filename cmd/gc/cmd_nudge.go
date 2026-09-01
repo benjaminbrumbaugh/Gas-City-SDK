@@ -390,8 +390,8 @@ func cmdNudgeStatus(args []string, jsonOutput bool, stdout, stderr io.Writer) in
 	if len(pending) > 0 {
 		fmt.Fprintln(stdout, "") //nolint:errcheck
 		for _, item := range pending {
-			_, _ = fmt.Fprintf(stdout, "pending  %s  due=%s  source=%s  %s\n",
-				item.ID, formatDueTime(item.DeliverAfter), item.Source, item.Message)
+			_, _ = fmt.Fprintf(stdout, "pending  %s  due=%s  %s  source=%s  %s\n",
+				item.ID, formatDueTime(item.DeliverAfter), nudgeAttemptSummary(item), item.Source, item.Message)
 		}
 	}
 	if len(inFlight) > 0 {
@@ -938,7 +938,10 @@ func queueManagedSessionNudgeWake(target nudgeTarget, store beads.Store, message
 	if err := nudgePokeController(target.cityPath); err != nil {
 		fmt.Fprintf(stderr, "gc session nudge: warning: poke failed: %v\n", err) //nolint:errcheck
 	}
-	return writeQueuedSessionNudgeResult(target, mode, jsonOutput, "", stdout, stderr)
+	// Reachable by construction on this path: the wake was requested above, and
+	// a wake that could not be requested is already reported by
+	// requestManagedNudgeWake rather than being folded in here.
+	return writeQueuedSessionNudgeResult(target, mode, jsonOutput, "", nudgeQueueProspectReachable, stdout, stderr)
 }
 
 func enqueueManagedNudgeThenWake(target nudgeTarget, store beads.Store, item queuedNudge) error {
@@ -1137,17 +1140,62 @@ func queueSessionNudgeWithWorker(target nudgeTarget, store beads.Store, sp runti
 	}
 	// The observe is a session-class read; route through the session store
 	// (identity today). The enqueue above stays on its own nudge store.
-	if obs, err := workerObserveNudgeTarget(target, cliSessionStore(store, target.cfg, target.cityPath), sp); err == nil && obs.Running {
-		maybeStartNudgePoller(target)
+	//
+	// Its answer was previously used only to decide whether to start a poller
+	// and then discarded. It is also the answer to the question the sender
+	// actually has — "will anything ever pick this up?" — so it is kept and
+	// reported (gc-py7pc).
+	prospect := nudgeQueueProspectUnknown
+	if obs, err := workerObserveNudgeTarget(target, cliSessionStore(store, target.cfg, target.cityPath), sp); err == nil {
+		if obs.Running {
+			prospect = nudgeQueueProspectReachable
+			maybeStartNudgePoller(target)
+		} else {
+			prospect = nudgeQueueProspectNoOpenSession
+		}
 	}
-	return writeQueuedSessionNudgeResult(target, mode, jsonOutput, undelivered, stdout, stderr)
+	return writeQueuedSessionNudgeResult(target, mode, jsonOutput, undelivered, prospect, stdout, stderr)
 }
+
+// nudgeQueueProspect says whether a nudge that was just queued has any prospect
+// of being ATTEMPTED. That is a different question from whether the enqueue
+// succeeded, and conflating the two is gc-py7pc: a "MAYOR STAND-DOWN — STOP
+// EDITING NOW" nudge to gastown.slit was reported queued, then sat unattempted
+// for sixteen hours because slit's session had already exited.
+//
+// Both delivery modes strand such an item, which is why this is decided at
+// enqueue time rather than inside either one:
+//
+//   - legacy (the default, and what this city runs): the per-session
+//     `gc nudge poll` process is spawned only when the addressee is observed
+//     live, immediately below this decision. No live session, no poller, and
+//     nothing ever retries.
+//   - supervisor: dispatchAllQueuedNudges walks OPEN SESSIONS asking each "is
+//     anything queued for you?". Nothing walks the queue asking "can this be
+//     delivered?", so the item is never enumerated at all.
+//
+// In both cases the sender is the one party positioned to notice, and it is the
+// party that was told nothing.
+type nudgeQueueProspect string
+
+const (
+	// The addressee has a live session (or a managed wake was requested for
+	// it), so a dispatch tick will reach the item.
+	nudgeQueueProspectReachable nudgeQueueProspect = "reachable"
+	// The addressee has no live session. The item is queued and durable, but
+	// no tick will enumerate it until a session for that agent opens.
+	nudgeQueueProspectNoOpenSession nudgeQueueProspect = "no-open-session"
+	// The liveness probe itself failed. Reported as unknown rather than guessed:
+	// asserting either answer here would be a fresh falsehood in the one path
+	// whose entire purpose is to stop telling senders things that are not true.
+	nudgeQueueProspectUnknown nudgeQueueProspect = "unknown"
+)
 
 // writeQueuedSessionNudgeResult reports a queued nudge truthfully: WHERE it was
 // queued (the flock'd state.json that is the queue's authority — the shadow bead
 // is a projection of it, so an operator looking for the item needs this path)
 // and, when the live leg was skipped rather than tried, WHY.
-func writeQueuedSessionNudgeResult(target nudgeTarget, mode nudgeDeliveryMode, jsonOutput bool, undelivered worker.NudgeUndeliveredReason, stdout, stderr io.Writer) int {
+func writeQueuedSessionNudgeResult(target nudgeTarget, mode nudgeDeliveryMode, jsonOutput bool, undelivered worker.NudgeUndeliveredReason, prospect nudgeQueueProspect, stdout, stderr io.Writer) int {
 	if jsonOutput {
 		return writeCLIJSONLineOrExit(stdout, stderr, "gc session nudge", sessionNudgeJSON{
 			SchemaVersion: "1",
@@ -1158,12 +1206,66 @@ func writeQueuedSessionNudgeResult(target nudgeTarget, mode nudgeDeliveryMode, j
 			Delivery:      string(mode),
 			Queued:        true,
 			Outcome:       "queued",
+			// OK stays true because the enqueue genuinely succeeded and callers
+			// branch on it; what was missing is the SECOND fact, which is
+			// carried in its own field so a scripted sender can branch on it
+			// without the exit status changing meaning under every existing
+			// caller (gc-py7pc).
+			AttemptProspect: string(prospect),
 		})
 	}
 	fmt.Fprintf(stdout, //nolint:errcheck // best-effort stdout
 		"Queued nudge for %s in %s%s\n",
 		target.agentKey(), nudgequeue.StatePath(target.cityPath), queuedNudgeDowngradeNote(target, undelivered))
+	// On stderr, not stdout: this is a warning about the message's prospects,
+	// and it must not be swallowed by a caller capturing stdout for the queue
+	// path. Silence here is what let a stand-down order rot for sixteen hours.
+	if note := queuedNudgeProspectWarning(target, prospect); note != "" {
+		fmt.Fprint(stderr, note) //nolint:errcheck // best-effort stderr
+	}
 	return 0
+}
+
+// queuedNudgeProspectWarning renders the sender-facing warning for a queued
+// nudge nothing is currently positioned to attempt, and "" for the ordinary
+// case. It names the remedy, because the remedy is not obvious: durable bead
+// state survives a session that does not exist, and a nudge does not.
+func queuedNudgeProspectWarning(target nudgeTarget, prospect nudgeQueueProspect) string {
+	switch prospect {
+	case nudgeQueueProspectNoOpenSession:
+		// Deliberately does not name a mechanism. Both delivery modes strand
+		// this item, for different reasons — the legacy per-session poller is
+		// only spawned when the addressee is live (right below this decision),
+		// and the supervisor dispatcher enumerates open sessions rather than the
+		// queue — and a warning that asserted one mode's cause would be false in
+		// the other. The consequence is identical, and the consequence is what
+		// the sender needs.
+		return fmt.Sprintf("gc session nudge: warning: %s has no live session, so this nudge will NOT be attempted until one opens — delivery only ever runs against a live session, and the item stays unattempted (attempts=0) until then. If it must arrive, put it in durable bead state instead.\n",
+			target.agentKey())
+	case nudgeQueueProspectUnknown:
+		return fmt.Sprintf("gc session nudge: warning: could not determine whether %s has a live session, so whether this nudge will be attempted is unknown. If it must arrive, put it in durable bead state instead.\n",
+			target.agentKey())
+	default:
+		return ""
+	}
+}
+
+// nudgeAttemptSummary distinguishes an item NOTHING HAS EVER TRIED from one that
+// was tried and did not stick. Both sat in `pending` rendering identically, and
+// the two have opposite remedies: the first means no dispatch tick has ever
+// enumerated the item (usually because the addressee has no open session —
+// gc-py7pc), the second means delivery is being attempted and failing, which is
+// a transport problem. Conflating them cost sixteen hours on a stand-down order
+// that read exactly like a nudge being retried.
+//
+// The zero time.Time is why this cannot be left to the JSON: `omitempty` does
+// not omit a zero struct, so last_attempt_at renders as the 0001-01-01T00:00:00Z
+// sentinel and reads like data rather than absence.
+func nudgeAttemptSummary(item queuedNudge) string {
+	if item.Attempts <= 0 || item.LastAttemptAt.IsZero() {
+		return "attempts=0(never-attempted)"
+	}
+	return fmt.Sprintf("attempts=%d(last=%s)", item.Attempts, item.LastAttemptAt.UTC().Format(time.RFC3339))
 }
 
 // queuedNudgeDowngradeNote renders the reason the live leg was skipped, or "" for

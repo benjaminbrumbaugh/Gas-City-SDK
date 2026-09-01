@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/nudgequeue"
@@ -58,7 +59,7 @@ func TestQueuedNudgeResultNamesTheQueueAndTheDowngrade(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	if code := writeQueuedSessionNudgeResult(target, nudgeDeliveryWaitIdle, false,
-		worker.NudgeUndeliveredProviderUnsupported, &stdout, &stderr); code != 0 {
+		worker.NudgeUndeliveredProviderUnsupported, nudgeQueueProspectReachable, &stdout, &stderr); code != 0 {
 		t.Fatalf("writeQueuedSessionNudgeResult = %d, want 0; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
@@ -72,7 +73,7 @@ func TestQueuedNudgeResultNamesTheQueueAndTheDowngrade(t *testing.T) {
 	// Control: a nudge queued BY REQUEST carries no downgrade note — the note
 	// must describe something that happened, not decorate every queue write.
 	stdout.Reset()
-	if code := writeQueuedSessionNudgeResult(target, nudgeDeliveryQueue, false, "", &stdout, &stderr); code != 0 {
+	if code := writeQueuedSessionNudgeResult(target, nudgeDeliveryQueue, false, "", nudgeQueueProspectReachable, &stdout, &stderr); code != 0 {
 		t.Fatalf("writeQueuedSessionNudgeResult = %d, want 0", code)
 	}
 	out = stdout.String()
@@ -118,5 +119,159 @@ func TestManagedNudgeWakeReportsASkippedWake(t *testing.T) {
 	}
 	if !strings.Contains(warnings.String(), "no session store") {
 		t.Fatalf("warnings = %q, want the missing precondition named", warnings.String())
+	}
+}
+
+// TestQueuedNudgeSaysWhenNothingWillAttemptIt is gc-py7pc's sender-side row, and
+// it is the largest of them: the sender was told the enqueue worked and nothing
+// else, for an item no dispatch tick would ever enumerate.
+//
+// dispatchAllQueuedNudges walks OPEN SESSIONS asking each "is anything queued
+// for you?". Nothing walks the queue asking "can this be delivered?", so a nudge
+// addressed to an agent with no open session is never enumerated at all — not
+// delivered, not skipped, not counted — and it expires at attempts=0. The cost
+// on the record: a "MAYOR STAND-DOWN — STOP EDITING NOW" nudge to gastown.slit,
+// sent while two sessions were writing one worktree, sat unattempted for sixteen
+// hours because slit's session had exited. `gc session nudge` had reported
+// success.
+//
+// The warning goes to STDERR on purpose. The queue path's stdout line is
+// consumed by callers that want the state.json path, and a warning folded into
+// it would be captured and dropped.
+func TestQueuedNudgeSaysWhenNothingWillAttemptIt(t *testing.T) {
+	cityPath := t.TempDir()
+	target := nudgeTarget{
+		cityPath: cityPath,
+		alias:    "gastown.slit",
+		agent:    config.Agent{Name: "slit"},
+		resolved: &config.ResolvedProvider{Name: "codex"},
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := writeQueuedSessionNudgeResult(target, nudgeDeliveryQueue, false, "",
+		nudgeQueueProspectNoOpenSession, &stdout, &stderr); code != 0 {
+		t.Fatalf("writeQueuedSessionNudgeResult = %d, want 0 (the enqueue did succeed)", code)
+	}
+	// The enqueue succeeded and stdout still says so: this row is about adding
+	// the second fact, not about retracting the first.
+	if !strings.Contains(stdout.String(), nudgequeue.StatePath(cityPath)) {
+		t.Fatalf("stdout = %q, want the queue path still named", stdout.String())
+	}
+	warn := stderr.String()
+	if !strings.Contains(warn, "no live session") {
+		t.Fatalf("stderr = %q, want the absent session named as the reason", warn)
+	}
+	if !strings.Contains(warn, "will NOT be attempted") {
+		t.Fatalf("stderr = %q, want the consequence stated, not merely the state", warn)
+	}
+	if !strings.Contains(warn, "gastown.slit") {
+		t.Fatalf("stderr = %q, want the addressee named", warn)
+	}
+	// The remedy is not obvious from the warning alone, and it is the whole
+	// operating rule the city adopted while this was broken.
+	if !strings.Contains(warn, "durable bead state") {
+		t.Fatalf("stderr = %q, want the remedy named", warn)
+	}
+
+	// Control: a reachable addressee must produce NO warning, or the warning
+	// becomes noise on every queue write and stops being read.
+	stdout.Reset()
+	stderr.Reset()
+	if code := writeQueuedSessionNudgeResult(target, nudgeDeliveryQueue, false, "",
+		nudgeQueueProspectReachable, &stdout, &stderr); code != 0 {
+		t.Fatalf("writeQueuedSessionNudgeResult = %d, want 0", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want silence for a reachable addressee", stderr.String())
+	}
+
+	// A failed probe must say "unknown" rather than pick an answer. Asserting
+	// either way here would be a fresh falsehood in the file that exists to
+	// stop them.
+	stdout.Reset()
+	stderr.Reset()
+	if code := writeQueuedSessionNudgeResult(target, nudgeDeliveryQueue, false, "",
+		nudgeQueueProspectUnknown, &stdout, &stderr); code != 0 {
+		t.Fatalf("writeQueuedSessionNudgeResult = %d, want 0", code)
+	}
+	if unknown := stderr.String(); !strings.Contains(unknown, "could not determine") {
+		t.Fatalf("stderr = %q, want the unknown case reported as unknown", unknown)
+	}
+}
+
+// TestQueuedNudgeJSONCarriesTheAttemptProspect: the human warning above is not
+// enough on its own. Agents call this with --json and branch on fields, and both
+// `ok` and `queued` stayed true for an item nothing would attempt, so a scripted
+// sender had nothing to test. `ok` deliberately remains true — the enqueue did
+// succeed, and callers already branch on it — so the second fact needs a field
+// of its own.
+func TestQueuedNudgeJSONCarriesTheAttemptProspect(t *testing.T) {
+	cityPath := t.TempDir()
+	target := nudgeTarget{
+		cityPath: cityPath,
+		alias:    "gastown.slit",
+		agent:    config.Agent{Name: "slit"},
+		resolved: &config.ResolvedProvider{Name: "codex"},
+	}
+
+	for _, tc := range []struct {
+		name     string
+		prospect nudgeQueueProspect
+		want     string
+	}{
+		{"stranded", nudgeQueueProspectNoOpenSession, "no-open-session"},
+		{"reachable", nudgeQueueProspectReachable, "reachable"},
+		{"unknown", nudgeQueueProspectUnknown, "unknown"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := writeQueuedSessionNudgeResult(target, nudgeDeliveryQueue, true, "",
+			tc.prospect, &stdout, &stderr); code != 0 {
+			t.Fatalf("%s: writeQueuedSessionNudgeResult = %d, want 0; stderr=%s", tc.name, code, stderr.String())
+		}
+		out := stdout.String()
+		if !strings.Contains(out, `"attempt_prospect":"`+tc.want+`"`) {
+			t.Fatalf("%s: json = %q, want attempt_prospect %q", tc.name, out, tc.want)
+		}
+		// The enqueue succeeded in every one of these cases.
+		if !strings.Contains(out, `"ok":true`) {
+			t.Fatalf("%s: json = %q, want ok:true — the enqueue succeeded", tc.name, out)
+		}
+	}
+}
+
+// TestNudgeAttemptSummaryDistinguishesNeverAttempted: `gc nudge status` rendered
+// every pending item identically, so "no tick has ever looked at this" and
+// "delivery is being tried and failing" were the same line. They have opposite
+// remedies — the first is an absent session (gc-py7pc), the second a transport
+// fault (gc-syqor's territory) — and the stand-down order that rotted for
+// sixteen hours read exactly like a nudge being retried.
+//
+// This cannot be left to the JSON: `omitempty` does not omit a zero struct, so
+// last_attempt_at renders as the 0001-01-01T00:00:00Z sentinel, which reads as
+// data rather than as absence.
+func TestNudgeAttemptSummaryDistinguishesNeverAttempted(t *testing.T) {
+	never := newQueuedNudge("gastown.slit", "MAYOR STAND-DOWN — STOP EDITING NOW", time.Now())
+	if got := nudgeAttemptSummary(never); !strings.Contains(got, "never-attempted") {
+		t.Fatalf("nudgeAttemptSummary(fresh) = %q, want it marked never-attempted", got)
+	}
+
+	tried := never
+	tried.Attempts = 5
+	tried.LastAttemptAt = time.Date(2026, 9, 1, 10, 35, 25, 0, time.UTC)
+	got := nudgeAttemptSummary(tried)
+	if strings.Contains(got, "never-attempted") {
+		t.Fatalf("nudgeAttemptSummary(tried) = %q, must not claim never-attempted", got)
+	}
+	if !strings.Contains(got, "attempts=5") || !strings.Contains(got, "2026-09-01T10:35:25Z") {
+		t.Fatalf("nudgeAttemptSummary(tried) = %q, want the count and the last attempt instant", got)
+	}
+
+	// A nonzero count with a zero timestamp is inconsistent state; it must read
+	// as never-attempted rather than print the 0001-01-01 sentinel at an
+	// operator.
+	inconsistent := never
+	inconsistent.Attempts = 2
+	if got := nudgeAttemptSummary(inconsistent); strings.Contains(got, "0001-01-01") {
+		t.Fatalf("nudgeAttemptSummary(inconsistent) = %q, must not surface the zero-time sentinel", got)
 	}
 }
