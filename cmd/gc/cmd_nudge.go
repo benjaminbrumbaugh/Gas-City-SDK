@@ -1741,6 +1741,33 @@ func ensureNudgePoller(cityPath, agentName, sessionName string) error {
 	})
 }
 
+// queuedNudgeRedeliveryNote marks a reminder the queue is delivering again.
+//
+// Item.Attempts counts delivery attempts that FAILED (failedQueuedNudge is the
+// only place it is incremented), so a non-zero count at format time means this
+// exact reminder has been handed to the session before. Nothing in the rendered
+// text said so, and the omission has a cost that is not cosmetic: an
+// unconfirmed submit is retried by design (ErrNudgeSubmitUnconfirmed —
+// the queue must not ack a message that may be sitting drafted in the pane),
+// and the paste usually DID land, so the agent sees the same reminder on
+// several consecutive turns with nothing to distinguish the copies.
+//
+// gc-trild is that misreading, filed as a bug: the Mayor read "You have mail
+// from human" three turns running, found an empty inbox each time, and
+// concluded the wake signal was false. It was not — one queued reminder was
+// being retried because its submit was never confirmed. Saying which attempt
+// this is turns three wasted inbox checks into one.
+//
+// Attempts is an int the queue owns, so this adds no attacker-controlled text
+// to the system-reminder block.
+func queuedNudgeRedeliveryNote(item queuedNudge) string {
+	if item.Attempts <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (redelivery %d of %d — an earlier attempt at this same reminder was not confirmed; you may have seen it already)",
+		item.Attempts+1, defaultQueuedNudgeMaxAttempts)
+}
+
 func formatNudgeInjectOutput(items []queuedNudge) string {
 	var sb strings.Builder
 	sb.WriteString("<system-reminder>\n")
@@ -1756,7 +1783,7 @@ func formatNudgeInjectOutput(items []queuedNudge) string {
 		// See gastownhall/gascity#2195.
 		source := extmsg.SanitizeForSystemReminder(item.Source)
 		message := extmsg.SanitizeForSystemReminder(item.Message)
-		fmt.Fprintf(&sb, "- [%s] %s\n", source, message)
+		fmt.Fprintf(&sb, "- [%s] %s%s\n", source, message, queuedNudgeRedeliveryNote(item))
 	}
 	sb.WriteString("\nHandle them after this turn.\n")
 	sb.WriteString("</system-reminder>\n")
@@ -1767,7 +1794,7 @@ func formatNudgeRuntimeMessage(items []queuedNudge) string {
 	var sb strings.Builder
 	sb.WriteString("Deferred reminders:\n")
 	for _, item := range items {
-		fmt.Fprintf(&sb, "- [%s] %s\n", item.Source, item.Message)
+		fmt.Fprintf(&sb, "- [%s] %s%s\n", item.Source, item.Message, queuedNudgeRedeliveryNote(item))
 	}
 	sb.WriteString("\nThese were queued until the session went idle.\n")
 	return sb.String()
