@@ -14,15 +14,17 @@ import (
 )
 
 const (
-	metadataRequest              = "external_coordination.request"
-	metadataState                = "external_coordination.state"
-	metadataAttempt              = "external_coordination.attempt"
-	metadataClaimedBy            = "external_coordination.claimed_by"
-	metadataClaimedAt            = "external_coordination.claimed_at"
-	metadataDelivered            = "external_coordination.delivered_at"
-	metadataError                = "external_coordination.error"
-	metadataResponseCommitment   = "external_coordination.response_commitment"
-	metadataResponseScrubPending = "external_coordination.response_scrub_pending"
+	metadataRequest                = "external_coordination.request"
+	metadataState                  = "external_coordination.state"
+	metadataAttempt                = "external_coordination.attempt"
+	metadataClaimedBy              = "external_coordination.claimed_by"
+	metadataClaimedAt              = "external_coordination.claimed_at"
+	metadataDelivered              = "external_coordination.delivered_at"
+	metadataError                  = "external_coordination.error"
+	metadataResponseCommitment     = "external_coordination.response_commitment"
+	metadataResponseCommitmentSalt = "external_coordination.response_commitment_salt"
+	metadataResponseScrubPending   = "external_coordination.response_scrub_pending"
+	metadataDeliveryIndeterminate  = "external_coordination.delivery_indeterminate"
 )
 
 var (
@@ -38,6 +40,9 @@ var (
 	ErrCancelled = errors.New("external coordination request cancelled") //nolint:misspell // public wire spelling
 	// ErrUnavailable indicates that no adapter can currently deliver the request.
 	ErrUnavailable = errors.New("external coordination adapter unavailable")
+	// ErrDeliveryIndeterminate means the callback may have accepted the exact
+	// attempt but the caller could not obtain a trustworthy receipt.
+	ErrDeliveryIndeterminate = errors.New("external coordination delivery indeterminate")
 	// ErrPrematureCompletion indicates a transport falsely claimed execution completion.
 	ErrPrematureCompletion = errors.New("external coordination adapter reported completion at delivery boundary")
 )
@@ -153,10 +158,9 @@ func (s *Service) List(ctx context.Context, states ...DeliveryState) ([]RequestR
 	return out, nil
 }
 
-// Claim atomically marks a queued request running from this process's point of
-// view. Stores that support conditional writes get a revision guard; the local
-// mutex protects MemStore/FileStore and prevents two in-process dispatchers from
-// claiming the same request.
+// Claim atomically marks a queued request running. The durable store revision is
+// the arbitration boundary, so independent processes and Service instances
+// cannot both claim the same attempt.
 func (s *Service) Claim(ctx context.Context, id, worker string, now time.Time) (RequestRecord, error) {
 	if err := checkContext(ctx); err != nil {
 		return RequestRecord{}, err
@@ -164,9 +168,6 @@ func (s *Service) Claim(ctx context.Context, id, worker string, now time.Time) (
 	if strings.TrimSpace(worker) == "" {
 		return RequestRecord{}, fmt.Errorf("%w: worker required", ErrInvalidInput)
 	}
-	s.claimMu.Lock()
-	defer s.claimMu.Unlock()
-
 	record, err := s.Get(ctx, id)
 	if err != nil {
 		return RequestRecord{}, err
@@ -188,7 +189,11 @@ func (s *Service) Claim(ctx context.Context, id, worker string, now time.Time) (
 	if err != nil {
 		return RequestRecord{}, fmt.Errorf("encode claimed external coordination request %s: %w", record.ID, err)
 	}
-	if err := s.store.Update(record.ID, beads.UpdateOpts{
+	writer, ok := beads.ConditionalWriterFor(s.store)
+	if !ok {
+		return RequestRecord{}, fmt.Errorf("%w: conditional claim transition unavailable", ErrUnavailable)
+	}
+	if err := writer.UpdateIfMatch(record.ID, record.revision, beads.UpdateOpts{
 		Status: strPtr("in_progress"),
 		Metadata: map[string]string{
 			metadataRequest:   string(payload),
@@ -198,6 +203,9 @@ func (s *Service) Claim(ctx context.Context, id, worker string, now time.Time) (
 			metadataClaimedAt: now.UTC().Format(time.RFC3339Nano),
 		},
 	}); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			return RequestRecord{}, fmt.Errorf("%w: %s was claimed concurrently", ErrNotQueued, record.ID)
+		}
 		return RequestRecord{}, fmt.Errorf("claim external coordination request %s: %w", record.ID, err)
 	}
 	return record, nil
@@ -216,9 +224,6 @@ func (s *Service) Complete(ctx context.Context, id string, receipt DeliveryRecei
 	if err != nil {
 		return err
 	}
-	if record.State != StateRunning {
-		return fmt.Errorf("%w: %s is %s", ErrNotQueued, id, record.State)
-	}
 	if receipt.RequestID == "" || (receipt.RequestID != id && receipt.RequestID != record.Request.RequestID) {
 		return fmt.Errorf("%w: receipt request id does not match %q", ErrInvalidInput, id)
 	}
@@ -227,6 +232,12 @@ func (s *Service) Complete(ctx context.Context, id string, receipt DeliveryRecei
 	}
 	if receipt.CorrelationID == "" || receipt.CorrelationID != record.Request.CorrelationID {
 		return fmt.Errorf("%w: receipt correlation_id does not match request", ErrInvalidInput)
+	}
+	if record.State == StateCompleted {
+		return nil
+	}
+	if record.State != StateRunning {
+		return fmt.Errorf("%w: %s is %s", ErrNotQueued, id, record.State)
 	}
 	now = zeroTime(now)
 	state := receipt.State
@@ -241,17 +252,76 @@ func (s *Service) Complete(ctx context.Context, id string, receipt DeliveryRecei
 	}
 	status := "in_progress"
 	meta := map[string]string{
-		metadataState:     string(StateRunning),
-		metadataDelivered: now.UTC().Format(time.RFC3339Nano),
+		metadataState:                 string(StateRunning),
+		metadataDelivered:             now.UTC().Format(time.RFC3339Nano),
+		metadataDeliveryIndeterminate: "",
 	}
 	if receipt.Error != "" {
 		meta[metadataError] = receipt.Error
 	}
-	if err := s.store.Update(id, beads.UpdateOpts{Status: &status, Metadata: meta}); err != nil {
+	mustScrub := record.Request.ContentRetention == RetentionEphemeral
+	if mustScrub {
+		meta[metadataResponseScrubPending] = "true"
+	}
+	writer, ok := beads.ConditionalWriterFor(s.store)
+	if !ok {
+		return fmt.Errorf("%w: conditional delivery transition unavailable", ErrUnavailable)
+	}
+	if err := writer.UpdateIfMatch(id, record.revision, beads.UpdateOpts{Status: &status, Metadata: meta}); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			current, readErr := s.Get(ctx, id)
+			if readErr != nil {
+				return fmt.Errorf("re-read external coordination delivery %s after conflict: %w", id, readErr)
+			}
+			if current.State == StateCompleted {
+				return nil
+			}
+			return fmt.Errorf("%w: cannot record delivery for state %s", ErrNotQueued, current.State)
+		}
 		return fmt.Errorf("record external coordination delivery %s: %w", id, err)
 	}
-	if record.Request.ContentRetention == RetentionEphemeral {
+	if mustScrub {
 		return s.scrubContent(id, now)
+	}
+	return nil
+}
+
+// MarkDeliveryIndeterminate preserves a running request for a late callback or
+// same-attempt retry. It never requeues or increments the attempt because the
+// remote side may already have accepted this exact causal envelope.
+func (s *Service) MarkDeliveryIndeterminate(ctx context.Context, id string, cause error, now time.Time) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	record, err := s.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if record.State != StateRunning {
+		return fmt.Errorf("%w: cannot mark indeterminate delivery for state %s", ErrNotQueued, record.State)
+	}
+	writer, ok := beads.ConditionalWriterFor(s.store)
+	if !ok {
+		return fmt.Errorf("%w: conditional indeterminate transition unavailable", ErrUnavailable)
+	}
+	message := ErrDeliveryIndeterminate.Error()
+	if cause != nil {
+		message = cause.Error()
+	}
+	status := "in_progress"
+	if err := writer.UpdateIfMatch(record.ID, record.revision, beads.UpdateOpts{Status: &status, Metadata: map[string]string{
+		metadataState:                 string(StateRunning),
+		metadataError:                 message,
+		metadataDeliveryIndeterminate: zeroTime(now).UTC().Format(time.RFC3339Nano),
+	}}); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			current, readErr := s.Get(ctx, id)
+			if readErr == nil && current.State == StateCompleted {
+				return nil
+			}
+			return fmt.Errorf("%w: indeterminate delivery changed concurrently", ErrNotQueued)
+		}
+		return fmt.Errorf("mark external coordination delivery %s indeterminate: %w", id, err)
 	}
 	return nil
 }
@@ -270,7 +340,15 @@ func (s *Service) RecordResponse(ctx context.Context, response Response) error {
 	if err != nil {
 		return err
 	}
-	commitment, err := responseCommitment(response)
+	// The bead ID and opaque request ID are lookup aliases, not distinct causal
+	// identities. Commit the canonical durable request ID so replay through either
+	// alias hashes to the same exact response.
+	response.RequestID = record.Request.RequestID
+	salt := record.responseCommitmentSalt
+	if salt == "" && record.responseCommitment == "" {
+		salt = uuid.NewString()
+	}
+	commitment, err := responseCommitment(response, salt)
 	if err != nil {
 		return err
 	}
@@ -295,9 +373,10 @@ func (s *Service) RecordResponse(ctx context.Context, response Response) error {
 	}
 	status := "closed"
 	metadata := map[string]string{
-		metadataState:              string(StateCompleted),
-		metadataDelivered:          zeroTime(response.ReceivedAt).UTC().Format(time.RFC3339Nano),
-		metadataResponseCommitment: commitment,
+		metadataState:                  string(StateCompleted),
+		metadataDelivered:              zeroTime(response.ReceivedAt).UTC().Format(time.RFC3339Nano),
+		metadataResponseCommitment:     commitment,
+		metadataResponseCommitmentSalt: salt,
 	}
 	if response.ResponseID != "" {
 		metadata["external_coordination.response_id"] = response.ResponseID
@@ -312,7 +391,11 @@ func (s *Service) RecordResponse(ctx context.Context, response Response) error {
 			if readErr != nil {
 				return fmt.Errorf("re-read external coordination response %s after conflict: %w", record.ID, readErr)
 			}
-			if current.State == StateCompleted && current.responseCommitment == commitment {
+			currentCommitment, commitmentErr := responseCommitment(response, current.responseCommitmentSalt)
+			if commitmentErr != nil {
+				return commitmentErr
+			}
+			if current.State == StateCompleted && current.responseCommitment == currentCommitment {
 				if current.responseScrubPending {
 					return s.scrubContent(current.ID, response.ReceivedAt)
 				}
@@ -328,14 +411,23 @@ func (s *Service) RecordResponse(ctx context.Context, response Response) error {
 	return nil
 }
 
-func responseCommitment(response Response) (string, error) {
+func responseCommitment(response Response, salt string) (string, error) {
 	response.ReceivedAt = response.ReceivedAt.UTC()
 	canonical, err := json.Marshal(response)
 	if err != nil {
 		return "", fmt.Errorf("%w: canonicalize response: %w", ErrInvalidInput, err)
 	}
-	sum := sha256.Sum256(canonical)
-	return fmt.Sprintf("sha256:%x", sum), nil
+	if salt == "" {
+		// Compatibility for records committed before per-response salting.
+		sum := sha256.Sum256(canonical)
+		return fmt.Sprintf("sha256:%x", sum), nil
+	}
+	material := make([]byte, 0, len(salt)+1+len(canonical))
+	material = append(material, salt...)
+	material = append(material, 0)
+	material = append(material, canonical...)
+	sum := sha256.Sum256(material)
+	return fmt.Sprintf("sha256-salted:%x", sum), nil
 }
 
 func (s *Service) scrubContent(id string, now time.Time) error {
@@ -357,6 +449,11 @@ func (s *Service) scrubContent(id string, now time.Time) error {
 			metadataResponseScrubPending:             "",
 		},
 	})
+}
+
+// Resolve loads a request by either its durable bead ID or opaque request ID.
+func (s *Service) Resolve(ctx context.Context, requestID string) (RequestRecord, error) {
+	return s.findByRequestID(ctx, requestID)
 }
 
 func (s *Service) findByRequestID(ctx context.Context, requestID string) (RequestRecord, error) {
@@ -522,17 +619,19 @@ func decodeRecord(item beads.Bead) (RequestRecord, error) {
 		return RequestRecord{}, fmt.Errorf("decode external coordination request %s: %w", item.ID, err)
 	}
 	return RequestRecord{
-		ID:                   item.ID,
-		Request:              request,
-		State:                DeliveryState(defaultString(item.Metadata[metadataState], string(StateQueued))),
-		Attempt:              parseInt(item.Metadata[metadataAttempt]),
-		ClaimedBy:            item.Metadata[metadataClaimedBy],
-		ClaimedAt:            parseTime(item.Metadata[metadataClaimedAt]),
-		DeliveredAt:          parseTime(item.Metadata[metadataDelivered]),
-		Error:                item.Metadata[metadataError],
-		revision:             item.Revision,
-		responseCommitment:   item.Metadata[metadataResponseCommitment],
-		responseScrubPending: item.Metadata[metadataResponseScrubPending] == "true",
+		ID:                     item.ID,
+		Request:                request,
+		State:                  DeliveryState(defaultString(item.Metadata[metadataState], string(StateQueued))),
+		Attempt:                parseInt(item.Metadata[metadataAttempt]),
+		ClaimedBy:              item.Metadata[metadataClaimedBy],
+		ClaimedAt:              parseTime(item.Metadata[metadataClaimedAt]),
+		DeliveredAt:            parseTime(item.Metadata[metadataDelivered]),
+		Error:                  item.Metadata[metadataError],
+		DeliveryIndeterminate:  item.Metadata[metadataDeliveryIndeterminate] != "",
+		revision:               item.Revision,
+		responseCommitment:     item.Metadata[metadataResponseCommitment],
+		responseCommitmentSalt: item.Metadata[metadataResponseCommitmentSalt],
+		responseScrubPending:   item.Metadata[metadataResponseScrubPending] == "true",
 	}, nil
 }
 

@@ -88,25 +88,28 @@ func (a *HTTPAdapter) Deliver(ctx context.Context, request Request) (DeliveryRec
 	}
 	response, err := a.client.Do(httpRequest)
 	if err != nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("deliver external coordination request: %w", err)
+		return indeterminateReceipt(request), fmt.Errorf("%w: send callback: %w", ErrDeliveryIndeterminate, err)
 	}
 	defer response.Body.Close() //nolint:errcheck
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("read external coordination response: %w", err)
+		return indeterminateReceipt(request), fmt.Errorf("%w: read callback receipt: %w", ErrDeliveryIndeterminate, err)
 	}
 	if response.StatusCode >= 400 {
+		if response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500 {
+			return DeliveryReceipt{RequestID: request.RequestID, Attempt: request.Attempt, CorrelationID: request.CorrelationID, State: StateQueued, Error: fmt.Sprintf("adapter returned HTTP %d", response.StatusCode)}, ErrUnavailable
+		}
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: fmt.Sprintf("adapter returned HTTP %d", response.StatusCode)}, nil
 	}
 	var receipt DeliveryReceipt
 	if err := json.Unmarshal(responseBody, &receipt); err != nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("decode external coordination receipt: %w", err)
+		return indeterminateReceipt(request), fmt.Errorf("%w: decode callback receipt: %w", ErrDeliveryIndeterminate, err)
 	}
 	if receipt.RequestID != request.RequestID {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("external coordination receipt request_id %q does not match %q", receipt.RequestID, request.RequestID)
+		return indeterminateReceipt(request), fmt.Errorf("%w: callback receipt request_id %q does not match %q", ErrDeliveryIndeterminate, receipt.RequestID, request.RequestID)
 	}
 	if receipt.Attempt != request.Attempt || receipt.CorrelationID != request.CorrelationID {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("external coordination receipt causal fence does not match request")
+		return indeterminateReceipt(request), fmt.Errorf("%w: callback receipt causal fence does not match request", ErrDeliveryIndeterminate)
 	}
 	if receipt.State == StateCompleted {
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: "adapter reported completion at delivery boundary"}, ErrPrematureCompletion
@@ -115,6 +118,15 @@ func (a *HTTPAdapter) Deliver(ctx context.Context, request Request) (DeliveryRec
 		receipt.State = StateQueued
 	}
 	return receipt, nil
+}
+
+func indeterminateReceipt(request Request) DeliveryReceipt {
+	return DeliveryReceipt{
+		RequestID:     request.RequestID,
+		Attempt:       request.Attempt,
+		CorrelationID: request.CorrelationID,
+		State:         StateRunning,
+	}
 }
 
 // Dispatcher claims and delivers one queued request. It is intentionally
@@ -136,26 +148,47 @@ func (d *Dispatcher) DeliverNext(ctx context.Context, now time.Time) (*RequestRe
 	if worker == "" {
 		worker = d.Adapter.Name()
 	}
+	running, err := d.Queue.List(ctx, StateRunning)
+	if err != nil {
+		return nil, nil, err
+	}
+	var record RequestRecord
+	for _, candidate := range running {
+		if candidate.DeliveryIndeterminate {
+			record = candidate
+			break
+		}
+	}
 	queued, err := d.Queue.List(ctx, StateQueued)
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(queued) == 0 {
+	if record.ID == "" && len(queued) == 0 {
 		return nil, nil, nil
 	}
-	if err := validateCapabilities(d.Adapter.Capabilities(), queued[0].Request); err != nil {
-		_ = d.Queue.Fail(ctx, queued[0].ID, err, now)
+	if record.ID == "" {
+		record = queued[0]
+	}
+	if err := ValidateCapabilities(d.Adapter.Capabilities(), record.Request); err != nil {
+		_ = d.Queue.Fail(ctx, record.ID, err, now)
 		return nil, nil, err
 	}
-	record, err := d.Queue.Claim(ctx, queued[0].ID, worker, now)
-	if err != nil {
-		return nil, nil, err
+	if record.State == StateQueued {
+		record, err = d.Queue.Claim(ctx, record.ID, worker, now)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	receipt, deliverErr := d.Adapter.Deliver(ctx, record.Request)
 	if deliverErr != nil {
-		// ErrUnavailable means the adapter could not be reached, not that the
-		// request is bad. Failing it here is terminal and unrecoverable, since
-		// only queued records are ever dispatched again.
+		if errors.Is(deliverErr, ErrDeliveryIndeterminate) {
+			if err := d.Queue.MarkDeliveryIndeterminate(ctx, record.ID, deliverErr, now); err != nil {
+				return &record, &receipt, err
+			}
+			return &record, &receipt, deliverErr
+		}
+		// ErrUnavailable is a confirmed rejection before acceptance, so the
+		// same durable request may safely return to the queue for a later attempt.
 		if errors.Is(deliverErr, ErrUnavailable) {
 			_ = d.Queue.Requeue(ctx, record.ID, deliverErr, now)
 		} else {
@@ -176,7 +209,8 @@ func (d *Dispatcher) DeliverNext(ctx context.Context, now time.Time) (*RequestRe
 	return &record, &receipt, nil
 }
 
-func validateCapabilities(capabilities Capability, request Request) error {
+// ValidateCapabilities checks whether an adapter can execute the exact request policy.
+func ValidateCapabilities(capabilities Capability, request Request) error {
 	if request.DeliveryMode == DeliveryInterrupt && !capabilities.CanInterrupt {
 		return fmt.Errorf("%w: adapter cannot interrupt an active coordinator turn", ErrInvalidInput)
 	}

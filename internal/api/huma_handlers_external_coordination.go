@@ -156,10 +156,12 @@ func (s *Server) externalCoordinationAdapterKey() (extmsg.AdapterKey, bool) {
 	if cfg == nil || cfg.ExternalCoordination == nil || !cfg.ExternalCoordination.Enabled {
 		return extmsg.AdapterKey{}, false
 	}
-	return extmsg.AdapterKey{
-		Provider:  cfg.ExternalCoordination.Provider,
-		AccountID: cfg.ExternalCoordination.AccountID,
-	}, true
+	provider := strings.TrimSpace(cfg.ExternalCoordination.Provider)
+	accountID := strings.TrimSpace(cfg.ExternalCoordination.AccountID)
+	if provider == "" || accountID == "" {
+		return extmsg.AdapterKey{}, false
+	}
+	return extmsg.AdapterKey{Provider: provider, AccountID: accountID}, true
 }
 
 // externalCoordinationTransport returns the transport adapter registered right
@@ -176,7 +178,24 @@ func (s *Server) externalCoordinationTransport() extmsg.TransportAdapter {
 	if registry == nil {
 		return nil
 	}
-	return registry.Lookup(key)
+	transport := registry.Lookup(key)
+	if transport == nil {
+		return nil
+	}
+	cfg := s.state.Config().ExternalCoordination
+	if transport.Name() != strings.TrimSpace(cfg.Adapter) || strings.TrimSpace(cfg.ConversationID) == "" {
+		return nil
+	}
+	adapter := externalcoordination.NewTransportAdapter(transport, s.state.CityName())
+	request := externalcoordination.Request{
+		Target:       externalcoordination.Target{ConversationID: cfg.ConversationID},
+		DeliveryMode: externalcoordination.DeliveryMode(cfg.EffectiveDelivery()),
+		SessionMode:  externalcoordination.SessionMode(cfg.EffectiveSessionPolicy()),
+	}
+	if err := externalcoordination.ValidateCapabilities(adapter.Capabilities(), request); err != nil {
+		return nil
+	}
+	return transport
 }
 
 // externalCoordinationDispatcher builds a dispatcher over the adapter that is
@@ -255,12 +274,19 @@ func (s *Server) humaHandleExternalCoordinationResponse(ctx context.Context, inp
 	if err != nil {
 		return nil, err
 	}
-	cfg := s.state.Config().ExternalCoordination
 	registry := s.state.AdapterRegistry()
-	if registry == nil || input.Adapter != cfg.Adapter {
-		return nil, apierr.Forbidden.Msg("external coordination response adapter is not the configured adapter")
+	record, resolveErr := service.Resolve(ctx, input.Body.RequestID)
+	if resolveErr != nil {
+		if errors.Is(resolveErr, externalcoordination.ErrNotFound) {
+			return nil, apierr.InvalidRequest.Msg(resolveErr.Error())
+		}
+		return nil, apierr.Internal.Msg(fmt.Sprintf("resolving external coordination response target: %v", resolveErr))
 	}
-	if _, ok := registry.Authenticate(extmsg.AdapterKey{Provider: cfg.Provider, AccountID: cfg.AccountID}, input.Adapter, input.AdapterGeneration, input.AdapterInstance, input.Authorization); !ok {
+	target := record.Request.Target
+	if registry == nil || input.Adapter != target.Adapter {
+		return nil, apierr.Forbidden.Msg("external coordination response adapter does not match the durable request target")
+	}
+	if _, ok := registry.Authenticate(extmsg.AdapterKey{Provider: target.Provider, AccountID: target.AccountID}, input.Adapter, input.AdapterGeneration, input.AdapterInstance, input.Authorization); !ok {
 		return nil, apierr.Forbidden.Msg("external coordination response adapter credential is invalid or stale")
 	}
 	_, err = withIdempotency(s.idem, "/v0/external-coordination/responses", input.IdempotencyKey, input.Body,

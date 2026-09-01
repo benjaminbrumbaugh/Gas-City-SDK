@@ -83,16 +83,37 @@ func TestAdapterRegistryCredentialIsBoundToCurrentGenerationAndInstance(t *testi
 	registry := NewAdapterRegistry()
 	key := AdapterKey{Provider: "hermes", AccountID: "desktop"}
 	adapter := newStubAdapter("hermes", ConversationRef{})
-	first := registry.Register(key, adapter)
+	first := registry.RegisterPending(key, adapter)
 	if first.Credential == "" || first.Instance == "" || first.Generation == 0 {
 		t.Fatal("registration is missing a credential, instance, or generation")
+	}
+	if got := registry.Lookup(key); got != nil {
+		t.Fatalf("Lookup before activation = %v, want nil", got)
+	}
+	if keys := registry.List(); len(keys) != 0 {
+		t.Fatalf("List before activation = %v, want no active keys", keys)
+	}
+	if _, ok := registry.Authenticate(key, "hermes", first.Generation, first.Instance, "Bearer "+first.Credential); ok {
+		t.Fatal("Authenticate before activation = true, want false")
+	}
+	if !registry.Activate(key, "hermes", first.Generation, first.Instance, "Bearer "+first.Credential) {
+		t.Fatal("Activate current registration = false, want true")
+	}
+	if got := registry.Lookup(key); got != adapter {
+		t.Fatalf("Lookup after activation = %v, want current adapter", got)
+	}
+	if keys := registry.List(); len(keys) != 1 || keys[0] != key {
+		t.Fatalf("List after activation = %v, want [%v]", keys, key)
 	}
 	if _, ok := registry.Authenticate(key, "hermes", first.Generation, first.Instance, "Bearer "+first.Credential); !ok {
 		t.Fatal("Authenticate current registration = false, want true")
 	}
-	second := registry.Register(key, adapter)
+	second := registry.RegisterPending(key, adapter)
 	if second.Generation <= first.Generation {
 		t.Fatalf("replacement generation = %d, want greater than %d", second.Generation, first.Generation)
+	}
+	if got := registry.Lookup(key); got != nil {
+		t.Fatalf("replacement registration was visible before activation: %v", got)
 	}
 	if _, ok := registry.Authenticate(key, "hermes", first.Generation, first.Instance, "Bearer "+first.Credential); ok {
 		t.Fatal("Authenticate stale registration = true, want false")
@@ -103,9 +124,12 @@ func TestAdapterRegistryUnregisterRequiresCurrentRegistrationFence(t *testing.T)
 	registry := NewAdapterRegistry()
 	key := AdapterKey{Provider: "hermes", AccountID: "desktop"}
 	firstAdapter := newStubAdapter("hermes", ConversationRef{})
-	first := registry.Register(key, firstAdapter)
+	first := registry.RegisterPending(key, firstAdapter)
 	secondAdapter := newStubAdapter("hermes", ConversationRef{})
-	second := registry.Register(key, secondAdapter)
+	second := registry.RegisterPending(key, secondAdapter)
+	if !registry.Activate(key, "hermes", second.Generation, second.Instance, "Bearer "+second.Credential) {
+		t.Fatal("Activate replacement registration = false, want true")
+	}
 
 	if registry.Unregister(key, first.Generation, first.Instance) {
 		t.Fatal("stale registration fence removed replacement")

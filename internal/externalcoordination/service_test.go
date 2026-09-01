@@ -45,6 +45,49 @@ func (s *responseRaceStore) ConditionalWriterHandle() (beads.ConditionalWriter, 
 
 type noConditionalResponseStore struct{ beads.Store }
 
+type claimRaceStore struct {
+	beads.Store
+	writer  beads.ConditionalWriter
+	arrived chan struct{}
+	release chan struct{}
+	gets    atomic.Int32
+}
+
+func (s *claimRaceStore) Get(id string) (beads.Bead, error) {
+	item, err := s.Store.Get(id)
+	if s.gets.Add(1) <= 2 {
+		s.arrived <- struct{}{}
+		<-s.release
+	}
+	return item, err
+}
+
+func (s *claimRaceStore) ConditionalWriterHandle() (beads.ConditionalWriter, bool) {
+	return s.writer, s.writer != nil
+}
+
+type completeRaceWriter struct {
+	beads.ConditionalWriter
+	beforeDeliveryCAS func()
+	fired             atomic.Bool
+}
+
+func (w *completeRaceWriter) UpdateIfMatch(id string, revision int64, opts beads.UpdateOpts) error {
+	if opts.Metadata[metadataResponseCommitment] == "" && opts.Metadata[metadataDelivered] != "" && w.fired.CompareAndSwap(false, true) {
+		w.beforeDeliveryCAS()
+	}
+	return w.ConditionalWriter.UpdateIfMatch(id, revision, opts)
+}
+
+type completeRaceStore struct {
+	beads.Store
+	writer beads.ConditionalWriter
+}
+
+func (s *completeRaceStore) ConditionalWriterHandle() (beads.ConditionalWriter, bool) {
+	return s.writer, s.writer != nil
+}
+
 type failOnceScrubStore struct {
 	beads.Store
 	writer beads.ConditionalWriter
@@ -147,6 +190,57 @@ func TestClaimRequiresAttemptAndCorrelationFences(t *testing.T) {
 	}
 }
 
+func TestClaimIsAtomicAcrossServiceInstances(t *testing.T) {
+	now := time.Date(2026, 8, 31, 13, 30, 0, 0, time.UTC)
+	store := beads.NewMemStore()
+	record, err := NewService(store).Enqueue(context.Background(), testRequestInput(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, ok := beads.ConditionalWriterFor(store)
+	if !ok {
+		t.Fatal("MemStore lost conditional writer")
+	}
+	raceStore := &claimRaceStore{
+		Store:   store,
+		writer:  writer,
+		arrived: make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+	results := make(chan error, 2)
+	for _, worker := range []string{"dispatcher-a", "dispatcher-b"} {
+		go func(worker string) {
+			_, claimErr := NewService(raceStore).Claim(context.Background(), record.ID, worker, now.Add(time.Second))
+			results <- claimErr
+		}(worker)
+	}
+	<-raceStore.arrived
+	<-raceStore.arrived
+	close(raceStore.release)
+
+	var succeeded, conflicted int
+	for range 2 {
+		switch claimErr := <-results; {
+		case claimErr == nil:
+			succeeded++
+		case errors.Is(claimErr, ErrNotQueued):
+			conflicted++
+		default:
+			t.Fatalf("Claim race error = %v, want success or ErrNotQueued", claimErr)
+		}
+	}
+	if succeeded != 1 || conflicted != 1 {
+		t.Fatalf("claim race results = %d success, %d conflict; want one each", succeeded, conflicted)
+	}
+	stored, err := NewService(store).Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateRunning || stored.Attempt != 1 {
+		t.Fatalf("claimed record = %+v, want one running attempt", stored)
+	}
+}
+
 func TestEnqueueIsIdempotentAndPreservesCausalEnvelope(t *testing.T) {
 	service := NewService(beads.NewMemStore())
 	first, err := service.Enqueue(context.Background(), testRequestInput(time.Now()))
@@ -222,6 +316,103 @@ func TestClaimDeliveryAndResponseBoundaries(t *testing.T) {
 	}
 }
 
+func TestCompleteCannotRegressCommittedResponse(t *testing.T) {
+	now := time.Date(2026, 8, 31, 13, 45, 0, 0, time.UTC)
+	store := beads.NewMemStore()
+	base := NewService(store)
+	record, err := base.Enqueue(context.Background(), testRequestInput(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := base.Claim(context.Background(), record.ID, "dispatcher-a", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, ok := beads.ConditionalWriterFor(store)
+	if !ok {
+		t.Fatal("MemStore lost conditional writer")
+	}
+	raceWriter := &completeRaceWriter{ConditionalWriter: writer}
+	raceStore := &completeRaceStore{Store: store, writer: raceWriter}
+	raceWriter.beforeDeliveryCAS = func() {
+		responseErr := base.RecordResponse(context.Background(), Response{
+			RequestID:     claimed.Request.RequestID,
+			Attempt:       claimed.Attempt,
+			CorrelationID: claimed.Request.CorrelationID,
+			ResponseID:    "response-won-race",
+			State:         "answered",
+			ReceivedAt:    now.Add(3 * time.Second),
+		})
+		if responseErr != nil {
+			t.Fatalf("RecordResponse during delivery race: %v", responseErr)
+		}
+	}
+	receipt := DeliveryReceipt{
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       claimed.Attempt,
+		CorrelationID: claimed.Request.CorrelationID,
+		State:         StateRunning,
+		Accepted:      true,
+	}
+	if err := NewService(raceStore).Complete(context.Background(), record.ID, receipt, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("Complete after response won race: %v", err)
+	}
+	stored, err := base.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateCompleted || stored.responseCommitment == "" {
+		t.Fatalf("Complete regressed committed response: %+v", stored)
+	}
+}
+
+func TestCompletePersistsEphemeralScrubFenceBeforeScrubbing(t *testing.T) {
+	now := time.Date(2026, 8, 31, 14, 0, 0, 0, time.UTC)
+	store := beads.NewMemStore()
+	service := NewService(store)
+	record, err := service.Enqueue(context.Background(), testRequestInput(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), record.ID, "dispatcher-a", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, ok := beads.ConditionalWriterFor(store)
+	if !ok {
+		t.Fatal("MemStore lost conditional writer")
+	}
+	failing := &failOnceScrubStore{Store: store, writer: writer}
+	failing.fail.Store(true)
+	receipt := DeliveryReceipt{
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       claimed.Attempt,
+		CorrelationID: claimed.Request.CorrelationID,
+		State:         StateRunning,
+		Accepted:      true,
+	}
+	if err := NewService(failing).Complete(context.Background(), record.ID, receipt, now.Add(2*time.Second)); err == nil || !strings.Contains(err.Error(), "injected scrub failure") {
+		t.Fatalf("first Complete error = %v, want injected scrub failure", err)
+	}
+	pending, err := store.Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Metadata[metadataResponseScrubPending] != "true" {
+		t.Fatalf("delivery scrub pending marker = %q, want true", pending.Metadata[metadataResponseScrubPending])
+	}
+	if err := NewService(failing).Complete(context.Background(), record.ID, receipt, now.Add(3*time.Second)); err != nil {
+		t.Fatalf("Complete replay did not finish scrub: %v", err)
+	}
+	scrubbed, err := NewService(store).Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scrubbed.Request.Prompt != "" || scrubbed.responseScrubPending {
+		t.Fatalf("delivery scrub replay left sensitive content or fence: %+v", scrubbed)
+	}
+}
+
 func TestRecordResponseExactReplaySurvivesServiceRestart(t *testing.T) {
 	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
 	store := beads.NewMemStore()
@@ -257,11 +448,43 @@ func TestRecordResponseExactReplaySurvivesServiceRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	commitment := stored.Metadata["external_coordination.response_commitment"]
-	if !strings.HasPrefix(commitment, "sha256:") || len(commitment) != len("sha256:")+64 {
-		t.Fatalf("response commitment = %q, want canonical SHA-256 commitment", commitment)
+	if !strings.HasPrefix(commitment, "sha256-salted:") || len(commitment) != len("sha256-salted:")+64 {
+		t.Fatalf("response commitment = %q, want salted canonical SHA-256 commitment", commitment)
+	}
+	if salt := stored.Metadata[metadataResponseCommitmentSalt]; salt == "" {
+		t.Fatal("response commitment salt is empty")
 	}
 	if strings.Contains(fmt.Sprint(stored.Metadata), response.Summary) {
 		t.Fatalf("ephemeral response summary persisted in metadata: %v", stored.Metadata)
+	}
+}
+
+func TestRecordResponseAliasesShareOneCommitment(t *testing.T) {
+	now := time.Date(2026, 8, 31, 14, 15, 0, 0, time.UTC)
+	store := beads.NewMemStore()
+	service := NewService(store)
+	record, err := service.Enqueue(context.Background(), testRequestInput(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), record.ID, "dispatcher-a", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := Response{
+		RequestID:     record.ID,
+		Attempt:       claimed.Attempt,
+		CorrelationID: claimed.Request.CorrelationID,
+		ResponseID:    "response-alias",
+		State:         "answered",
+		ReceivedAt:    now.Add(2 * time.Second),
+	}
+	if err := service.RecordResponse(context.Background(), response); err != nil {
+		t.Fatalf("RecordResponse by bead ID: %v", err)
+	}
+	response.RequestID = claimed.Request.RequestID
+	if err := NewService(store).RecordResponse(context.Background(), response); err != nil {
+		t.Fatalf("RecordResponse replay by opaque request ID: %v", err)
 	}
 }
 
@@ -534,8 +757,8 @@ func TestHTTPAdapterRejectsOmittedOrMismatchedReceiptFence(t *testing.T) {
 			responseBody = tt.receipt
 			receipt, err := adapter.Deliver(context.Background(), request)
 			if tt.wantErr {
-				if err == nil || receipt.State != StateFailed {
-					t.Fatalf("Deliver() receipt=%+v err=%v, want failed receipt and error", receipt, err)
+				if !errors.Is(err, ErrDeliveryIndeterminate) || receipt.State != StateRunning {
+					t.Fatalf("Deliver() receipt=%+v err=%v, want running receipt and ErrDeliveryIndeterminate", receipt, err)
 				}
 				return
 			}
@@ -546,6 +769,108 @@ func TestHTTPAdapterRejectsOmittedOrMismatchedReceiptFence(t *testing.T) {
 				t.Fatalf("Deliver() receipt fence = (%q, %d, %q), want (%q, %d, %q)", receipt.RequestID, receipt.Attempt, receipt.CorrelationID, request.RequestID, request.Attempt, request.CorrelationID)
 			}
 		})
+	}
+}
+
+func TestDispatcherRetriesIndeterminateDeliveryWithSameCausalFence(t *testing.T) {
+	now := time.Date(2026, 8, 31, 15, 0, 0, 0, time.UTC)
+	service := NewService(beads.NewMemStore())
+	record, err := service.Enqueue(context.Background(), testRequestInput(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var attempts []int
+	var requestIDs, idempotencyKeys []string
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var request Request
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			return nil, err
+		}
+		attempts = append(attempts, request.Attempt)
+		requestIDs = append(requestIDs, request.RequestID)
+		idempotencyKeys = append(idempotencyKeys, r.Header.Get("Idempotency-Key"))
+		if len(attempts) == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("accepted but receipt was lost")),
+				Header:     make(http.Header),
+			}, nil
+		}
+		encoded, err := json.Marshal(DeliveryReceipt{
+			RequestID:     request.RequestID,
+			Attempt:       request.Attempt,
+			CorrelationID: request.CorrelationID,
+			State:         StateRunning,
+			Accepted:      true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(string(encoded))),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	adapter := NewHTTPAdapter("hermes", "http://bridge.invalid/callback", Capability{CanResumeSession: true}, WithHTTPClient(client))
+	dispatcher := Dispatcher{Queue: service, Adapter: adapter, Worker: "test-dispatcher"}
+	if _, receipt, err := dispatcher.DeliverNext(context.Background(), now.Add(time.Second)); !errors.Is(err, ErrDeliveryIndeterminate) || receipt == nil || receipt.State != StateRunning {
+		t.Fatalf("first DeliverNext receipt=%+v err=%v, want running indeterminate delivery", receipt, err)
+	}
+	stored, err := service.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateRunning || !stored.DeliveryIndeterminate || stored.Attempt != 1 {
+		t.Fatalf("after lost receipt record=%+v, want running indeterminate attempt 1", stored)
+	}
+
+	if _, receipt, err := dispatcher.DeliverNext(context.Background(), now.Add(2*time.Second)); err != nil || receipt == nil || !receipt.Accepted {
+		t.Fatalf("retry DeliverNext receipt=%+v err=%v, want accepted delivery", receipt, err)
+	}
+	stored, err = service.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateRunning || stored.DeliveryIndeterminate || stored.Attempt != 1 {
+		t.Fatalf("after retry record=%+v, want running determinate attempt 1", stored)
+	}
+	if fmt.Sprint(attempts) != "[1 1]" || requestIDs[0] != requestIDs[1] || idempotencyKeys[0] != idempotencyKeys[1] {
+		t.Fatalf("retry fences attempts=%v request_ids=%v idempotency_keys=%v, want exact same identity", attempts, requestIDs, idempotencyKeys)
+	}
+}
+
+func TestIndeterminateDeliveryAcceptsLateResponse(t *testing.T) {
+	now := time.Date(2026, 8, 31, 15, 30, 0, 0, time.UTC)
+	service := NewService(beads.NewMemStore())
+	record, err := service.Enqueue(context.Background(), testRequestInput(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), record.ID, "test-dispatcher", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.MarkDeliveryIndeterminate(context.Background(), record.ID, ErrDeliveryIndeterminate, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RecordResponse(context.Background(), Response{
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       claimed.Attempt,
+		CorrelationID: claimed.Request.CorrelationID,
+		ReceivedAt:    now.Add(3 * time.Second),
+		Summary:       "late callback completed",
+	}); err != nil {
+		t.Fatalf("RecordResponse after indeterminate delivery: %v", err)
+	}
+	stored, err := service.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateCompleted {
+		t.Fatalf("late response state = %q, want completed", stored.State)
 	}
 }
 

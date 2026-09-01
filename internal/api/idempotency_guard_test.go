@@ -66,6 +66,7 @@ var exemptFromIdempotency = map[string]bool{
 	"post-v0-city-by-city-name-convoy-by-id-close":             true,
 	"post-v0-city-by-city-name-convoy-by-id-remove":            true,
 	"post-v0-city-by-city-name-extmsg-bind":                    true,
+	"post-v0-city-by-city-name-extmsg-adapters-activate":       true,
 	"post-v0-city-by-city-name-extmsg-inbound":                 true,
 	"post-v0-city-by-city-name-extmsg-outbound":                true,
 	"post-v0-city-by-city-name-extmsg-participants":            true,

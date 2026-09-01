@@ -126,6 +126,35 @@ func TestExternalCoordinationResponseRouteAcceptsCurrentExternalAdapterRegistrat
 	}
 }
 
+func TestExternalCoordinationResponseAuthenticatesDurableRequestTargetAfterConfigChange(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	srv := New(state)
+	h := newTestCityHandlerWith(t, state, srv)
+	registration := registerExternalCoordinationResponseTestAdapter(t, h, state)
+	srv.waitForBackground()
+	claimed := claimExternalCoordinationResponseTestRequest(t, state)
+
+	// A hot reload may redirect future requests, but it must not transfer or
+	// revoke the callback authority bound to an already-running durable request.
+	state.cfg.ExternalCoordination.Adapter = "future-adapter"
+	state.cfg.ExternalCoordination.Provider = "future-provider"
+	state.cfg.ExternalCoordination.AccountID = "future-account"
+	state.cfg.ExternalCoordination.ConversationID = "future-conversation"
+	state.cfg.ExternalCoordination.ConfigRevision++
+
+	response := postExternalCoordinationResponse(t, h, state, claimed, registration)
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST /external-coordination/responses after config change status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
+	stored, err := externalcoordination.NewService(state.CityBeadStore()).Get(context.Background(), claimed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != externalcoordination.StateCompleted {
+		t.Fatalf("stored request state = %q, want completed", stored.State)
+	}
+}
+
 func TestExternalCoordinationResponseRouteAcknowledgesExactReplayAndRejectsDivergenceAfterRestart(t *testing.T) {
 	state := newExternalCoordinationResponseTestState(t)
 	srv := New(state)
@@ -221,8 +250,41 @@ func TestExtMsgAdapterUnregisterRequiresCurrentRegistrationFence(t *testing.T) {
 	}
 }
 
+func TestExtMsgAdapterActivationRejectsWrongCredentialAndFence(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	h := newTestCityHandler(t, state)
+	registration := registerExternalCoordinationBridge(t, h, state, "http://127.0.0.1:9/callback")
+	key := extmsg.AdapterKey{Provider: "hermes", AccountID: "desktop"}
+
+	for name, mutation := range map[string]func(*coordinationCallbackRegistration){
+		"wrong credential": func(candidate *coordinationCallbackRegistration) { candidate.Credential = "wrong" },
+		"wrong generation": func(candidate *coordinationCallbackRegistration) { candidate.Generation++ },
+		"wrong instance":   func(candidate *coordinationCallbackRegistration) { candidate.Instance = "wrong" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := registration
+			mutation(&candidate)
+			body := fmt.Sprintf(`{"provider":"hermes","account_id":"desktop","name":"hermes","generation":%d,"instance":%q}`, candidate.Generation, candidate.Instance)
+			req := httptest.NewRequest(http.MethodPost, cityURL(state, "/extmsg/adapters/activate"), strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+candidate.Credential)
+			req.Header.Set("X-GC-Request", "coordination-bridge-invalid-activate")
+			response := httptest.NewRecorder()
+			h.ServeHTTP(response, req)
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("invalid activation status = %d, want 403; body = %s", response.Code, response.Body.String())
+			}
+			if got := state.AdapterRegistry().Lookup(key); got != nil {
+				t.Fatalf("invalid activation exposed adapter %T", got)
+			}
+		})
+	}
+	activateExternalCoordinationBridge(t, h, state, registration)
+}
+
 func TestExtMsgAdapterRegisterRejectsUnsafeSecretBearingCallbackURLs(t *testing.T) {
 	for _, callbackURL := range []string{
+		"",
 		"http://example.com/bridge",
 		"https://user:password@example.com/bridge",
 		"https://example.com/bridge?target=other",
@@ -257,7 +319,7 @@ type coordinationCallbackRegistration struct {
 	Instance   string `json:"instance"`
 }
 
-func newExternalCoordinationResponseTestState(t *testing.T) State {
+func newExternalCoordinationResponseTestState(t *testing.T) *fakeState {
 	t.Helper()
 	state := newFakeState(t)
 	state.cityBeadStore = beads.NewMemStore()
@@ -292,6 +354,7 @@ func registerExternalCoordinationResponseTestAdapter(t *testing.T, h http.Handle
 	if err := json.Unmarshal(response.Body.Bytes(), &registration); err != nil {
 		t.Fatal(err)
 	}
+	activateExternalCoordinationBridge(t, h, state, registration)
 	return registration
 }
 
@@ -384,7 +447,7 @@ func (b *bridgeCallbackAdapter) deliveries() []extmsg.PublishRequest {
 	return append([]extmsg.PublishRequest(nil), b.published...)
 }
 
-func registerExternalCoordinationBridge(t *testing.T, h http.Handler, state State, callbackURL string) {
+func registerExternalCoordinationBridge(t *testing.T, h http.Handler, state State, callbackURL string) coordinationCallbackRegistration {
 	t.Helper()
 	body := fmt.Sprintf(`{"provider":"hermes","account_id":"desktop","name":"hermes","callback_url":%q}`, callbackURL)
 	req := httptest.NewRequest(http.MethodPost, cityURL(state, "/extmsg/adapters"), strings.NewReader(body))
@@ -395,6 +458,25 @@ func registerExternalCoordinationBridge(t *testing.T, h http.Handler, state Stat
 	if response.Code != http.StatusCreated {
 		t.Fatalf("POST /extmsg/adapters status = %d, want 201; body = %s", response.Code, response.Body.String())
 	}
+	var registration coordinationCallbackRegistration
+	if err := json.Unmarshal(response.Body.Bytes(), &registration); err != nil {
+		t.Fatal(err)
+	}
+	return registration
+}
+
+func activateExternalCoordinationBridge(t *testing.T, h http.Handler, state State, registration coordinationCallbackRegistration) {
+	t.Helper()
+	body := fmt.Sprintf(`{"provider":"hermes","account_id":"desktop","name":"hermes","generation":%d,"instance":%q}`, registration.Generation, registration.Instance)
+	req := httptest.NewRequest(http.MethodPost, cityURL(state, "/extmsg/adapters/activate"), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+registration.Credential)
+	req.Header.Set("X-GC-Request", "coordination-bridge-activate")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST /extmsg/adapters/activate status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
 }
 
 // TestExternalCoordinationDeliversQueuedRequestWhenAdapterRegistersAfterEnqueue
@@ -402,7 +484,8 @@ func registerExternalCoordinationBridge(t *testing.T, h http.Handler, state Stat
 // once, inline with the enqueue, so a request queued before its bridge
 // registered had no later dispatch opportunity and sat at attempt 0 forever —
 // which is precisely what stalled the first city-to-coordinator handoff.
-// Registration is now itself a dispatch trigger.
+// Activation is now itself a dispatch trigger. Registration remains pending
+// until the bridge has received its response credential.
 func TestExternalCoordinationDeliversQueuedRequestWhenAdapterRegistersAfterEnqueue(t *testing.T) {
 	state := newExternalCoordinationResponseTestState(t)
 	srv := New(state)
@@ -448,7 +531,12 @@ func TestExternalCoordinationDeliversQueuedRequestWhenAdapterRegistersAfterEnque
 		t.Fatalf("record before registration = state %q attempt %d, want queued/0", queued.State, queued.Attempt)
 	}
 
-	registerExternalCoordinationBridge(t, h, state, "http://127.0.0.1")
+	registration := registerExternalCoordinationBridge(t, h, state, "http://127.0.0.1")
+	srv.waitForBackground()
+	if got := len(bridge.deliveries()); got != 0 {
+		t.Fatalf("bridge saw %d callback(s) before credential-bound activation, want 0", got)
+	}
+	activateExternalCoordinationBridge(t, h, state, registration)
 	srv.waitForBackground()
 
 	delivered := bridge.deliveries()
@@ -481,7 +569,8 @@ func TestExternalCoordinationDeliversQueuedRequestWhenAdapterRegistersAfterEnque
 
 	// A second registration re-triggers the drain. The delivered request is no
 	// longer queued, so the coordinator must not be asked to take a second turn.
-	registerExternalCoordinationBridge(t, h, state, "http://127.0.0.1")
+	registration = registerExternalCoordinationBridge(t, h, state, "http://127.0.0.1")
+	activateExternalCoordinationBridge(t, h, state, registration)
 	srv.waitForBackground()
 	if got := len(bridge.deliveries()); got != 1 {
 		t.Fatalf("bridge saw %d callback(s) after re-registering, want the original 1", got)
@@ -599,8 +688,12 @@ func TestExternalCoordinationCapabilityTracksLiveAdapterRegistration(t *testing.
 		t.Fatalf("capability.Configured = false with [external_coordination] enabled: %+v", capability)
 	}
 
-	registration := registerExternalCoordinationResponseTestAdapter(t, h, state)
-
+	registration := registerExternalCoordinationBridge(t, h, state, "http://127.0.0.1:9/callback")
+	capability = getExternalCoordinationCapability(t, h, state)
+	if capability.Available || capability.Registered {
+		t.Fatalf("capability with pending adapter registration = %+v, want available=false registered=false", capability)
+	}
+	activateExternalCoordinationBridge(t, h, state, registration)
 	capability = getExternalCoordinationCapability(t, h, state)
 	if !capability.Available || !capability.Registered || !capability.Configured {
 		t.Fatalf("capability after adapter registration = %+v, want available/registered/configured all true", capability)
@@ -613,6 +706,52 @@ func TestExternalCoordinationCapabilityTracksLiveAdapterRegistration(t *testing.
 	capability = getExternalCoordinationCapability(t, h, state)
 	if capability.Available || capability.Registered {
 		t.Fatalf("capability after adapter unregistration = %+v, want available=false registered=false", capability)
+	}
+}
+
+func TestExternalCoordinationCapabilityRejectsUnsupportedConfiguredSessionPolicy(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	state.cfg.ExternalCoordination.SessionPolicy = "new"
+	h := newTestCityHandler(t, state)
+	registration := registerExternalCoordinationBridge(t, h, state, "http://127.0.0.1:9/callback")
+	activateExternalCoordinationBridge(t, h, state, registration)
+
+	capability := getExternalCoordinationCapability(t, h, state)
+	if capability.Available || capability.Registered {
+		t.Fatalf("capability for unsupported session policy = %+v, want available=false registered=false", capability)
+	}
+}
+
+func TestExternalCoordinationCapabilityRejectsWrongAdapterName(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	h := newTestCityHandler(t, state)
+	body := `{"provider":"hermes","account_id":"desktop","name":"not-hermes","callback_url":"http://127.0.0.1:9/callback"}`
+	req := httptest.NewRequest(http.MethodPost, cityURL(state, "/extmsg/adapters"), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GC-Request", "coordination-wrong-adapter-register")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, req)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("POST /extmsg/adapters status = %d, want 201; body = %s", response.Code, response.Body.String())
+	}
+	var registration coordinationCallbackRegistration
+	if err := json.Unmarshal(response.Body.Bytes(), &registration); err != nil {
+		t.Fatal(err)
+	}
+	activateBody := fmt.Sprintf(`{"provider":"hermes","account_id":"desktop","name":"not-hermes","generation":%d,"instance":%q}`, registration.Generation, registration.Instance)
+	activateReq := httptest.NewRequest(http.MethodPost, cityURL(state, "/extmsg/adapters/activate"), strings.NewReader(activateBody))
+	activateReq.Header.Set("Content-Type", "application/json")
+	activateReq.Header.Set("Authorization", "Bearer "+registration.Credential)
+	activateReq.Header.Set("X-GC-Request", "coordination-wrong-adapter-activate")
+	activateResponse := httptest.NewRecorder()
+	h.ServeHTTP(activateResponse, activateReq)
+	if activateResponse.Code != http.StatusOK {
+		t.Fatalf("POST /extmsg/adapters/activate status = %d, want 200; body = %s", activateResponse.Code, activateResponse.Body.String())
+	}
+
+	capability := getExternalCoordinationCapability(t, h, state)
+	if capability.Available || capability.Registered {
+		t.Fatalf("capability for wrong adapter name = %+v, want available=false registered=false", capability)
 	}
 }
 
