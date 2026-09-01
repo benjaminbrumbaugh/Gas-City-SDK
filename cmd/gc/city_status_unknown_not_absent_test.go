@@ -228,6 +228,9 @@ func TestPartialStatusDoesNotSignalNoAgentsRunning(t *testing.T) {
 // genuinely dead city.
 func TestObservedEmptyCityStillSignalsNoAgentsRunning(t *testing.T) {
 	snapshot := fleetSnapshot(0, 15, false, nil)
+	// Zero demand with zero on-demand workers is healthy quiescence. An active
+	// durable session makes the empty runtime actionable rather than idle.
+	snapshot.Summary.ActiveSessions = 1
 
 	status := cityStatusJSONFromSnapshot(snapshot, snapshot.Summary)
 
@@ -250,8 +253,8 @@ func TestPartialStatusWithEveryAgentObservedRunning(t *testing.T) {
 
 	status := cityStatusJSONFromSnapshot(snapshot, snapshot.Summary)
 
-	if len(status.Health.Signals) != 0 {
-		t.Fatalf("health signals = %v, want none when every agent was observed running", status.Health.Signals)
+	if !slices.Equal(status.Health.Signals, []string{"runtime_status_partial"}) {
+		t.Fatalf("health signals = %v, want only runtime_status_partial when every agent was observed running", status.Health.Signals)
 	}
 	if status.Summary.UnknownAgents != 0 {
 		t.Fatalf("summary.unknown_agents = %d, want 0 when nothing is unknown", status.Summary.UnknownAgents)

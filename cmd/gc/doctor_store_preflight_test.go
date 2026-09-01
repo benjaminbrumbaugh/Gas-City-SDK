@@ -19,6 +19,7 @@ var doctorCityStoreDependentNames = []string{
 	"beads-store",
 	"v2-routed-to-namespace",
 	"census-owner-liveness",
+	"session-hold-stall",
 	"run-target-routed-to-backfill",
 	"route-recovery-quarantine",
 	"hold-label-routed-to",
@@ -107,9 +108,9 @@ func TestBuildDoctorChecks_SkipsStoreChecksWhenStoreUnreachable(t *testing.T) {
 	if !strings.Contains(res.Message, "doltlite") {
 		t.Fatalf("preflight message = %q, want doltlite residual note", res.Message)
 	}
-	// Thirteen city checks plus three per active rig, two rigs active.
-	if !strings.Contains(res.Message, "skipped 19 store checks") {
-		t.Fatalf("preflight message = %q, want skip count 19", res.Message)
+	// Fourteen city checks plus three per active rig, two rigs active.
+	if !strings.Contains(res.Message, "skipped 20 store checks") {
+		t.Fatalf("preflight message = %q, want skip count 20", res.Message)
 	}
 	if !strings.Contains(res.Message, "2 rigs") {
 		t.Fatalf("preflight message = %q, want rig count 2", res.Message)
@@ -293,7 +294,7 @@ func TestBuildDoctorChecks_RigStoreNameSetPreflight(t *testing.T) {
 		}
 	}
 	// Constant-drift lock: omit N store checks and add one preflight entry.
-	// A silent 12th city store check would make this delta diverge without
+	// A silent additional city store check would make this delta diverge without
 	// updating doctorCityStoreCheckCount / beadStorePreflightSkipCount.
 	wantDelta := beadStorePreflightSkipCount(2) - 1 // -1 for bead-store-preflight
 	if got := len(healthy) - len(outage); got != wantDelta {
