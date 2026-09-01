@@ -502,6 +502,32 @@ lifecycle path; gc never silently falls back to the default unit.
 Setting `GC_SUPERVISOR_SYSTEMD_UNIT` on a non-Linux platform is the
 same kind of hard error — delegation is a systemd contract.
 
+## Running the Supervisor Without a Service Manager
+
+`gc start` and `gc init` normally install a service file and hand
+supervisor availability to launchd (macOS) or systemd (Linux). On macOS
+that ownership is enforced: a failed install is terminal and
+`gc supervisor start` refuses to fork, because a detached child alongside
+a registered launchd job means split ownership and a crash loop against
+the occupied supervisor port.
+
+In an environment that must not register anything in the host's service
+manager — a test harness with an isolated `GC_HOME`, a CI job, a
+container — set:
+
+```bash
+export GC_SUPERVISOR_SERVICE_MANAGER=none
+```
+
+gc then skips the install entirely and runs the supervisor as a bare
+child of the calling process, on every platform. The supervisor's
+lifetime is yours to manage: nothing restarts it if it exits.
+
+Only the exact value `none` (case-insensitive, surrounding whitespace
+ignored) opts out. Any other value — including a typo — leaves the
+platform service manager in charge, so a mistyped variable cannot
+silently strip lifecycle ownership on a real machine.
+
 ## JSONL Archive Push Failures
 
 The core pack runs `jsonl-export` every 15 minutes to dump each bead

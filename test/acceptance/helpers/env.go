@@ -76,13 +76,22 @@ func NewEnv(gcBinary, gcHome, runtimeDir string) *Env {
 		e.vars["PATH"] = filepath.Dir(gcBinary) + ":" + e.vars["PATH"]
 	}
 
-	// Prepend shims for the platform service managers so `gc init` never
-	// hands the supervisor off to the real host launchd/systemd. The
-	// shims exit non-zero, which causes ensureSupervisorRunning to fall
-	// through to doSupervisorStart (bare fork). Without this on Mac,
-	// launchctl load succeeds and launchd starts a supervisor that
-	// doesn't inherit the test's isolation env vars, so the K8s session
-	// provider fires for hyperscale and fails on missing kubeconfig.
+	// Opt out of the platform service manager so `gc init` never hands the
+	// supervisor off to the real host launchd/systemd. Without this on Mac,
+	// launchctl load succeeds and launchd starts a supervisor that doesn't
+	// inherit the test's isolation env vars, so the K8s session provider
+	// fires for hyperscale and fails on missing kubeconfig.
+	//
+	// This is a supported contract (GC_SUPERVISOR_SERVICE_MANAGER=none),
+	// not an inference from a failed install. Relying on the failure was
+	// what broke Mac acceptance: macOS makes launchd the sole lifecycle
+	// owner, so a failed install is terminal there and never reaches the
+	// bare-fork fallback the shims were counting on (gc-2rglt).
+	e.vars[supervisorServiceManagerEnv] = "none"
+
+	// The shims stay as belt and braces: any gc code path that still
+	// reaches for launchctl/systemctl under an isolated GC_HOME must not
+	// touch the host's real service manager.
 	//
 	// Panic on failure: silently dropping the shim would look like a
 	// random hyperscale infra regression on Mac with no breadcrumb.
@@ -117,11 +126,18 @@ func NewEnv(gcBinary, gcHome, runtimeDir string) *Env {
 	return e
 }
 
+// supervisorServiceManagerEnv mirrors cmd/gc's GC_SUPERVISOR_SERVICE_MANAGER
+// opt-out. gc is exercised here as a built binary, so the constant cannot be
+// imported; it is duplicated deliberately and pinned by
+// TestAcceptanceEnvOptsOutOfServiceManager.
+const supervisorServiceManagerEnv = "GC_SUPERVISOR_SERVICE_MANAGER"
+
 // installServiceManagerShims writes no-op launchctl/systemctl stubs under
 // gcHome/bin and returns that directory so the acceptance env can prepend
-// it to PATH. The stubs exit 1 so gc's supervisor-install logic falls
-// back to an in-process supervisor start instead of delegating to the
-// host's real service manager (which would also inherit the wrong env).
+// it to PATH. GC_SUPERVISOR_SERVICE_MANAGER=none is what actually keeps gc
+// off the host's service manager; the stubs are the backstop for any path
+// that does not consult it, and they exit 1 so such a path fails loudly
+// against a stub instead of quietly registering a job in the real launchd.
 func installServiceManagerShims(gcHome string) (string, error) {
 	shimDir := filepath.Join(gcHome, "bin")
 	if err := os.MkdirAll(shimDir, 0o755); err != nil {

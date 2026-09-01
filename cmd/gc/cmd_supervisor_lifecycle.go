@@ -35,18 +35,23 @@ import (
 )
 
 var (
-	ensureSupervisorRunningHook              = ensureSupervisorRunning
-	reloadSupervisorHook                     = reloadSupervisor
-	supervisorAliveHook                      = supervisorAlive
-	supervisorInstallHook                    = doSupervisorInstall
+	ensureSupervisorRunningHook = ensureSupervisorRunning
+	reloadSupervisorHook        = reloadSupervisor
+	supervisorAliveHook         = supervisorAlive
+	supervisorInstallHook       = doSupervisorInstall
+	// doSupervisorStartHook is the bare-fork start, behind a seam so the
+	// service-manager bypass can be tested without forking a supervisor.
+	doSupervisorStartHook = doSupervisorStart
+	// supervisorExecutable resolves the gc binary the bare-fork start
+	// re-executes. Behind a seam so a test can point the fork at a stub
+	// instead of re-running the test binary itself.
+	supervisorExecutable                     = os.Executable
 	supervisorReadyTimeout                   = 15 * time.Second
 	supervisorReadyPollInterval              = 100 * time.Millisecond
 	supervisorSystemdWarmRefreshStopTimeout  = 5 * time.Second
 	supervisorSystemdWarmRefreshPollInterval = 100 * time.Millisecond
-	supervisorLaunchctlRun                   = func(args ...string) error {
-		return exec.Command("launchctl", args...).Run()
-	}
-	supervisorLaunchdActive = func(label string) bool {
+	supervisorLaunchctlRun                   = runSupervisorLaunchctl
+	supervisorLaunchdActive                  = func(label string) bool {
 		out, err := exec.Command("launchctl", "print", supervisorLaunchdServiceTarget(label)).Output()
 		return err == nil && launchdPrintReportsRunning(out)
 	}
@@ -551,7 +556,7 @@ func doSupervisorStartJSON(stdout, stderr io.Writer, jsonOut bool) int {
 		fmt.Fprintf(stderr, "gc supervisor start: supervisor already running (PID %d)\n", pid) //nolint:errcheck // best-effort stderr
 		return 1
 	}
-	if supervisorRuntimeGOOS == "darwin" {
+	if supervisorRuntimeGOOS == "darwin" && !supervisorServiceManagerBypassed() {
 		label := supervisorLaunchdLabel()
 		if !supervisorLaunchdRegistered(label) {
 			fmt.Fprintln(stderr, "gc supervisor start: launchd service is not registered; run 'gc supervisor install' so launchd owns supervisor availability") //nolint:errcheck // best-effort stderr
@@ -567,7 +572,7 @@ func doSupervisorStartJSON(stdout, stderr io.Writer, jsonOut bool) int {
 	}
 	lock.Close() //nolint:errcheck // release probe lock
 
-	gcPath, err := os.Executable()
+	gcPath, err := supervisorExecutable()
 	if err != nil {
 		fmt.Fprintf(stderr, "gc supervisor start: finding executable: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
@@ -727,6 +732,14 @@ func ensureSupervisorRunning(stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gc supervisor start: %s\n", msg) //nolint:errcheck // best-effort stderr
 		return 1
 	}
+	if supervisorServiceManagerBypassed() {
+		// Explicitly opted out of launchd/systemd: never write or load a
+		// service file, and never leave the caller without a supervisor.
+		if supervisorAliveHook() != 0 {
+			return 0
+		}
+		return doSupervisorStartHook(stdout, stderr)
+	}
 	// Always regenerate the service file so upgrades pick up template
 	// changes (e.g. PATH captured from the user's shell).
 	if supervisorInstallHook(stdout, stderr) != 0 {
@@ -740,7 +753,7 @@ func ensureSupervisorRunning(stdout, stderr io.Writer) int {
 			return 0
 		}
 		// Fall back to bare start if install fails (e.g., unsupported OS).
-		return doSupervisorStart(stdout, stderr)
+		return doSupervisorStartHook(stdout, stderr)
 	}
 	if supervisorRuntimeGOOS == "darwin" {
 		label := supervisorLaunchdLabel()
@@ -1683,6 +1696,40 @@ func removeSupervisorServiceFile(path string) error {
 		return err
 	}
 	return directory.Close()
+}
+
+// runSupervisorLaunchctl runs launchctl and folds its stderr into the
+// returned error.
+//
+// exec.Command(...).Run() discards stderr, so every launchctl failure
+// surfaced as a bare "exit status 1" — no domain, no reason, nothing an
+// operator or a bug report could act on. gc-2rglt was filed against eight
+// days of red macOS CI whose only symptom was that string, and its stated
+// root cause was wrong precisely because the message carried no evidence.
+// launchctl's own diagnostics ("Load failed: 5: Input/output error",
+// "Bootstrap failed: 37: Operation already in progress") name the cause
+// directly, so they belong in the error.
+func runSupervisorLaunchctl(args ...string) error {
+	cmd := exec.Command("launchctl", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return nil
+	}
+	if detail := strings.TrimSpace(stderr.String()); detail != "" {
+		return fmt.Errorf("%w: %s", err, firstDiagnosticLine(detail))
+	}
+	return err
+}
+
+// firstDiagnosticLine keeps a subprocess diagnostic to one line so it stays
+// readable when it is wrapped into a larger install/rollback error chain.
+func firstDiagnosticLine(s string) string {
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		return strings.TrimSpace(s[:idx])
+	}
+	return s
 }
 
 func supervisorLaunchdServiceTarget(label string) string {
