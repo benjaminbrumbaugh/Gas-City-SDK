@@ -1,6 +1,7 @@
 package pidutil
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,16 +126,9 @@ func TestAliveWithCmdline_NilMatchIsFalse(t *testing.T) {
 // caller then assumes no poller is running and starts one. A duplicate poller is
 // recoverable; a silently absent one is not.
 func TestCmdline_FailsClosedWhenUnreadable(t *testing.T) {
-	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
-		t.Skip("on linux /proc and on darwin kern.procargs2 answer directly, so the ps stub cannot make argv unreadable")
-	}
-
-	binDir := t.TempDir()
-	// A ps that produces nothing, so the non-/proc path has no argv to offer.
-	if err := os.WriteFile(filepath.Join(binDir, "ps"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
-		t.Fatalf("WriteFile(ps): %v", err)
-	}
-	t.Setenv("PATH", strings.Join([]string{binDir, os.Getenv("PATH")}, string(os.PathListSeparator)))
+	previous := cmdlineForPID
+	cmdlineForPID = func(int) ([]string, error) { return nil, errors.New("unreadable argv") }
+	t.Cleanup(func() { cmdlineForPID = previous })
 
 	if AliveWithCmdline(os.Getpid(), func([]string) bool { return true }) {
 		t.Fatal("AliveWithCmdline = true with no readable argv; must fail closed so the caller starts its poller")
