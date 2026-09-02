@@ -520,6 +520,17 @@ func (s *emittingClassStore) UpdateIfMatch(id string, revision int64, opts beads
 	return nil
 }
 
+// ConditionalWriterHandle keeps ConditionalWriterFor on the emitting wrapper
+// after it validates that the resolved backing truly provides every fenced
+// mutation. Returning the wrapper preserves the bead.* journal events that
+// accompany successful updates, closes, deletes, and metadata swaps.
+func (s *emittingClassStore) ConditionalWriterHandle() (beads.ConditionalWriter, bool) {
+	if _, ok := beads.ConditionalWriterFor(s.Store); !ok {
+		return nil, false
+	}
+	return s, true
+}
+
 func (s *emittingClassStore) CloseIfMatch(id string, revision int64) error {
 	writer, ok := beads.ConditionalWriterFor(s.Store)
 	if !ok {

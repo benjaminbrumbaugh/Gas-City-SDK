@@ -54,6 +54,27 @@ const (
 
 	defaultNudgePollInterval   = 2 * time.Second
 	defaultNudgePollQuiescence = 3 * time.Second
+	// defaultNudgeQuiescencePatience bounds how long the quiescence gate
+	// (pollerSessionIdleEnough) may defer an already-due nudge. The gate is a
+	// politeness heuristic: it holds delivery back until the recipient has been
+	// quiet for defaultNudgePollQuiescence. On a tmux/T3 session that signal is
+	// the session thread's updated-at, which every message and tool call
+	// refreshes, so an agent inside one long turn never presents a quiet window
+	// and the gate declines on every 2s tick without recording anything. The
+	// deferral was therefore unbounded: gc-py7pc caught a MAYOR STAND-DOWN —
+	// STOP EDITING NOW order sitting unattempted for sixteen hours and expiring
+	// against a recipient that was busy the whole time.
+	//
+	// No threshold rescues that, because the answer to "is this agent mid-turn?"
+	// stays yes for the whole useful life of a working agent, and urgency
+	// anti-correlates with idleness — a stand-down is sent BECAUSE the recipient
+	// is mid-edit. So delivery has to be allowed to win eventually regardless of
+	// the gate. Past this bound a due item is delivered on the next tick.
+	//
+	// A full minute is far more politeness than the 3s heuristic asks for, so
+	// the ordinary case (briefly busy, idle again within seconds) still takes
+	// the polite path untouched; only the pathological case changes.
+	defaultNudgeQuiescencePatience = 1 * time.Minute
 	// A controller wake can legitimately take a couple of minutes when the
 	// session has to rematerialize a worktree and complete startup dialog.
 	defaultNudgePollStartGrace = 5 * time.Minute
@@ -1517,10 +1538,17 @@ func tryDeliverQueuedNudgesByPoller(target nudgeTarget, store, sessStore beads.S
 	if err != nil || !matches {
 		return false, err
 	}
-	if !pollerSessionIdleEnough(target, sp, quiescence, obs) {
+	now := time.Now()
+	// The quiescence gate may defer, but it may not defer forever. Once a due
+	// item has waited out defaultNudgeQuiescencePatience the politeness
+	// heuristic loses and delivery proceeds — see the constant for why no
+	// threshold on the idleness signal itself can fix this. The overdue check
+	// runs only when the gate has already declined, so the common path still
+	// costs one queue read per delivery rather than one per tick.
+	if !pollerSessionIdleEnough(target, sp, quiescence, obs) && !targetHasOverdueQueuedNudge(target, now) {
 		return false, nil
 	}
-	items, err := claimDueQueuedNudgesForTarget(target.cityPath, target, time.Now())
+	items, err := claimDueQueuedNudgesForTarget(target.cityPath, target, now)
 	if err != nil || len(items) == 0 {
 		return false, err
 	}
@@ -1992,6 +2020,44 @@ func queuedNudgeMatchesTargetFence(target nudgeTarget, item queuedNudge) bool {
 		return false
 	}
 	return true
+}
+
+// targetHasOverdueQueuedNudge reports whether the target has a pending nudge
+// that came due at least defaultNudgeQuiescencePatience ago. It is the escape
+// hatch that bounds the quiescence gate's deferral (gc-py7pc); the claimability
+// and due-time predicates deliberately mirror claimDueQueuedNudgesMatching, so
+// an item this reports on is one the very next claim pass will actually take.
+//
+// It reads the queue without the flock and without the recover/prune
+// maintenance passes: this runs on a declined poll tick, the answer only has to
+// be good enough to decide whether to attempt a claim, and the claim pass that
+// follows re-reads under the lock and does the pruning. A queue that cannot be
+// read is not evidence of an overdue item, so the gate's answer stands.
+func targetHasOverdueQueuedNudge(target nudgeTarget, now time.Time) bool {
+	state, err := nudgequeue.LoadState(target.cityPath)
+	if err != nil {
+		return false
+	}
+	for _, item := range state.Pending {
+		if !queuedNudgeClaimableForTarget(target, item) {
+			continue
+		}
+		if now.Sub(queuedNudgeDueAt(item)) >= defaultNudgeQuiescencePatience {
+			return true
+		}
+	}
+	return false
+}
+
+// queuedNudgeDueAt is the instant an item became eligible for delivery. Age is
+// measured from there rather than from CreatedAt so that a deliberately
+// deferred nudge (DeliverAfter set into the future by the sender, or pushed out
+// by a retry backoff) is not treated as overdue the moment it is created.
+func queuedNudgeDueAt(item queuedNudge) time.Time {
+	if !item.DeliverAfter.IsZero() {
+		return item.DeliverAfter
+	}
+	return item.CreatedAt
 }
 
 func queuedNudgeClaimableForTarget(target nudgeTarget, item queuedNudge) bool {

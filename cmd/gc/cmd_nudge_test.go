@@ -2545,6 +2545,190 @@ func TestTryDeliverQueuedNudgesByPollerDeliversAndAcks(t *testing.T) {
 	}
 }
 
+// busyNudgeTargetFixture stands up a live session with one queued nudge whose
+// due instant is dueAgo in the past, and reports the session as BUSY RIGHT NOW —
+// LastActivity is the current instant, so pollerSessionIdleEnough's first branch
+// always declines. That is the state a working agent is in for the whole of a
+// long turn: on a tmux/T3 session the activity signal is the session thread's
+// updated-at, which every tool call refreshes.
+func busyNudgeTargetFixture(t *testing.T, queueAgent string, dueAgo time.Duration, message string) (string, nudgeTarget, beads.Store, *runtime.Fake, worker.LiveObservation) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := enqueueQueuedNudge(dir, newQueuedNudge(queueAgent, message, time.Now().Add(-dueAgo))); err != nil {
+		t.Fatalf("enqueueQueuedNudge: %v", err)
+	}
+
+	store := openNudgeBeadStore(dir)
+	fake := runtime.NewFake()
+	mgr := newSessionManagerWithConfig(dir, store, fake, nil)
+	info, err := mgr.CreateSession(context.Background(), session.CreateOptions{Template: "worker", Title: "Worker", Command: "codex", WorkDir: dir, Provider: "codex", Env: nil, Resume: session.ProviderResume{}, Hints: runtime.Config{WorkDir: dir}, ExtraMeta: map[string]string{"session_origin": "manual"}})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := mgr.Start(context.Background(), info.ID, "", runtime.Config{WorkDir: dir}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	busySince := time.Now()
+	fake.Activity = map[string]time.Time{info.SessionName: busySince}
+
+	// The queue addresses items by the recipient's alias, which is what varies
+	// between the three recipient kinds (bare "gastown.mayor", city-scope
+	// "city-worker", rig-scoped "Rig/agent"); the session underneath is the same.
+	target := nudgeTarget{
+		cityPath:    dir,
+		agent:       config.Agent{Name: "worker"},
+		alias:       queueAgent,
+		sessionID:   info.ID,
+		resolved:    &config.ResolvedProvider{Name: "codex"},
+		sessionName: info.SessionName,
+	}
+	return dir, target, store, fake, worker.LiveObservation{Running: true, LastActivity: &busySince}
+}
+
+func countNudgeCalls(fake *runtime.Fake) int {
+	n := 0
+	for _, call := range fake.Calls {
+		if call.Method == "Nudge" {
+			n++
+		}
+	}
+	return n
+}
+
+// A due nudge must not be deferred forever just because the recipient is busy.
+// gc-py7pc: the quiescence gate held a MAYOR STAND-DOWN — STOP EDITING NOW order
+// for sixteen hours and then let it expire, because the recipient it was aimed
+// at was mid-edit the entire time — which is precisely why it was sent. Past
+// defaultNudgeQuiescencePatience the politeness heuristic has to lose.
+func TestTryDeliverQueuedNudgesByPollerDeliversPastTheQuiescencePatience(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir, target, store, fake, obs := busyNudgeTargetFixture(t, "city-worker", defaultNudgeQuiescencePatience+2*time.Minute, "STAND DOWN — stop editing now")
+
+	delivered, err := tryDeliverQueuedNudgesByPoller(target, store, store, fake, defaultNudgePollQuiescence, obs)
+	if err != nil {
+		t.Fatalf("tryDeliverQueuedNudgesByPoller: %v", err)
+	}
+	if !delivered {
+		t.Fatal("delivered = false, want true: a nudge overdue past the quiescence patience must be delivered to a busy session")
+	}
+	if got := countNudgeCalls(fake); got != 1 {
+		t.Fatalf("nudge calls = %d, want 1", got)
+	}
+
+	pending, inFlight, dead, err := listQueuedNudges(dir, "city-worker", time.Now())
+	if err != nil {
+		t.Fatalf("listQueuedNudges: %v", err)
+	}
+	if len(pending) != 0 || len(inFlight) != 0 || len(dead) != 0 {
+		t.Fatalf("queue after delivery: pending=%d inFlight=%d dead=%d, want 0/0/0", len(pending), len(inFlight), len(dead))
+	}
+}
+
+// The bound must not collapse into "always deliver". A nudge that has only just
+// come due still waits for the recipient to finish what it is doing, which is
+// the behavior the quiescence gate exists for.
+func TestTryDeliverQueuedNudgesByPollerStillDefersAFreshNudgeToABusySession(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir, target, store, fake, obs := busyNudgeTargetFixture(t, "city-worker", 0, "no rush")
+
+	delivered, err := tryDeliverQueuedNudgesByPoller(target, store, store, fake, defaultNudgePollQuiescence, obs)
+	if err != nil {
+		t.Fatalf("tryDeliverQueuedNudgesByPoller: %v", err)
+	}
+	if delivered {
+		t.Fatal("delivered = true, want false: a just-due nudge must still wait for the recipient to go quiet")
+	}
+	if got := countNudgeCalls(fake); got != 0 {
+		t.Fatalf("nudge calls = %d, want 0", got)
+	}
+
+	pending, _, _, err := listQueuedNudges(dir, "city-worker", time.Now())
+	if err != nil {
+		t.Fatalf("listQueuedNudges: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending = %d, want 1: the deferred item stays queued", len(pending))
+	}
+	if pending[0].Attempts != 0 || !pending[0].LastAttemptAt.IsZero() {
+		t.Fatalf("deferred item = attempts %d last %v, want an untouched item", pending[0].Attempts, pending[0].LastAttemptAt)
+	}
+}
+
+// The bead's fourth acceptance clause asks for all three recipient kinds to be
+// served. TestDispatchAllQueuedNudgesServesAllRecipientKinds covers the
+// supervisor dispatcher; this covers the per-session poller, which is the path a
+// city in the default "legacy" nudge_dispatcher mode actually delivers through.
+// Every recipient is busy here, because that is the state the founding incident
+// was in and the one that used to strand every kind alike.
+func TestTryDeliverQueuedNudgesByPollerServesAllRecipientKindsWhenBusy(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	for _, kind := range []struct{ name, agent string }{
+		{"mayor", "gastown.mayor"},
+		{"city-scope", "city-worker"},
+		{"rig-scoped", "Gas-City-Dashboard/gastown.witness"},
+	} {
+		t.Run(kind.name, func(t *testing.T) {
+			msg := "overdue for " + kind.agent
+			dir, target, store, fake, obs := busyNudgeTargetFixture(t, kind.agent, defaultNudgeQuiescencePatience+time.Minute, msg)
+
+			delivered, err := tryDeliverQueuedNudgesByPoller(target, store, store, fake, defaultNudgePollQuiescence, obs)
+			if err != nil {
+				t.Fatalf("tryDeliverQueuedNudgesByPoller: %v", err)
+			}
+			if !delivered {
+				t.Fatalf("delivered = false for %s, want true", kind.agent)
+			}
+			var got []string
+			for _, call := range fake.Calls {
+				if call.Method == "Nudge" {
+					got = append(got, call.Message)
+				}
+			}
+			if len(got) != 1 || !strings.Contains(got[0], msg) {
+				t.Fatalf("nudge messages = %q, want exactly one carrying %q", got, msg)
+			}
+			pending, _, _, err := listQueuedNudges(dir, kind.agent, time.Now())
+			if err != nil {
+				t.Fatalf("listQueuedNudges: %v", err)
+			}
+			if len(pending) != 0 {
+				t.Fatalf("pending = %d for %s, want 0", len(pending), kind.agent)
+			}
+		})
+	}
+}
+
+// Age is measured from the due instant, not from creation, so a nudge the SENDER
+// deliberately deferred into the future is not born overdue.
+func TestTargetHasOverdueQueuedNudgeIgnoresNotYetDueItems(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	item := newQueuedNudge("worker", "later", time.Now().Add(-24*time.Hour))
+	item.DeliverAfter = time.Now().Add(time.Hour).UTC()
+	if err := enqueueQueuedNudge(dir, item); err != nil {
+		t.Fatalf("enqueueQueuedNudge: %v", err)
+	}
+	target := nudgeTarget{cityPath: dir, agent: config.Agent{Name: "worker"}}
+	if targetHasOverdueQueuedNudge(target, time.Now()) {
+		t.Fatal("targetHasOverdueQueuedNudge = true, want false: an item that is not due yet cannot be overdue")
+	}
+}
+
+// The escape hatch must not fire for somebody else's queue entry: an item this
+// reports on has to be one the very next claim pass would actually take.
+func TestTargetHasOverdueQueuedNudgeIgnoresOtherTargets(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	stale := time.Now().Add(-defaultNudgeQuiescencePatience - time.Hour)
+	if err := enqueueQueuedNudge(dir, newQueuedNudge("somebody-else", "not yours", stale)); err != nil {
+		t.Fatalf("enqueueQueuedNudge: %v", err)
+	}
+	target := nudgeTarget{cityPath: dir, agent: config.Agent{Name: "worker"}}
+	if targetHasOverdueQueuedNudge(target, time.Now()) {
+		t.Fatal("targetHasOverdueQueuedNudge = true, want false: another agent's overdue item must not open this target's gate")
+	}
+}
+
 func TestTryDeliverQueuedNudgesByPollerDeliversActivitylessTimedOnlySession(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	dir := t.TempDir()
