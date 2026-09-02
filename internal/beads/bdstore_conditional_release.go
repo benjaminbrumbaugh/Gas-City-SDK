@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/gastownhall/gascity/internal/beadmeta"
 )
 
 // This file consumes bd's native conditional-release verb, which is what the
@@ -58,14 +60,17 @@ func (s *BdStore) conditionalReleaseUnsupported() bool {
 }
 
 // releaseClearedIdentityKeys are the metadata keys that name a bead's owning
-// session and must be cleared whenever the assignment is. They are listed here
-// rather than taken from beadmeta so this package keeps its existing import
-// surface; the guard test pins them against the canonical constants.
+// session and must be cleared whenever the assignment is. They reference the
+// beadmeta constants directly: the raw literals they replaced were rejected by
+// TestNoUndeclaredMetadataKeys, and the comment claiming a guard test "pins
+// them against the canonical constants" described a check that does not exist.
+// This package already imports beadmeta, so there is no import surface to keep
+// narrow either.
 var releaseClearedIdentityKeys = []string{
-	"gc.session_id",
-	"gc.session_name",
-	"gc.sessionId",
-	"gc.sessionName",
+	beadmeta.SessionIDMetadataKey,
+	beadmeta.SessionNameMetadataKey,
+	beadmeta.SessionIDCamelMetadataKey,
+	beadmeta.SessionNameCamelMetadataKey,
 }
 
 // latchConditionalReleaseUnsupported records that bd does not understand the

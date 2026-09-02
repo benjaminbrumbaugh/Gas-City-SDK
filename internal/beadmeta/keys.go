@@ -182,6 +182,9 @@ const (
 	RequiredArtifactMetadataKey          = "gc.required_artifact"
 	RequiredArtifactsMetadataKey         = "gc.required_artifacts"
 	ReviewGateMetadataKey                = "gc.review_gate"
+	RehomedAtMetadataKey                 = "gc.rehomed_at"
+	RehomedFromSessionMetadataKey        = "gc.rehomed_from_session"
+	RehomedToMetadataKey                 = "gc.rehomed_to"
 	RetryCountMetadataKey                = "gc.retry_count"
 	RetryFromMetadataKey                 = "gc.retry_from"
 	RetrySessionRecycledMetadataKey      = "gc.retry_session_recycled"
@@ -481,6 +484,14 @@ var KnownMetadataKeys = []string{
 	RequiredArtifactMetadataKey,
 	RequiredArtifactsMetadataKey,
 	ReviewGateMetadataKey,
+	// Rehomed* record a mail bead re-addressed away from a retired session:
+	// the session it left, the instant it moved, and the route it moved to.
+	// cmd/gc/session_mail_rehome.go writes all three. Documented here rather
+	// than beside the constants because this list is unaligned, so a comment
+	// costs no gofmt realignment of the aligned const block above.
+	RehomedAtMetadataKey,
+	RehomedFromSessionMetadataKey,
+	RehomedToMetadataKey,
 	RetryCountMetadataKey,
 	RetryFromMetadataKey,
 	RetrySessionRecycledMetadataKey,

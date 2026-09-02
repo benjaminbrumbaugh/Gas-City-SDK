@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/mail/beadmail"
@@ -32,10 +33,13 @@ import (
 // clears.
 
 // mailRehomeMetadataFrom records the session a message was rehomed away from.
+// The keys are declared in internal/beadmeta/keys.go rather than spelled as
+// raw literals here, which is what TestNoUndeclaredMetadataKeys requires of
+// every gc.* bead-metadata key written by non-test Go.
 const (
-	mailRehomeMetadataFrom  = "gc.rehomed_from_session"
-	mailRehomeMetadataAt    = "gc.rehomed_at"
-	mailRehomeMetadataRoute = "gc.rehomed_to"
+	mailRehomeMetadataFrom  = beadmeta.RehomedFromSessionMetadataKey
+	mailRehomeMetadataAt    = beadmeta.RehomedAtMetadataKey
+	mailRehomeMetadataRoute = beadmeta.RehomedToMetadataKey
 )
 
 // mailStrandedCloseReason is stamped on a message closed because its recipient
