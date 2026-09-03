@@ -31,6 +31,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`gc hook --claim` no longer overwrites `gc.work_branch` with the claiming
+  session's own directory.** The key is now write-once at claim time: it is
+  filled when absent and never rewritten. The claim-time fact — the branch of
+  the checkout the claimant claimed *from* — moved to its own key,
+  `gc.claim_branch`.
+
+  Three subsystems read `gc.work_branch` as a fact about the work, and a
+  claim-time directory cannot satisfy two of them. `worktreeSpecForBead`
+  requires it as one of nine worktree-ownership keys and uses it as
+  `worktree.Spec.Branch`; `validateWorkRecordOnClose` asserts `gc.work_commit`
+  is reachable on it; the tier-C fresh-install acceptance test requires it to
+  resolve to the integrating commit. Because the old write was
+  compare-and-overwrite, a claim arriving from an unrelated checkout replaced
+  real provisioning provenance with the claimant's cwd — leaving eight
+  ownership keys describing the per-bead worktree and the ninth naming `main`.
+
+  For a polecat molecule the per-bead worktree does not exist yet at claim
+  time, so the stamped value routinely read `main` or the agent's own
+  `gc-<agent>-<hash>` infrastructure branch. It was never a placeholder: it was
+  an accurate record of the wrong directory, and nothing about it looked
+  defaulted.
+
+  The write-when-absent path is retained deliberately —
+  `isDetachedHandoffOrphanCandidate` uses the key's non-emptiness to recognise
+  a completed-work handoff bead, so dropping the write entirely would have
+  silently stopped detached-orphan recovery. When `gc.claim_branch` equals
+  `gc.work_branch`, that work-branch value is claim-derived and must not be
+  trusted as an outcome fact.
+
 - **Mail archive and delete now expand whitespace-joined message IDs.** Each
   positional argument is split into individual IDs before single-versus-batch
   dispatch, so shell variables containing multiple IDs no longer look like one

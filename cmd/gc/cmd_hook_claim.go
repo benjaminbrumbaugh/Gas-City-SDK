@@ -192,10 +192,11 @@ type hookClaimOps struct {
 	// EmitClaimRejected publishes a bead.claim_rejected event when a claim is
 	// lost to a different live claimant (ADR-0009). Best-effort.
 	EmitClaimRejected hookEmitClaimRejectedFunc
-	// ResolveWorkBranch returns the git branch of the worker's worktree (dir),
-	// stamped onto the bead as gc.work_branch at claim time. Empty result (no
-	// repo / detached HEAD) omits the branch key — the session back-reference is
-	// still stamped.
+	// ResolveWorkBranch returns the git branch of the worker's worktree (dir).
+	// It is stamped as gc.claim_branch — the branch of the checkout the
+	// claimant claimed FROM — and additionally fills gc.work_branch when that
+	// key is absent. Empty result (no repo / detached HEAD) omits both branch
+	// keys; the session back-reference is still stamped.
 	ResolveWorkBranch hookResolveWorkBranchFunc
 	// StampWorkMeta writes the claim-time execution-identity metadata patch
 	// (gc.work_branch and/or the durable session back-reference gc.session_id /
@@ -1360,9 +1361,32 @@ func hookClaimLifecycleCandidate(bead beads.Bead, opts hookClaimOptions) bool {
 // write.
 func hookClaimIdentityPatch(bead beads.Bead, opts hookClaimOptions, ops hookClaimOps, dir string) map[string]string {
 	patch := map[string]string{}
-	if branch := strings.TrimSpace(ops.ResolveWorkBranch(dir)); branch != "" &&
-		strings.TrimSpace(bead.Metadata[beadmeta.WorkBranchMetadataKey]) != branch {
-		patch[beadmeta.WorkBranchMetadataKey] = branch
+	if branch := strings.TrimSpace(ops.ResolveWorkBranch(dir)); branch != "" {
+		// The claimant's own directory, under a key that says so.
+		// Compare-and-overwrite: the newest claimant is the informative one.
+		if strings.TrimSpace(bead.Metadata[beadmeta.ClaimBranchMetadataKey]) != branch {
+			patch[beadmeta.ClaimBranchMetadataKey] = branch
+		}
+		// gc.work_branch is WRITE-ONCE here, like gc.claimed_at and unlike the
+		// session back-references below (gc-ipeiw).
+		//
+		// It used to be compare-and-overwrite against this same value, which
+		// made it a record of the claiming directory rather than of the work.
+		// That is not merely imprecise: worktreeSpecForBead
+		// (pool_desired_state.go) requires gc.work_branch as one of nine
+		// worktree-ownership keys and uses it as worktree.Spec.Branch, so a
+		// claim arriving from an unrelated checkout could overwrite real
+		// provisioning provenance with the claimant's cwd — and
+		// validateWorkRecordOnClose asserts gc.work_commit is reachable on it.
+		// Neither reader can be satisfied by a claim-time directory.
+		//
+		// Filling it when ABSENT is retained deliberately: it is the
+		// non-emptiness signal isDetachedHandoffOrphanCandidate uses to
+		// recognize a completed-work handoff bead, so ceasing to write it
+		// would silently stop detached-orphan recovery.
+		if strings.TrimSpace(bead.Metadata[beadmeta.WorkBranchMetadataKey]) == "" {
+			patch[beadmeta.WorkBranchMetadataKey] = branch
+		}
 	}
 	if sessionID := hookClaimSessionID(opts.Env); sessionID != "" &&
 		!beadmeta.IsControlKind(strings.TrimSpace(bead.Metadata[beadmeta.KindMetadataKey])) {

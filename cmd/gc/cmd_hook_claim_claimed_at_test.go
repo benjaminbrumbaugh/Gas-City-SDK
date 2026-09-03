@@ -128,10 +128,15 @@ func TestHookClaimIdentityPatchClaimedAtWithoutSessionOrWorktree(t *testing.T) {
 }
 
 // TestHookClaimIdentityPatchClaimedAtDoesNotDisturbExistingKeys guards the
-// three pre-existing compare-and-skip keys against interference from the new
-// write-once key: a bead needing a branch update and carrying a stale session
-// name, but already carrying gc.claimed_at, must patch exactly the stale keys
-// and nothing else.
+// pre-existing compare-and-skip keys against interference from the write-once
+// keys: a bead carrying a current session identity and a prior gc.claimed_at,
+// claimed from a directory on a different branch, must patch exactly the keys
+// that actually changed and nothing else.
+//
+// Since gc-ipeiw that is gc.claim_branch alone. gc.work_branch is preset here
+// and is write-once, so the differing claim directory no longer rewrites it —
+// see TestHookClaimIdentityPatchDoesNotOverwriteWorkBranch for why that
+// matters.
 func TestHookClaimIdentityPatchClaimedAtDoesNotDisturbExistingKeys(t *testing.T) {
 	bead := beads.Bead{ID: "hw-mixed", Status: "open", Metadata: map[string]string{
 		beadmeta.KindMetadataKey:        "worker",
@@ -145,9 +150,12 @@ func TestHookClaimIdentityPatchClaimedAtDoesNotDisturbExistingKeys(t *testing.T)
 
 	patch := hookClaimIdentityPatch(bead, opts, ops, "/tmp/work")
 
-	want := map[string]string{beadmeta.WorkBranchMetadataKey: "bd-new"}
-	if len(patch) != len(want) || patch[beadmeta.WorkBranchMetadataKey] != want[beadmeta.WorkBranchMetadataKey] {
+	want := map[string]string{beadmeta.ClaimBranchMetadataKey: "bd-new"}
+	if len(patch) != len(want) || patch[beadmeta.ClaimBranchMetadataKey] != want[beadmeta.ClaimBranchMetadataKey] {
 		t.Fatalf("patch = %v, want %v (claimed_at already set must stay out of the patch)", patch, want)
+	}
+	if got, ok := patch[beadmeta.WorkBranchMetadataKey]; ok {
+		t.Fatalf("patch rewrote %s to %q; it is write-once once present", beadmeta.WorkBranchMetadataKey, got)
 	}
 	if _, ok := patch[beadmeta.ClaimedAtMetadataKey]; ok {
 		t.Fatalf("patch = %v, want gc.claimed_at absent (already current)", patch)

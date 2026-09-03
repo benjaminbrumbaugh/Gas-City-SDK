@@ -160,6 +160,7 @@ func TestDoHookClaimStampsSessionIdentity(t *testing.T) {
 		t.Fatalf("StampWorkMeta calls = %d, want 1", spy.calls)
 	}
 	want := map[string]string{
+		beadmeta.ClaimBranchMetadataKey: "bd-hw-pool",
 		beadmeta.WorkBranchMetadataKey:  "bd-hw-pool",
 		beadmeta.SessionIDMetadataKey:   "mc-sess1",
 		beadmeta.SessionNameMetadataKey: "gc__role-mc-sess1",
@@ -251,13 +252,14 @@ func TestDoHookClaimSkipsStampWhenIdentityUnchanged(t *testing.T) {
 	spy := &stampMetaSpy{}
 	current := map[string]string{
 		"gc.routed_to":    "worker",
+		"gc.claim_branch": "bd-hw-idem",
 		"gc.work_branch":  "bd-hw-idem",
 		"gc.session_id":   "mc-sess1",
 		"gc.session_name": "gc__role-mc-sess1",
 		"gc.claimed_at":   "2026-01-01T00:00:00Z",
 	}
 	ops := poolClaimOps(
-		`[{"id":"hw-idem","status":"open","metadata":{"gc.routed_to":"worker","gc.work_branch":"bd-hw-idem","gc.session_id":"mc-sess1","gc.session_name":"gc__role-mc-sess1","gc.claimed_at":"2026-01-01T00:00:00Z"}}]`,
+		`[{"id":"hw-idem","status":"open","metadata":{"gc.routed_to":"worker","gc.claim_branch":"bd-hw-idem","gc.work_branch":"bd-hw-idem","gc.session_id":"mc-sess1","gc.session_name":"gc__role-mc-sess1","gc.claimed_at":"2026-01-01T00:00:00Z"}}]`,
 		current,
 		"bd-hw-idem",
 		spy,
@@ -273,9 +275,14 @@ func TestDoHookClaimSkipsStampWhenIdentityUnchanged(t *testing.T) {
 }
 
 // TestDoHookClaimStampsOnlyChangedIdentityKeys proves the patch is minimal: a
-// candidate whose session identity and gc.claimed_at are current but whose branch
-// changed writes ONLY the branch, leaving the unchanged keys (including
-// gc.claimed_at, preset here since it is write-once) out of the patch.
+// candidate whose session identity and gc.claimed_at are current but which is
+// claimed from a directory on a different branch writes ONLY the claim-branch
+// key, leaving the unchanged keys (including gc.claimed_at, preset here since
+// it is write-once) out of the patch.
+//
+// gc.work_branch stays "bd-old" on purpose. Before gc-ipeiw this test asserted
+// the patch rewrote it to "bd-new" — i.e. it pinned the very overwrite that
+// let a claimant's cwd replace worktree provenance.
 func TestDoHookClaimStampsOnlyChangedIdentityKeys(t *testing.T) {
 	spy := &stampMetaSpy{}
 	current := map[string]string{
@@ -296,7 +303,7 @@ func TestDoHookClaimStampsOnlyChangedIdentityKeys(t *testing.T) {
 	if code := doHookClaim("bd ready --json", "/tmp/work", poolClaimOpts(), ops, &stdout, &stderr); code != 0 {
 		t.Fatalf("doHookClaim = %d, want 0; stderr=%s", code, stderr.String())
 	}
-	want := map[string]string{beadmeta.WorkBranchMetadataKey: "bd-new"}
+	want := map[string]string{beadmeta.ClaimBranchMetadataKey: "bd-new"}
 	if spy.calls != 1 || !reflect.DeepEqual(spy.patch, want) {
 		t.Fatalf("stamp = {calls:%d patch:%v}, want {1 %v} (only the changed key)", spy.calls, spy.patch, want)
 	}
@@ -324,7 +331,10 @@ func TestDoHookClaimSkipsSessionIdentityForControlBead(t *testing.T) {
 	if code := doHookClaim("bd ready --json", "/tmp/work", poolClaimOpts(), ops, &stdout, &stderr); code != 0 {
 		t.Fatalf("doHookClaim = %d, want 0; stderr=%s", code, stderr.String())
 	}
-	want := map[string]string{beadmeta.WorkBranchMetadataKey: "bd-hc-check"}
+	want := map[string]string{
+		beadmeta.ClaimBranchMetadataKey: "bd-hc-check",
+		beadmeta.WorkBranchMetadataKey:  "bd-hc-check",
+	}
 	if spy.calls != 1 {
 		t.Fatalf("stamp calls = %d, want 1", spy.calls)
 	}
@@ -353,7 +363,10 @@ func TestDoHookClaimSkipsSessionIdentityWhenNoSessionID(t *testing.T) {
 	if code := doHookClaim("bd ready --json", "/tmp/work", opts, ops, &stdout, &stderr); code != 0 {
 		t.Fatalf("doHookClaim = %d, want 0; stderr=%s", code, stderr.String())
 	}
-	want := map[string]string{beadmeta.WorkBranchMetadataKey: "bd-hw-nosess"}
+	want := map[string]string{
+		beadmeta.ClaimBranchMetadataKey: "bd-hw-nosess",
+		beadmeta.WorkBranchMetadataKey:  "bd-hw-nosess",
+	}
 	if spy.calls != 1 {
 		t.Fatalf("stamp calls = %d, want 1", spy.calls)
 	}

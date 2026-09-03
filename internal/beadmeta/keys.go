@@ -51,6 +51,26 @@ const (
 	CheckPathMetadataKey       = "gc.check_path"
 	CheckTimeoutMetadataKey    = "gc.check_timeout"
 	CityPathMetadataKey        = "gc.city_path"
+	// ClaimBranchMetadataKey records the git branch of the checkout the
+	// CLAIMING session was standing in, at the instant it claimed. That is all
+	// it says. It is emphatically NOT a statement about where the work lands:
+	// the per-bead worktree usually does not exist yet at claim time, so for a
+	// polecat molecule this key routinely reads "main" or the agent's own
+	// gc-<agent>-<hash> infrastructure branch.
+	//
+	// It exists because that fact used to be written to WorkBranchMetadataKey,
+	// where two other subsystems read it as an outcome fact and one of them
+	// consumes it as worktree provenance (gc-ipeiw). Recording it under its own
+	// name keeps the diagnostic — "which directory did the claimant claim
+	// from" — without any reader mistaking it for the branch under review.
+	//
+	// Compare-and-overwrite, like the session back-references it is stamped
+	// beside: the newest claimant's directory is the one worth knowing.
+	//
+	// The invariant worth checking: when this key equals
+	// WorkBranchMetadataKey, that work-branch value is claim-derived and must
+	// NOT be trusted as the branch a commit lives on.
+	ClaimBranchMetadataKey = "gc.claim_branch"
 	// ClaimedAtMetadataKey records the RFC3339 UTC instant a bead was first
 	// claimed through `gc hook --claim`. It is write-once: the claim hook
 	// stamps it only when absent from the bead's current metadata and never
@@ -256,9 +276,25 @@ const (
 // and its outcome so observability/eval can answer "what work was done, by
 // whom, with what artifact, to what end":
 //
-//   - WorkBranchMetadataKey ("gc.work_branch") — the git branch the claiming
-//     worker is on; the durable handle from the bead to its work. Stamped at
-//     claim time alongside WorkDirMetadataKey and read by the close gate.
+//   - WorkBranchMetadataKey ("gc.work_branch") — the branch the work LIVES on:
+//     the durable handle from the bead to its work, and the ref the close gate
+//     checks WorkCommitMetadataKey for reachability on. Written by whichever
+//     side creates or adopts the branch — worktree provisioning stamps it as
+//     one of the nine ownership keys worktreeSpecForBead requires, and uses it
+//     as worktree.Spec.Branch.
+//
+//     The claim hook fills it in only when it is ABSENT, and never overwrites
+//     it (gc-ipeiw). It used to compare-and-overwrite from the claiming
+//     session's own directory, which could replace real worktree provenance
+//     with the unrelated branch a claimant happened to be standing on. The
+//     claim-time directory fact now has its own key,
+//     ClaimBranchMetadataKey — see the invariant recorded there before
+//     trusting a work-branch value as an outcome fact.
+//
+//     It is NOT stamped "alongside" WorkDirMetadataKey: the claim hook writes
+//     no work_dir at all. That key is written by the formula onto the work
+//     bead, which is why the two keys are carried by almost disjoint bead
+//     populations.
 //   - WorkOutcomeMetadataKey ("gc.work_outcome") — the typed close disposition,
 //     one of "shipped" | "no-op" | "blocked" | "abandoned". Deliberately NOT
 //     OutcomeMetadataKey ("gc.outcome"): that key is the control-plane step
@@ -388,6 +424,7 @@ var KnownMetadataKeys = []string{
 	CheckPathMetadataKey,
 	CheckTimeoutMetadataKey,
 	CityPathMetadataKey,
+	ClaimBranchMetadataKey,
 	ClaimedAtMetadataKey,
 	ClosedByAttemptMetadataKey,
 	ContinuationGroupMetadataKey,
