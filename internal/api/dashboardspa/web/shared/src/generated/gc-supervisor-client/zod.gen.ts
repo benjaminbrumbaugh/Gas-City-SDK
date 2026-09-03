@@ -665,6 +665,8 @@ export const zExtMsgInboundInputBody = z.object({
 
 export const zExtmsgAdapterInfo = z.object({
     account_id: z.string(),
+    generation: z.coerce.bigint().gte(BigInt(0)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    instance_id: z.string(),
     name: z.string(),
     provider: z.string()
 });

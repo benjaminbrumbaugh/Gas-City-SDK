@@ -99,6 +99,25 @@ func TestAdapterRegistryCredentialIsBoundToCurrentGenerationAndInstance(t *testi
 	}
 }
 
+func TestAdapterRegistryListActiveRegistrationsReturnsExactReplacementIdentity(t *testing.T) {
+	registry := NewAdapterRegistry()
+	key := AdapterKey{Provider: "hermes", AccountID: "desktop"}
+	first := registry.Register(key, newStubAdapter("hermes", ConversationRef{}))
+	second := registry.Register(key, newStubAdapter("hermes", ConversationRef{}))
+	if first.Generation >= second.Generation || first.Instance == second.Instance {
+		t.Fatal("replacement did not issue a distinct generation and instance")
+	}
+
+	registrations := registry.ListActiveRegistrations()
+	if len(registrations) != 1 {
+		t.Fatalf("active registrations = %d, want 1", len(registrations))
+	}
+	got := registrations[0]
+	if got.Key != key || got.Name != "hermes" || got.Generation != second.Generation || got.Instance != second.Instance {
+		t.Fatalf("active registration = %+v, want key=%+v name=hermes generation=%d instance=%q", got, key, second.Generation, second.Instance)
+	}
+}
+
 func TestAdapterRegistryUnregisterRequiresCurrentRegistrationFence(t *testing.T) {
 	registry := NewAdapterRegistry()
 	key := AdapterKey{Provider: "hermes", AccountID: "desktop"}

@@ -24,6 +24,16 @@ type AdapterRegistration struct {
 	Instance   string
 }
 
+// ActiveAdapterRegistration is the non-secret identity of one registered adapter.
+// It is safe to expose for lifecycle fencing because credentials and callback
+// details are deliberately absent.
+type ActiveAdapterRegistration struct {
+	Key        AdapterKey
+	Name       string
+	Generation uint64
+	Instance   string
+}
+
 type adapterRegistration struct {
 	adapter        TransportAdapter
 	credentialHash [sha256.Size]byte
@@ -132,4 +142,24 @@ func (r *AdapterRegistry) List() []AdapterKey {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// ListActiveRegistrations returns a consistent snapshot of non-secret adapter
+// registration identities.
+func (r *AdapterRegistry) ListActiveRegistrations() []ActiveAdapterRegistration {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	registrations := make([]ActiveAdapterRegistration, 0, len(r.adapters))
+	for key, registration := range r.adapters {
+		if registration.adapter == nil {
+			continue
+		}
+		registrations = append(registrations, ActiveAdapterRegistration{
+			Key:        key,
+			Name:       registration.adapter.Name(),
+			Generation: registration.generation,
+			Instance:   registration.instance,
+		})
+	}
+	return registrations
 }
