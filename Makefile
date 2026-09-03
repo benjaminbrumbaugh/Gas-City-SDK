@@ -145,21 +145,60 @@ endif
 ## Override INSTALL_DIR explicitly only when building a separate artifact.
 install: check-self-contained
 	@mkdir -p $(INSTALL_DIR)
+	@# THE GUARD. gc-ffi96 put an ancestry check in the city's gc-deploy.sh and
+	@# it works; this target is the OTHER path to the same file and had none, so
+	@# a `make install` silently uninstalled eleven once-running commits
+	@# (gc-km00g). A guard on one of two paths to one file guards neither.
+	@# ALLOW_ROLLBACK=1 is the deliberate-revert override.
+	@ALLOW_ROLLBACK="$(ALLOW_ROLLBACK)" ./scripts/install-ancestry-guard.sh \
+		--target "$(INSTALL_DIR)/$(BINARY)" --repo . --label "make install"
+	@# WHAT WAS REPLACED, recorded before it is gone. gc-km00g went undiagnosed
+	@# because this path left neither a backup nor a version line, so the only
+	@# evidence of the drop was a non-linear installed lineage nobody had reason
+	@# to look at. gc-deploy.sh has written a timestamped backup all along; the
+	@# two backups on the reporting machine are exactly why its two guarded
+	@# steps could be reconstructed and the unguarded one could not.
 	@set -e; \
+		target="$(INSTALL_DIR)/$(BINARY)"; \
+		prev="(none)"; \
+		if [ -e "$$target" ]; then \
+			prev=`"$$target" version 2>/dev/null | head -1 || echo '<unreadable>'`; \
+			backup="$$target.bak-`date -u +%Y-%m-%dT%H:%M:%SZ`"; \
+			cp -p "$$target" "$$backup"; \
+			echo "install: backed up $$prev -> $$backup"; \
+		fi; \
 		tmp="$(INSTALL_DIR)/.$(BINARY).tmp.$$$$"; \
 		trap 'rm -f "$$tmp"' EXIT INT TERM HUP; \
 		cp -f "$(BUILD_DIR)/$(BINARY)" "$$tmp"; \
 		chmod 0755 "$$tmp"; \
-		mv -f "$$tmp" "$(INSTALL_DIR)/$(BINARY)"; \
-		trap - EXIT INT TERM HUP
-	@# Migrate from old install location: replace stale binary with symlink
+		mv -f "$$tmp" "$$target"; \
+		trap - EXIT INT TERM HUP; \
+		echo "install: $$prev -> `"$$target" version 2>/dev/null | head -1 || echo '<unreadable>'`"
+	@# Migrate from old install location: replace stale binary with symlink.
+	@#
+	@# THIS REPOINTS THE CANONICAL LIVE BINARY, so it is a second path to the
+	@# same file and needs the same guard. `## install:` says to override
+	@# INSTALL_DIR "only when building a separate artifact" — but doing so
+	@# deletes $(HOME)/.local/bin/$(BINARY) and points it at the artifact just
+	@# built. Whatever the running city was executing is gone, with no ancestry
+	@# check, no backup and no record. Guarding only $(INSTALL_DIR) above would
+	@# have left the more surprising of the two holes open (gc-km00g).
 	@if [ "$(INSTALL_DIR)" != "$(HOME)/.local/bin" ]; then \
-		if [ -f "$(HOME)/.local/bin/$(BINARY)" ] || [ -L "$(HOME)/.local/bin/$(BINARY)" ]; then \
-			rm -f "$(HOME)/.local/bin/$(BINARY)"; \
+		set -e; \
+		canon="$(HOME)/.local/bin/$(BINARY)"; \
+		if [ -e "$$canon" ] || [ -L "$$canon" ]; then \
+			ALLOW_ROLLBACK="$(ALLOW_ROLLBACK)" ./scripts/install-ancestry-guard.sh \
+				--target "$$canon" --repo . --label "make install (canonical symlink migration)"; \
+			if [ -e "$$canon" ]; then \
+				canon_prev=`"$$canon" version 2>/dev/null | head -1 || echo '<unreadable>'`; \
+				cp -pL "$$canon" "$$canon.bak-`date -u +%Y-%m-%dT%H:%M:%SZ`"; \
+				echo "install: backed up canonical $$canon_prev before repointing it"; \
+			fi; \
+			rm -f "$$canon"; \
 		fi; \
 		if [ -d "$(HOME)/.local/bin" ]; then \
-			ln -sf "$(INSTALL_DIR)/$(BINARY)" "$(HOME)/.local/bin/$(BINARY)"; \
-			echo "Symlinked $(HOME)/.local/bin/$(BINARY) -> $(INSTALL_DIR)/$(BINARY)"; \
+			ln -sf "$(INSTALL_DIR)/$(BINARY)" "$$canon"; \
+			echo "Symlinked $$canon -> $(INSTALL_DIR)/$(BINARY)"; \
 		fi; \
 	fi
 	@echo "Installed $(BINARY) to $(INSTALL_DIR)/$(BINARY)"
