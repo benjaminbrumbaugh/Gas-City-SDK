@@ -21,6 +21,7 @@ import (
 
 type cityRoutingDecisionService struct {
 	mu               sync.RWMutex
+	ingestWG         sync.WaitGroup
 	store            *routingdecision.Store
 	verifier         *routingdecision.Verifier
 	status           string
@@ -34,6 +35,7 @@ type cityRoutingDecisionService struct {
 	now              func() time.Time
 	outcomeWork      func(context.Context, routingdecision.DecisionPayload) (routingdecision.OutcomeWorkSnapshot, error)
 	outcomeAuthority func(context.Context, routingdecision.DecisionPayload) routingdecision.OutcomeAuthoritySnapshot
+	reconcile        func()
 }
 
 func initializeRoutingDecisionService(cr *CityRuntime) {
@@ -42,6 +44,7 @@ func initializeRoutingDecisionService(cr *CityRuntime) {
 		targets: cr.routingDecisionTargetSnapshots, eligible: cr.routingDecisionEligibleSnapshot,
 		now: cr.routingDecisionNow, outcomeWork: cr.routingDecisionOutcomeWork,
 		outcomeAuthority: cr.routingDecisionOutcomeAuthority,
+		reconcile:        cr.reconcileRoutingDecisionsAndLog,
 	}
 	cr.routingDecisionService = service
 	verifier, err := routingdecision.LoadAuthorityFile(cr.cityPath)
@@ -109,6 +112,7 @@ func (service *cityRoutingDecisionService) Close() {
 	service.store = nil
 	service.verifier = nil
 	service.mu.Unlock()
+	service.ingestWG.Wait()
 	if store != nil {
 		_ = store.Close()
 	}
@@ -323,11 +327,33 @@ func (service *cityRoutingDecisionService) Ingest(ctx context.Context, request r
 		return routingdecision.IngestApprovedResult{}, err
 	}
 	service.mu.RLock()
-	defer service.mu.RUnlock()
 	if service.closed || service.status != routingdecision.AvailabilityReady || service.store == nil || service.verifier == nil {
+		service.mu.RUnlock()
 		return routingdecision.IngestApprovedResult{}, errors.New("routing decision service unavailable")
 	}
-	return service.store.IngestApproved(request, *service.verifier)
+	store := service.store
+	verifier := *service.verifier
+	reconcile := service.reconcile
+	service.ingestWG.Add(1)
+	service.mu.RUnlock()
+	defer service.ingestWG.Done()
+	result, err := store.IngestApproved(request, verifier)
+	if err != nil {
+		return routingdecision.IngestApprovedResult{}, err
+	}
+	if reconcile != nil {
+		reconcile()
+		current, getErr := store.Get(request.Payload.DecisionID)
+		if getErr != nil {
+			return routingdecision.IngestApprovedResult{}, getErr
+		}
+		result.Record = current
+		result.Receipt = routingdecision.TransitionReceipt{
+			DecisionID: current.Payload.DecisionID, State: current.State,
+			RecordRevision: current.RecordRevision, StoreRevision: current.StoreRevision,
+		}
+	}
+	return result, nil
 }
 
 func (cr *CityRuntime) routingDecisionTargetSnapshots() ([]routingdecision.TargetSnapshot, error) {
