@@ -498,9 +498,11 @@ func (s *Server) humaHandleExtMsgTranscriptAck(ctx context.Context, input *ExtMs
 
 // extmsgAdapterInfo is the response shape for each entry in GET /v0/extmsg/adapters.
 type extmsgAdapterInfo struct {
-	Provider  string `json:"provider" doc:"Adapter provider key."`
-	AccountID string `json:"account_id" doc:"Adapter account ID."`
-	Name      string `json:"name" doc:"Adapter display name."`
+	Provider   string `json:"provider" doc:"Adapter provider key."`
+	AccountID  string `json:"account_id" doc:"Adapter account ID."`
+	Name       string `json:"name" doc:"Adapter display name."`
+	Generation uint64 `json:"generation" doc:"Active registration generation fence."`
+	Instance   string `json:"instance_id" doc:"Active registration instance fence."`
 }
 
 // humaHandleExtMsgAdapterList is the Huma-typed handler for GET /v0/extmsg/adapters.
@@ -510,24 +512,21 @@ func (s *Server) humaHandleExtMsgAdapterList(_ context.Context, _ *ExtMsgAdapter
 		return nil, err
 	}
 
-	keys := reg.List()
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].Provider != keys[j].Provider {
-			return keys[i].Provider < keys[j].Provider
+	registrations := reg.ListActiveRegistrations()
+	sort.Slice(registrations, func(i, j int) bool {
+		if registrations[i].Key.Provider != registrations[j].Key.Provider {
+			return registrations[i].Key.Provider < registrations[j].Key.Provider
 		}
-		return keys[i].AccountID < keys[j].AccountID
+		return registrations[i].Key.AccountID < registrations[j].Key.AccountID
 	})
-	items := make([]extmsgAdapterInfo, 0, len(keys))
-	for _, k := range keys {
-		a := reg.Lookup(k)
-		name := ""
-		if a != nil {
-			name = a.Name()
-		}
+	items := make([]extmsgAdapterInfo, 0, len(registrations))
+	for _, registration := range registrations {
 		items = append(items, extmsgAdapterInfo{
-			Provider:  k.Provider,
-			AccountID: k.AccountID,
-			Name:      name,
+			Provider:   registration.Key.Provider,
+			AccountID:  registration.Key.AccountID,
+			Name:       registration.Name,
+			Generation: registration.Generation,
+			Instance:   registration.Instance,
 		})
 	}
 	return &ListOutput[extmsgAdapterInfo]{

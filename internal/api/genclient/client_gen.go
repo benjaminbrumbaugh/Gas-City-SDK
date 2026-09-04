@@ -2157,6 +2157,12 @@ type ExtmsgAdapterInfo struct {
 	// AccountId Adapter account ID.
 	AccountId string `json:"account_id"`
 
+	// Generation Active registration generation fence.
+	Generation int64 `json:"generation"`
+
+	// InstanceId Active registration instance fence.
+	InstanceId string `json:"instance_id"`
+
 	// Name Adapter display name.
 	Name string `json:"name"`
 

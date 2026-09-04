@@ -3710,6 +3710,16 @@
             "description": "Adapter account ID.",
             "type": "string"
           },
+          "generation": {
+            "description": "Active registration generation fence.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "instance_id": {
+            "description": "Active registration instance fence.",
+            "type": "string"
+          },
           "name": {
             "description": "Adapter display name.",
             "type": "string"
@@ -3722,7 +3732,9 @@
         "required": [
           "provider",
           "account_id",
-          "name"
+          "name",
+          "generation",
+          "instance_id"
         ],
         "type": "object"
       },

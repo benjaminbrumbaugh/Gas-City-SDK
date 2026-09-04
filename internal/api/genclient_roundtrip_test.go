@@ -8,6 +8,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/api/genclient"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/extmsg"
 )
 
 // TestGenClientRoundTripCitiesList exercises the supervisor-scope
@@ -57,6 +58,30 @@ func TestGenClientRoundTripAgentList(t *testing.T) {
 	}
 	if resp.JSON200.Items == nil || len(*resp.JSON200.Items) == 0 {
 		t.Fatalf("agent list is empty; expected at least 'worker' from fake city")
+	}
+}
+
+func TestGenClientRoundTripExtMsgAdapterListRegistrationIdentity(t *testing.T) {
+	client, state := newRoundTripClient(t)
+	state.adapterReg = extmsg.NewAdapterRegistry()
+	key := extmsg.AdapterKey{Provider: "hermes", AccountID: "desktop"}
+	state.adapterReg.Register(key, extmsg.NewHTTPAdapter("hermes", "http://127.0.0.1:9/callback", extmsg.AdapterCapabilities{}))
+	want := state.adapterReg.Register(key, extmsg.NewHTTPAdapter("hermes", "http://127.0.0.1:9/callback", extmsg.AdapterCapabilities{}))
+
+	resp, err := client.GetV0CityByCityNameExtmsgAdaptersWithResponse(context.Background(), state.CityName())
+	if err != nil {
+		t.Fatalf("GetV0CityByCityNameExtmsgAdapters: %v", err)
+	}
+	if resp.StatusCode() != http.StatusOK || resp.JSON200 == nil || resp.JSON200.Items == nil {
+		t.Fatalf("adapter list status/body = %d/%s", resp.StatusCode(), string(resp.Body))
+	}
+	items := *resp.JSON200.Items
+	if len(items) != 1 {
+		t.Fatalf("adapter list items = %d, want 1", len(items))
+	}
+	got := items[0]
+	if got.Generation != int64(want.Generation) || got.InstanceId != want.Instance {
+		t.Fatalf("generated adapter identity = generation %d instance_id %q, want %d/%q", got.Generation, got.InstanceId, want.Generation, want.Instance)
 	}
 }
 

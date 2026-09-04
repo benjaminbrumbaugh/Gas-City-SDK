@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -201,6 +202,49 @@ func TestExtMsgAdapterUnregisterRequiresCurrentRegistrationFence(t *testing.T) {
 	}
 	if got := state.AdapterRegistry().Lookup(key); got != nil {
 		t.Fatalf("current unregister left adapter %T registered", got)
+	}
+}
+
+func TestExtMsgAdapterListReturnsExactCurrentRegistrationIdentity(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	h := newTestCityHandler(t, state)
+	first := registerExternalCoordinationResponseTestAdapter(t, h, state)
+	second := registerExternalCoordinationResponseTestAdapter(t, h, state)
+	if first.Generation >= second.Generation || first.Instance == second.Instance {
+		t.Fatal("replacement did not issue a distinct generation and instance")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, cityURL(state, "/extmsg/adapters"), nil)
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /extmsg/adapters status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
+
+	var listed struct {
+		Items []struct {
+			Provider   string `json:"provider"`
+			AccountID  string `json:"account_id"`
+			Name       string `json:"name"`
+			Generation uint64 `json:"generation"`
+			InstanceID string `json:"instance_id"`
+		} `json:"items"`
+		Total int `json:"total"`
+	}
+	decoder := json.NewDecoder(response.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&listed); err != nil {
+		t.Fatalf("strict decode GET /extmsg/adapters: %v; body = %s", err, response.Body.String())
+	}
+	if err := decoder.Decode(new(json.RawMessage)); err != io.EOF {
+		t.Fatalf("GET /extmsg/adapters trailing JSON decode error = %v, want EOF", err)
+	}
+	if listed.Total != 1 || len(listed.Items) != 1 {
+		t.Fatalf("adapter list total/items = %d/%d, want 1/1", listed.Total, len(listed.Items))
+	}
+	got := listed.Items[0]
+	if got.Provider != "hermes" || got.AccountID != "desktop" || got.Name != "hermes" || got.Generation != second.Generation || got.InstanceID != second.Instance {
+		t.Fatalf("adapter list item = %+v, want current generation=%d instance_id=%q", got, second.Generation, second.Instance)
 	}
 }
 

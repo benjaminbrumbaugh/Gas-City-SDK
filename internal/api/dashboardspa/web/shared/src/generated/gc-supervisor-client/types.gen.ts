@@ -1346,6 +1346,14 @@ export type ExtmsgAdapterInfo = {
      */
     account_id: string;
     /**
+     * Active registration generation fence.
+     */
+    generation: number;
+    /**
+     * Active registration instance fence.
+     */
+    instance_id: string;
+    /**
      * Adapter display name.
      */
     name: string;
