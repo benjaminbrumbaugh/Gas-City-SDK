@@ -1380,6 +1380,105 @@ func TestCmdWorkflowReopenSourcePreservesRouteWithoutRunTarget(t *testing.T) {
 	}
 }
 
+func TestCmdWorkflowReopenSourceClearsStaleWorktreeClaim(t *testing.T) {
+	// A refinery rejection reopens the source bead after its workflow is
+	// cleaned up. If the departed polecat left only gc.work_dir/work_dir plus
+	// the canonical branch claim, retaining that path makes pool demand treat
+	// it as a managed workspace without a repository identity and skip it.
+	// Reopen clears only those stale directory claims; the branch and retry
+	// metadata remain the durable handoff record for the next polecat.
+	cityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte("[workspace]\nname = \"test-city\"\n"), 0o644); err != nil {
+		t.Fatalf("write city.toml: %v", err)
+	}
+	t.Setenv("GC_CITY", cityDir)
+	t.Setenv("GC_BEADS", "file")
+	t.Setenv("GC_BEADS_SCOPE_ROOT", "")
+	prevCityFlag := cityFlag
+	cityFlag = ""
+	t.Cleanup(func() { cityFlag = prevCityFlag })
+
+	store, err := openStoreAtForCity(cityDir, cityDir)
+	if err != nil {
+		t.Fatalf("openStoreAtForCity: %v", err)
+	}
+	const (
+		branch     = "polecat/sdk-0uk"
+		workCommit = "0123456789abcdef0123456789abcdef01234567"
+		target     = "main"
+		rejection  = "quality checks failed"
+		route      = "gascity/polecat"
+	)
+	staleWorkDir := filepath.Join(t.TempDir(), "wf-so4")
+	source, err := store.Create(beads.Bead{
+		Title:  "Source",
+		Type:   "task",
+		Status: "closed",
+		Metadata: map[string]string{
+			"workflow_id":                     "wf-gone",
+			"branch":                          branch,
+			"target":                          target,
+			beadmeta.WorkBranchMetadataKey:    branch,
+			beadmeta.WorkCommitMetadataKey:    workCommit,
+			beadmeta.WorkDirMetadataKey:       staleWorkDir,
+			beadmeta.LegacyWorkDirMetadataKey: staleWorkDir,
+			"rejection_reason":                rejection,
+			beadmeta.RoutedToMetadataKey:      route,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create(source): %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := cmdWorkflowReopenSource(source.ID, sourceWorkflowStoreSelector{}, &stdout, &stderr); code != 0 {
+		t.Fatalf("cmdWorkflowReopenSource returned %d; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+
+	reloaded, err := openStoreAtForCity(cityDir, cityDir)
+	if err != nil {
+		t.Fatalf("openStoreAtForCity(reload): %v", err)
+	}
+	updated, err := reloaded.Get(source.ID)
+	if err != nil {
+		t.Fatalf("Get(source): %v", err)
+	}
+	if got := updated.Metadata[beadmeta.WorkDirMetadataKey]; got != "" {
+		t.Fatalf("gc.work_dir = %q, want stale claim cleared", got)
+	}
+	if got := updated.Metadata[beadmeta.LegacyWorkDirMetadataKey]; got != "" {
+		t.Fatalf("work_dir = %q, want stale claim cleared", got)
+	}
+	for key, want := range map[string]string{
+		"branch":                       branch,
+		"target":                       target,
+		beadmeta.WorkBranchMetadataKey: branch,
+		beadmeta.WorkCommitMetadataKey: workCommit,
+		"rejection_reason":             rejection,
+		beadmeta.RoutedToMetadataKey:   route,
+	} {
+		if got := updated.Metadata[key]; got != want {
+			t.Errorf("metadata[%q] = %q, want %q preserved", key, got, want)
+		}
+	}
+	if got := updated.Metadata[beadmeta.WorktreeRepoMetadataKey]; got != "" {
+		t.Fatalf("gc.worktree_repo = %q, want no synthesized repository identity", got)
+	}
+	spec, err := worktreeSpecForBead(updated, "city")
+	if err != nil || spec != nil {
+		t.Fatalf("pool worktree evidence = %+v, err %v; want unmanaged demand after stale claim cleanup", spec, err)
+	}
+	if workDir, err := verifiedPoolTriggerWorkDir(nil, nil, "pool", SessionRequest{
+		WorkBeadID:   updated.ID,
+		WorktreeSpec: spec,
+	}); err != nil || workDir == staleWorkDir {
+		t.Fatalf("pool trigger work_dir = %q, err %v; want no stale worktree claim", workDir, err)
+	}
+	if updated.Status != "open" || updated.Assignee != "" {
+		t.Fatalf("reopened source status/assignee = %q/%q, want open/unassigned", updated.Status, updated.Assignee)
+	}
+}
+
 func TestCmdWorkflowReopenSourceLeavesRouteBlankWhenNoRouteAvailable(t *testing.T) {
 	// ga-20zd: preserving an existing route must not invent one. A bead
 	// carrying neither gc.run_target nor gc.routed_to still reopens blank —

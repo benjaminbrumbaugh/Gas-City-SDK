@@ -1878,15 +1878,14 @@ func cmdWorkflowReopenSource(sourceBeadID string, selector sourceWorkflowStoreSe
 		if nextRoute == "" {
 			nextRoute = strings.TrimSpace(currentSource.Metadata[beadmeta.RoutedToMetadataKey])
 		}
-		if err := target.storeView.store.SetMetadata(currentSource.ID, beadmeta.RoutedToMetadataKey, nextRoute); err != nil {
-			return err
-		}
-		if err := clearSessionAffinityMetadataOnBead(target.storeView.store, currentSource.ID); err != nil {
-			return err
-		}
+		metadata := clearedSessionAffinityMetadata()
+		metadata["workflow_id"] = ""
+		metadata[beadmeta.RoutedToMetadataKey] = nextRoute
+		maps.Copy(metadata, staleWorktreeMetadataForReopen(currentSource.Metadata))
 		if err := target.storeView.store.Update(currentSource.ID, beads.UpdateOpts{
 			Status:   &open,
 			Assignee: &unassigned,
+			Metadata: metadata,
 		}); err != nil {
 			return err
 		}
@@ -1898,6 +1897,54 @@ func cmdWorkflowReopenSource(sourceBeadID string, selector sourceWorkflowStoreSe
 		return 1
 	}
 	return resultCode
+}
+
+// staleWorktreeMetadataForReopen returns only the directory metadata that a
+// rejected source can no longer safely carry into the pool. A branch claim is
+// the durable handoff identity; without one, reopen-source cannot distinguish
+// a stale checkout from an unrelated path and leaves the metadata untouched.
+// Complete, internally consistent worktree ownership evidence is also left
+// intact so a managed workspace remains eligible for verification. Conflicting
+// directory mirrors are not internally consistent and are cleared. This
+// helper never creates an identity or touches the filesystem.
+func staleWorktreeMetadataForReopen(metadata map[string]string) map[string]string {
+	branch := strings.TrimSpace(metadata["branch"])
+	if branch == "" {
+		branch = strings.TrimSpace(metadata[beadmeta.WorkBranchMetadataKey])
+	}
+	if branch == "" {
+		return nil
+	}
+	if strings.TrimSpace(metadata[beadmeta.WorkDirMetadataKey]) == "" &&
+		strings.TrimSpace(metadata[beadmeta.LegacyWorkDirMetadataKey]) == "" {
+		return nil
+	}
+	canonicalPath := strings.TrimSpace(metadata[beadmeta.WorkDirMetadataKey])
+	legacyPath := strings.TrimSpace(metadata[beadmeta.LegacyWorkDirMetadataKey])
+	if canonicalPath != "" && legacyPath != "" && canonicalPath != legacyPath {
+		return map[string]string{
+			beadmeta.WorkDirMetadataKey:       "",
+			beadmeta.LegacyWorkDirMetadataKey: "",
+		}
+	}
+
+	if strings.TrimSpace(metadata[beadmeta.WorkBranchMetadataKey]) != "" {
+		complete := true
+		for _, key := range worktreeOwnershipEvidenceKeys {
+			if strings.TrimSpace(metadata[key]) == "" {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			return nil
+		}
+	}
+
+	return map[string]string{
+		beadmeta.WorkDirMetadataKey:       "",
+		beadmeta.LegacyWorkDirMetadataKey: "",
+	}
 }
 
 // findWorkflowBeads returns all beads belonging to a workflow resolved by
