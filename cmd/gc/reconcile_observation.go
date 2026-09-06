@@ -27,6 +27,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -350,4 +351,43 @@ func (cr *CityRuntime) countReconcileTemplates(
 		templateNames[template] = struct{}{}
 	}
 	return templateNames, openCounts, desiredCounts
+}
+
+// reconciliationSnapshotReply is the controller-socket reply for
+// `gc trace snapshot`. Observation is nil when nothing has been published.
+type reconciliationSnapshotReply struct {
+	OK          bool                              `json:"ok"`
+	Error       string                            `json:"error,omitempty"`
+	Observation *reconcileobservation.Observation `json:"observation,omitempty"`
+}
+
+// handleReconciliationSnapshotSocketCmd serves the latest observation over the
+// controller socket.
+//
+// The socket rather than the HTTP API, because every other `gc trace`
+// subcommand already speaks it and because a diagnostic must still answer when
+// the API is disabled. Either way the value is the same in-memory one: this
+// path reads no trace segment and opens no store, which is what separates
+// `gc trace snapshot` from `gc trace status`.
+func handleReconciliationSnapshotSocketCmd(conn net.Conn, observe func() *reconcileobservation.Observation) {
+	if observe == nil {
+		writeJSONLine(conn, reconciliationSnapshotReply{
+			OK:    false,
+			Error: "no reconciliation observation is available: this controller has no city runtime attached",
+		})
+		return
+	}
+	obs := observe()
+	if obs == nil {
+		// Not an empty observation. A controller that has not finished its
+		// first cycle has published nothing, and reporting that as an
+		// observation of an idle city is the false-green the resource exists
+		// to avoid.
+		writeJSONLine(conn, reconciliationSnapshotReply{
+			OK:    false,
+			Error: "no reconciliation observation is available: the controller has not completed a cycle yet",
+		})
+		return
+	}
+	writeJSONLine(conn, reconciliationSnapshotReply{OK: true, Observation: obs})
 }

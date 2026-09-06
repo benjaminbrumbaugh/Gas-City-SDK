@@ -2327,6 +2327,10 @@ func startOneCity(
 	cs.pokeCh = pokeCh
 	cs.configDirty = configDirty
 	cs.services = cityRuntime.svc
+	// The reconciliation observation the tick publishes, exposed through the
+	// optional API capability. A function rather than a snapshot, so a read
+	// always sees the latest published cycle.
+	cs.reconcileObs = cityRuntime.ReconciliationObservation
 	cityRuntime.setControllerState(cs)
 
 	// One-time startup hygiene: release stale runtime name claims held by
@@ -2436,7 +2440,7 @@ func startOneCity(
 	// Start controller socket AFTER the alreadyRunning check so we
 	// never destroy a live city's socket or leak a listener.
 	sockPath := controllerSocketPath(path)
-	lis, lisErr := startControllerSocket(path, controllerHostingSupervisor, cityCancel, forceShutdown, configDirty, reloadReqCh, convergenceReqCh, pokeCh, controlDispatcherCh)
+	lis, lisErr := startControllerSocket(path, controllerHostingSupervisor, cityCancel, forceShutdown, configDirty, reloadReqCh, convergenceReqCh, pokeCh, controlDispatcherCh, cityRuntime.ReconciliationObservation)
 	if lisErr != nil {
 		fmt.Fprintf(stderr, "gc supervisor: city '%s': controller socket: %v\n", cityName, lisErr) //nolint:errcheck
 		lock.Close()                                                                               //nolint:errcheck // no socket to race with

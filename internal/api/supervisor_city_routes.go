@@ -75,6 +75,14 @@ func (sm *SupervisorMux) registerCityRoutes() {
 		Summary: "Ingest one signed routing decision", DefaultStatus: http.StatusCreated,
 		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity, http.StatusServiceUnavailable},
 	}, (*Server).humaHandleRoutingDecisionIngest)
+	// Reconciliation observation. Factual, generation-bound, and read from an
+	// already-published in-memory value — no request-time store, runtime,
+	// provider or filesystem probing, and no health verdict. 503 means the
+	// controller has published nothing yet, which is not the same as an
+	// observation of an idle city.
+	cityGet(sm, "/reconciliation", (*Server).humaHandleReconciliation,
+		errorStatuses(http.StatusNotFound, http.StatusServiceUnavailable),
+		describes("Returns the controller's latest factual observation of one reconciliation cycle: which generation and cycle produced it, whether each demand and session source was read completely, whole-city totals, and one row per configured template. It publishes no healthy/degraded/stuck verdict and computes no ages — a consumer evaluates its own progress obligations against these facts. Reads perform no store, runtime, provider or filesystem I/O, so cost does not vary with the number of beads, tasks or sessions. 503 means no observation has been published yet."))
 
 	// City detail.
 	cityGet(sm, "", (*Server).humaHandleCityGet, errorStatuses(http.StatusNotFound))
