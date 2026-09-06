@@ -137,6 +137,12 @@ type CityRuntime struct {
 	routingDecisionNowFn    func() time.Time
 	routingDecisionService  *cityRoutingDecisionService
 
+	// reconcileObs is the latest factual observation of a reconciliation
+	// cycle, published in memory for the read-only city resource. It sits
+	// beside `trace` rather than inside it on purpose: the trace cycle is nil
+	// whenever tracing is off, and this must not be. See reconcile_observation.go.
+	reconcileObs reconcileObservationState
+
 	// routeRecovery is the route-repair lane: an event-fed delta pass in the
 	// tick and a cadenced authoritative scan behind it. Created on first use so
 	// a directly-constructed runtime needs no wiring.
@@ -1151,6 +1157,7 @@ func (cr *CityRuntime) tick(
 		traceDetail = "manual_reload"
 	}
 	trace := cr.beginTraceCycle(traceTrigger, traceDetail, nil)
+	cr.beginReconcileObservation(traceTrigger, traceDetail, traceCycleID(trace), time.Now())
 	// End the trace via defer so a panic recovered by safeTick still
 	// closes the cycle (aborted). completion flips to Completed at the
 	// normal end of the tick body below.
@@ -1159,6 +1166,13 @@ func (cr *CityRuntime) tick(
 		if trace != nil {
 			trace.end(completion, traceRecordPayload{"phase": "tick", "trigger": traceTrigger})
 		}
+		// Publish in the SAME defer, and after trace.end, for two reasons: this
+		// defer is the one path guaranteed to run for a completed, aborted or
+		// panic-recovered cycle, and by this point the trace's own drop counters
+		// include the final flush. Deliberately NOT guarded by `trace != nil` —
+		// an observation that vanishes when tracing is off is worthless in
+		// exactly the degraded conditions worth observing.
+		cr.publishReconcileObservation(completion, trace, time.Now())
 	}()
 	cr.reconcilePoolDeaths(prevPoolRunning)
 
@@ -2617,7 +2631,7 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 	// work_query here can block assigned-work resumes behind unrelated probes.
 	workSet := make(map[string]bool)
 	traceWorkRequested := traceWorkRequestedByTemplate(result.ScaleCheckCounts, result.NamedSessionDemand, workSet, cr.cfg)
-	cr.recordReconcileTraceInputs(trace, openInfos, desiredState, poolDesired, workSet, traceWorkRequested, readyWaitSet, result, recordPhase)
+	cr.observeAndTraceReconcileInputs(trace, openInfos, desiredState, poolDesired, workSet, traceWorkRequested, readyWaitSet, result, recordPhase)
 
 	phaseStart = time.Now()
 	awakeAssignedWorkBeads, awakeAssignedStoreRefs := filterAssignedWorkBeadsForSessionWake(cr.cfg, cr.cityPath, store, openInfos, assignedWorkBeads, assignedWorkStoreRefs)
@@ -2770,11 +2784,24 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 	recordPhase(TraceSiteControllerTickPhase, "bead_reconcile.nudge_stalled_pool_claims", phaseStart, nil)
 }
 
-// recordReconcileTraceInputs records the per-template baseline, the cycle input
-// snapshot, and per-template config snapshots for one reconcile tick. It is a
-// no-op when trace is nil. It is split out of beadReconcileTick so that the hot
-// reconcile path is not dominated by trace bookkeeping.
-func (cr *CityRuntime) recordReconcileTraceInputs(
+// observeAndTraceReconcileInputs records one reconcile tick's factual inputs.
+//
+// It does two things over one pass: it fills the in-memory reconciliation
+// observation, ALWAYS, and it emits the per-template baseline, cycle input
+// snapshot and per-template config snapshots to the reconciler trace, only when
+// tracing is on.
+//
+// The old shape returned immediately when trace was nil, which is why the
+// observation could not be built from it: tracing is off whenever
+// GC_SESSION_RECONCILER_TRACE=0 or the trace store failed to open, and those
+// are conditions an operator especially wants observable. The counting is
+// shared rather than duplicated so the trace and the observation can never
+// report different numbers for the same tick.
+//
+// It stays split out of beadReconcileTick so the hot reconcile path is not
+// dominated by this bookkeeping, and the trace-only work is still skipped
+// entirely when tracing is off.
+func (cr *CityRuntime) observeAndTraceReconcileInputs(
 	trace *sessionReconcilerTraceCycle,
 	openInfos []sessionpkg.Info,
 	desiredState map[string]TemplateParams,
@@ -2785,44 +2812,35 @@ func (cr *CityRuntime) recordReconcileTraceInputs(
 	result DesiredStateResult,
 	recordPhase func(TraceSiteCode, string, time.Time, map[string]any),
 ) {
+	phaseStart := time.Now()
+
+	// Pre-tick baseline: openInfos is the tick's input row feed projected to
+	// Info, captured before the reconciler runs, so these reads are the
+	// pre-tick values. The trace baseline is emitted from inside the counting
+	// pass so a traced tick does not resolve every session's template twice.
+	var visit func(sessionpkg.Info, string)
+	if trace != nil {
+		visit = func(info sessionpkg.Info, template string) {
+			trace.RecordSessionBaseline(template, info.SessionNameMetadata, map[string]any{
+				"state":        info.MetadataState,
+				"sleep_reason": info.SleepReason,
+			})
+		}
+	}
+	templateNames, openCounts, desiredCounts := cr.countReconcileTemplates(
+		openInfos, desiredState, poolDesired, workSet, traceWorkRequested, visit)
+
+	cr.observeReconcileInputs(openCounts, desiredCounts, poolDesired, workSet,
+		traceWorkRequested, readyWaitSet, templateNames, len(openInfos), len(desiredState), result)
+
 	if trace == nil {
+		recordPhase(TraceSiteControllerTickPhase, "bead_reconcile.record_trace_input_summary", phaseStart, map[string]any{
+			"template_count": len(templateNames),
+			"open_count":     len(openInfos),
+		})
 		return
 	}
-	phaseStart := time.Now()
-	templateNames := make(map[string]struct{})
-	openCounts := make(map[string]int)
-	desiredCounts := make(map[string]int)
-	// Pre-tick baseline: openInfos is the tick's input row feed projected to Info,
-	// captured before the reconciler runs, so these reads are the pre-tick values
-	// (byte-equivalent to the raw open-bead read they replace).
-	for _, info := range openInfos {
-		template := normalizedSessionTemplateInfo(info, cr.cfg)
-		if template == "" {
-			continue
-		}
-		templateNames[template] = struct{}{}
-		openCounts[template]++
-		trace.RecordSessionBaseline(template, info.SessionNameMetadata, map[string]any{
-			"state":        info.MetadataState,
-			"sleep_reason": info.SleepReason,
-		})
-	}
-	for _, tp := range desiredState {
-		if tp.TemplateName == "" {
-			continue
-		}
-		templateNames[tp.TemplateName] = struct{}{}
-		desiredCounts[tp.TemplateName]++
-	}
-	for template := range poolDesired {
-		templateNames[template] = struct{}{}
-	}
-	for template := range workSet {
-		templateNames[template] = struct{}{}
-	}
-	for template := range traceWorkRequested {
-		templateNames[template] = struct{}{}
-	}
+
 	for _, template := range traceSetStrings(templateNames) {
 		status := TraceEvaluationEligible
 		reason := TraceReasonRetained

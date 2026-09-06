@@ -5034,6 +5034,7 @@ gc trace
 | [gc trace cycle](#gc-trace-cycle) | Show a cycle by tick id |
 | [gc trace reasons](#gc-trace-reasons) | Show reason codes observed in trace records |
 | [gc trace show](#gc-trace-show) | Show trace records |
+| [gc trace snapshot](#gc-trace-snapshot) | Show the controller's latest reconciliation observation |
 | [gc trace start](#gc-trace-start) | Start or extend tracing for a template |
 | [gc trace status](#gc-trace-status) | Show trace arms and stream state |
 | [gc trace stop](#gc-trace-stop) | Stop tracing for a template |
@@ -5081,6 +5082,27 @@ gc trace show [flags]
 | `--tick` | string |  | filter by tick id |
 | `--trace-id` | string |  | filter by trace id |
 | `--type` | string |  | filter by record type |
+
+## gc trace snapshot
+
+Show what the controller's most recent reconciliation cycle observed.
+
+Reports the generation and cycle that produced it, whether each demand and
+session source was read completely, whole-city totals, and one row per
+configured template. It reads an in-memory value the controller published; it
+does not read trace files, query stores or probe runtimes, and it publishes no
+health verdict.
+
+Exits non-zero when the controller has published nothing yet, which is not the
+same as an observation of an idle city.
+
+```
+gc trace snapshot [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | bool |  | emit JSON result |
 
 ## gc trace start
 

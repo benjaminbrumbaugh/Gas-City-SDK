@@ -1503,6 +1503,17 @@ type CityUnregisterSucceededPayload struct {
 	RequestId string `json:"request_id"`
 }
 
+// Completeness defines model for Completeness.
+type Completeness struct {
+	ContinuationClaimQueryPartial   bool      `json:"continuation_claim_query_partial"`
+	NamedScaleCheckPartialTemplates *[]string `json:"named_scale_check_partial_templates,omitempty"`
+	PoolScaleCheckPartialTemplates  *[]string `json:"pool_scale_check_partial_templates,omitempty"`
+	ScaleCheckPartialTemplates      *[]string `json:"scale_check_partial_templates,omitempty"`
+	SessionQueryPartial             bool      `json:"session_query_partial"`
+	SessionSnapshotComplete         bool      `json:"session_snapshot_complete"`
+	StoreQueryPartial               bool      `json:"store_query_partial"`
+}
+
 // ConditionalWritesDegradedPayload defines model for ConditionalWritesDegradedPayload.
 type ConditionalWritesDegradedPayload struct {
 	BdVersion *string `json:"bd_version,omitempty"`
@@ -1702,6 +1713,19 @@ type ConvoyProgress struct {
 type ConvoyRemoveInputBody struct {
 	// Items Bead IDs to remove.
 	Items *[]string `json:"items,omitempty"`
+}
+
+// Cycle defines model for Cycle.
+type Cycle struct {
+	Completion    string    `json:"completion"`
+	DurationMs    int64     `json:"duration_ms"`
+	EndedAt       time.Time `json:"ended_at"`
+	Reconciled    bool      `json:"reconciled"`
+	StartedAt     time.Time `json:"started_at"`
+	TickId        string    `json:"tick_id"`
+	TraceId       *string   `json:"trace_id,omitempty"`
+	Trigger       string    `json:"trigger"`
+	TriggerDetail *string   `json:"trigger_detail,omitempty"`
 }
 
 // DecisionPayload defines model for DecisionPayload.
@@ -2310,6 +2334,19 @@ type FormulaVarDefResponse struct {
 	Type        string      `json:"type"`
 }
 
+// Generation defines model for Generation.
+type Generation struct {
+	BuildDate      *string   `json:"build_date,omitempty"`
+	ConfigRevision *string   `json:"config_revision,omitempty"`
+	GcCommit       *string   `json:"gc_commit,omitempty"`
+	GcVersion      *string   `json:"gc_version,omitempty"`
+	Host           *string   `json:"host,omitempty"`
+	InstanceId     string    `json:"instance_id"`
+	IsCurrent      bool      `json:"is_current"`
+	Pid            int64     `json:"pid"`
+	StartedAt      time.Time `json:"started_at"`
+}
+
 // GitStatus defines model for GitStatus.
 type GitStatus struct {
 	Ahead        int64  `json:"ahead"`
@@ -2851,6 +2888,20 @@ type OKWithIDResponseBody struct {
 
 	// Status Operation result.
 	Status string `json:"status"`
+}
+
+// Observation defines model for Observation.
+type Observation struct {
+	City               string         `json:"city"`
+	Completeness       Completeness   `json:"completeness"`
+	Cycle              Cycle          `json:"cycle"`
+	Generation         Generation     `json:"generation"`
+	SchemaVersion      int64          `json:"schema_version"`
+	TemplateCount      int64          `json:"template_count"`
+	Templates          *[]TemplateRow `json:"templates"`
+	TemplatesTruncated bool           `json:"templates_truncated"`
+	Totals             Totals         `json:"totals"`
+	Trace              TraceState     `json:"trace"`
 }
 
 // OptionChoiceDTO defines model for OptionChoiceDTO.
@@ -5652,6 +5703,34 @@ type TargetSnapshot struct {
 	ResolvedProvider string `json:"resolved_provider"`
 	Rig              string `json:"rig"`
 	Target           string `json:"target"`
+}
+
+// TemplateRow defines model for TemplateRow.
+type TemplateRow struct {
+	DemandPartial   *bool   `json:"demand_partial,omitempty"`
+	DesiredCount    int64   `json:"desired_count"`
+	Evaluation      string  `json:"evaluation"`
+	OpenCount       int64   `json:"open_count"`
+	PoolDesired     int64   `json:"pool_desired"`
+	Reason          *string `json:"reason,omitempty"`
+	ScaleCheckCount int64   `json:"scale_check_count"`
+	Template        string  `json:"template"`
+	WorkRequested   bool    `json:"work_requested"`
+}
+
+// Totals defines model for Totals.
+type Totals struct {
+	DesiredSessionCount int64 `json:"desired_session_count"`
+	OpenSessionCount    int64 `json:"open_session_count"`
+	ReadyWaitCount      int64 `json:"ready_wait_count"`
+	WorkSetCount        int64 `json:"work_set_count"`
+}
+
+// TraceState defines model for TraceState.
+type TraceState struct {
+	DroppedBatchCount  *int64 `json:"dropped_batch_count,omitempty"`
+	DroppedRecordCount *int64 `json:"dropped_record_count,omitempty"`
+	Enabled            bool   `json:"enabled"`
 }
 
 // TranscriptMessageKind Direction of a transcript entry.
@@ -19710,6 +19789,9 @@ type ClientInterface interface {
 	// GetV0CityByCityNameReadiness request
 	GetV0CityByCityNameReadiness(ctx context.Context, cityName string, params *GetV0CityByCityNameReadinessParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetV0CityByCityNameReconciliation request
+	GetV0CityByCityNameReconciliation(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// DeleteV0CityByCityNameRigByName request
 	DeleteV0CityByCityNameRigByName(ctx context.Context, cityName string, name string, params *DeleteV0CityByCityNameRigByNameParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -21772,6 +21854,18 @@ func (c *Client) GetV0CityByCityNameProvidersPublic(ctx context.Context, cityNam
 
 func (c *Client) GetV0CityByCityNameReadiness(ctx context.Context, cityName string, params *GetV0CityByCityNameReadinessParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetV0CityByCityNameReadinessRequest(c.Server, cityName, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetV0CityByCityNameReconciliation(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetV0CityByCityNameReconciliationRequest(c.Server, cityName)
 	if err != nil {
 		return nil, err
 	}
@@ -30301,6 +30395,40 @@ func NewGetV0CityByCityNameReadinessRequest(server string, cityName string, para
 	return req, nil
 }
 
+// NewGetV0CityByCityNameReconciliationRequest generates requests for GetV0CityByCityNameReconciliation
+func NewGetV0CityByCityNameReconciliationRequest(server string, cityName string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/reconciliation", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewDeleteV0CityByCityNameRigByNameRequest generates requests for DeleteV0CityByCityNameRigByName
 func NewDeleteV0CityByCityNameRigByNameRequest(server string, cityName string, name string, params *DeleteV0CityByCityNameRigByNameParams) (*http.Request, error) {
 	var err error
@@ -34035,6 +34163,9 @@ type ClientWithResponsesInterface interface {
 	// GetV0CityByCityNameReadinessWithResponse request
 	GetV0CityByCityNameReadinessWithResponse(ctx context.Context, cityName string, params *GetV0CityByCityNameReadinessParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameReadinessResponse, error)
 
+	// GetV0CityByCityNameReconciliationWithResponse request
+	GetV0CityByCityNameReconciliationWithResponse(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameReconciliationResponse, error)
+
 	// DeleteV0CityByCityNameRigByNameWithResponse request
 	DeleteV0CityByCityNameRigByNameWithResponse(ctx context.Context, cityName string, name string, params *DeleteV0CityByCityNameRigByNameParams, reqEditors ...RequestEditorFn) (*DeleteV0CityByCityNameRigByNameResponse, error)
 
@@ -37549,6 +37680,32 @@ func (r GetV0CityByCityNameReadinessResponse) StatusCode() int {
 	return 0
 }
 
+type GetV0CityByCityNameReconciliationResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *Observation
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r GetV0CityByCityNameReconciliationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetV0CityByCityNameReconciliationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type DeleteV0CityByCityNameRigByNameResponse struct {
 	Body                      []byte
 	HTTPResponse              *http.Response
@@ -40304,6 +40461,15 @@ func (c *ClientWithResponses) GetV0CityByCityNameReadinessWithResponse(ctx conte
 		return nil, err
 	}
 	return ParseGetV0CityByCityNameReadinessResponse(rsp)
+}
+
+// GetV0CityByCityNameReconciliationWithResponse request returning *GetV0CityByCityNameReconciliationResponse
+func (c *ClientWithResponses) GetV0CityByCityNameReconciliationWithResponse(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameReconciliationResponse, error) {
+	rsp, err := c.GetV0CityByCityNameReconciliation(ctx, cityName, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetV0CityByCityNameReconciliationResponse(rsp)
 }
 
 // DeleteV0CityByCityNameRigByNameWithResponse request returning *DeleteV0CityByCityNameRigByNameResponse
@@ -48469,6 +48635,60 @@ func ParseGetV0CityByCityNameReadinessResponse(rsp *http.Response) (*GetV0CityBy
 			return nil, err
 		}
 		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetV0CityByCityNameReconciliationResponse parses an HTTP response from a GetV0CityByCityNameReconciliationWithResponse call
+func ParseGetV0CityByCityNameReconciliationResponse(rsp *http.Response) (*GetV0CityByCityNameReconciliationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetV0CityByCityNameReconciliationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Observation
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
 
 	}
 

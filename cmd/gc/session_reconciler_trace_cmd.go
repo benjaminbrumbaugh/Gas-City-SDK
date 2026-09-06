@@ -90,8 +90,137 @@ and can be managed even when the controller is offline.`,
 		newTraceCycleCmd(stdout, stderr),
 		newTraceReasonsCmd(stdout, stderr),
 		newTraceTailCmd(stdout, stderr),
+		newTraceSnapshotCmd(stdout, stderr),
 	)
 	return cmd
+}
+
+// newTraceSnapshotCmd projects the controller's latest reconciliation
+// observation.
+//
+// It is a separate subcommand from `status` rather than a flag on it because
+// the two answer different questions from different places. `gc trace status`
+// reports the trace stream's own state — arms, head sequence — and reads it
+// from disk. `snapshot` reports what the last reconciliation cycle observed,
+// from an in-memory value the controller published, and touches no trace file
+// at all. A city with tracing switched off has no trace status worth printing
+// and a perfectly good snapshot.
+//
+// It reports facts and no verdict. There is no healthy/degraded/stuck line
+// here, and there should never be one: whether a city is stuck depends on a
+// progress obligation the caller declares, not on anything the city knows about
+// itself.
+func newTraceSnapshotCmd(stdout, stderr io.Writer) *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "snapshot",
+		Short: "Show the controller's latest reconciliation observation",
+		Long: `Show what the controller's most recent reconciliation cycle observed.
+
+Reports the generation and cycle that produced it, whether each demand and
+session source was read completely, whole-city totals, and one row per
+configured template. It reads an in-memory value the controller published; it
+does not read trace files, query stores or probe runtimes, and it publishes no
+health verdict.
+
+Exits non-zero when the controller has published nothing yet, which is not the
+same as an observation of an idle city.`,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			if cmdTraceSnapshot(jsonOut, stdout, stderr) != 0 {
+				return errExit
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit JSON result")
+	return cmd
+}
+
+func cmdTraceSnapshot(jsonOut bool, stdout, stderr io.Writer) int {
+	cityPath, err := resolveCity()
+	if err != nil {
+		fmt.Fprintf(stderr, "gc trace snapshot: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	resp, err := sendControllerCommand(cityPath, "reconciliation-snapshot")
+	if err != nil {
+		// No local fallback, deliberately. The observation exists only in the
+		// controller's memory; there is no file to fall back to, and inventing
+		// one from trace segments would answer a different question.
+		fmt.Fprintf(stderr, "gc trace snapshot: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	var reply reconciliationSnapshotReply
+	if err := json.Unmarshal(resp, &reply); err != nil {
+		fmt.Fprintf(stderr, "gc trace snapshot: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	if !reply.OK || reply.Observation == nil {
+		msg := reply.Error
+		if msg == "" {
+			msg = "no reconciliation observation is available"
+		}
+		fmt.Fprintf(stderr, "gc trace snapshot: %s\n", msg) //nolint:errcheck
+		return 1
+	}
+	obs := reply.Observation
+	if jsonOut {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(obs); err != nil {
+			fmt.Fprintf(stderr, "gc trace snapshot: %v\n", err) //nolint:errcheck
+			return 1
+		}
+		return 0
+	}
+	fmt.Fprintf(stdout, "city       %s\n", obs.City)                //nolint:errcheck
+	fmt.Fprintf(stdout, "generation %s", obs.Generation.InstanceID) //nolint:errcheck
+	if obs.Generation.ConfigRev != "" {
+		fmt.Fprintf(stdout, " config=%s", obs.Generation.ConfigRev) //nolint:errcheck
+	}
+	if !obs.Generation.IsCurrent {
+		// Stated, not hidden, and stated as a fact about which generation this
+		// came from rather than as a problem.
+		fmt.Fprint(stdout, " (superseded generation)") //nolint:errcheck
+	}
+	fmt.Fprintln(stdout)                                         //nolint:errcheck
+	fmt.Fprintf(stdout, "cycle      %s trigger=%s %s in %dms\n", //nolint:errcheck
+		obs.Cycle.TickID, obs.Cycle.Trigger, obs.Cycle.Completion, obs.Cycle.DurationMS)
+	fmt.Fprintf(stdout, "           started %s ended %s\n", //nolint:errcheck
+		obs.Cycle.StartedAt.Format(time.RFC3339), obs.Cycle.EndedAt.Format(time.RFC3339))
+	if !obs.Cycle.Reconciled {
+		fmt.Fprintln(stdout, "           this cycle ended before the reconcile pass; the counts below are unset") //nolint:errcheck
+	}
+	fmt.Fprintf(stdout, "totals     desired=%d open=%d ready_wait=%d work_set=%d\n", //nolint:errcheck
+		obs.Totals.DesiredSessionCount, obs.Totals.OpenSessionCount,
+		obs.Totals.ReadyWaitCount, obs.Totals.WorkSetCount)
+	fmt.Fprintf(stdout, "sources    store_partial=%t session_partial=%t session_snapshot_complete=%t\n", //nolint:errcheck
+		obs.Completeness.StoreQueryPartial, obs.Completeness.SessionQueryPartial,
+		obs.Completeness.SessionSnapshotComplete)
+	for _, label := range []struct {
+		name string
+		list []string
+	}{
+		{"scale_check", obs.Completeness.ScaleCheckPartialTemplates},
+		{"pool_scale_check", obs.Completeness.PoolScaleCheckPartialTemplates},
+		{"named_scale_check", obs.Completeness.NamedScaleCheckPartialTemplates},
+	} {
+		if len(label.list) > 0 {
+			fmt.Fprintf(stdout, "           %s partial: %s\n", label.name, strings.Join(label.list, ", ")) //nolint:errcheck
+		}
+	}
+	fmt.Fprintf(stdout, "trace      enabled=%t dropped_records=%d dropped_batches=%d\n", //nolint:errcheck
+		obs.Trace.Enabled, obs.Trace.DroppedRecordCount, obs.Trace.DroppedBatchCount)
+	fmt.Fprintf(stdout, "templates  %d\n", obs.TemplateCount) //nolint:errcheck
+	if obs.TemplatesTruncated {
+		fmt.Fprintf(stdout, "           listing truncated to %d; use --json for every row\n", len(obs.Templates)) //nolint:errcheck
+	}
+	for _, row := range obs.Templates {
+		fmt.Fprintf(stdout, "  %-40s desired=%d open=%d pool=%d scale_check=%d %s\n", //nolint:errcheck
+			row.Template, row.DesiredCount, row.OpenCount, row.PoolDesired,
+			row.ScaleCheckCount, row.Evaluation)
+	}
+	return 0
 }
 
 func newTraceStartCmd(stdout, stderr io.Writer) *cobra.Command {
