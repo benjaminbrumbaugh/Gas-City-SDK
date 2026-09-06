@@ -67,6 +67,31 @@ func sampleObservation(city string, templates int) *reconcileobservation.Observa
 	}
 }
 
+// inProcessClient serves h without a listener: requests are dispatched
+// straight to the handler through a recorder. The tests below exercise
+// routing, status codes, problem bodies, spec validation and the generated
+// client, none of which depend on a real socket, and the repository's
+// resource census ratchets untagged loopback servers downward.
+func inProcessClient(h http.Handler) *http.Client {
+	return &http.Client{Transport: handlerTransport{h: h}}
+}
+
+type handlerTransport struct{ h http.Handler }
+
+func (t handlerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// The Host guard and loopback perimeter see what a real loopback listener
+	// would have handed them.
+	req = req.Clone(req.Context())
+	req.RemoteAddr = "127.0.0.1:65535"
+	rec := httptest.NewRecorder()
+	t.h.ServeHTTP(rec, req)
+	resp := rec.Result()
+	resp.Request = req
+	return resp, nil
+}
+
+const inProcessBase = "http://127.0.0.1:1"
+
 // --- 1. the handler touches nothing but the capability --------------------
 //
 // hostileState embeds a NIL State, so every State method other than the one
@@ -138,12 +163,10 @@ func TestReconciliationUnavailableIsNotAnEmptyObservation(t *testing.T) {
 		{"published nothing yet", &observingState{fakeState: newFakeState(t)}, "has not completed a cycle"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newTestCityHandler(t, tc.state)
-			ts := httptest.NewServer(h)
-			t.Cleanup(ts.Close)
+			client := inProcessClient(newTestCityHandler(t, tc.state))
 			city := tc.state.CityName()
 
-			resp, err := http.Get(ts.URL + "/v0/city/" + city + "/reconciliation")
+			resp, err := client.Get(inProcessBase + "/v0/city/" + city + "/reconciliation")
 			if err != nil {
 				t.Fatalf("get: %v", err)
 			}
@@ -169,12 +192,9 @@ func TestReconciliationUnavailableIsNotAnEmptyObservation(t *testing.T) {
 // that callers match on via IsCityNotFoundOrNotRunningDetail. A hand-written
 // 404 here would fork that contract silently.
 func TestReconciliationNotFoundUsesTheInheritedCityRefusal(t *testing.T) {
-	state := newFakeState(t)
-	h := newTestCityHandler(t, state)
-	ts := httptest.NewServer(h)
-	t.Cleanup(ts.Close)
+	client := inProcessClient(newTestCityHandler(t, newFakeState(t)))
 
-	resp, err := http.Get(ts.URL + "/v0/city/no-such-city/reconciliation")
+	resp, err := client.Get(inProcessBase + "/v0/city/no-such-city/reconciliation")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -209,16 +229,14 @@ func TestReconciliationResponseMatchesSpec(t *testing.T) {
 
 	base := newFakeState(t)
 	state := &observingState{fakeState: base, obs: sampleObservation(base.CityName(), 2)}
-	h := newTestCityHandler(t, state)
-	ts := httptest.NewServer(h)
-	t.Cleanup(ts.Close)
+	client := inProcessClient(newTestCityHandler(t, state))
 
-	url := ts.URL + "/v0/city/" + base.CityName() + "/reconciliation"
+	url := inProcessBase + "/v0/city/" + base.CityName() + "/reconciliation"
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -250,11 +268,9 @@ func TestReconciliationBodyCarriesCompletenessAndGeneration(t *testing.T) {
 	obs.TemplateCount = 999
 
 	state := &observingState{fakeState: base, obs: obs}
-	h := newTestCityHandler(t, state)
-	ts := httptest.NewServer(h)
-	t.Cleanup(ts.Close)
+	client := inProcessClient(newTestCityHandler(t, state))
 
-	resp, err := http.Get(ts.URL + "/v0/city/" + base.CityName() + "/reconciliation")
+	resp, err := client.Get(inProcessBase + "/v0/city/" + base.CityName() + "/reconciliation")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -317,10 +333,8 @@ func TestReconciliationGeneratedClientDecodesTypedResponses(t *testing.T) {
 	obs := sampleObservation(base.CityName(), 2)
 	obs.Completeness.StoreQueryPartial = true
 	state := &observingState{fakeState: base, obs: obs}
-	ts := httptest.NewServer(newTestCityHandler(t, state))
-	t.Cleanup(ts.Close)
-
-	client, err := genclient.NewClientWithResponses(ts.URL)
+	client, err := genclient.NewClientWithResponses(inProcessBase,
+		genclient.WithHTTPClient(inProcessClient(newTestCityHandler(t, state))))
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
@@ -351,9 +365,8 @@ func TestReconciliationGeneratedClientDecodesTypedResponses(t *testing.T) {
 	// And the unavailable case is typed too, so a caller can tell "nothing
 	// published" from a transport failure.
 	empty := &observingState{fakeState: newFakeState(t)}
-	ts2 := httptest.NewServer(newTestCityHandler(t, empty))
-	t.Cleanup(ts2.Close)
-	client2, err := genclient.NewClientWithResponses(ts2.URL)
+	client2, err := genclient.NewClientWithResponses(inProcessBase,
+		genclient.WithHTTPClient(inProcessClient(newTestCityHandler(t, empty))))
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
