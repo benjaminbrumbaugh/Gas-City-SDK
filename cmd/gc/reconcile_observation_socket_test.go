@@ -161,10 +161,27 @@ func TestReconciliationSnapshotDeclaresAndEmitsJSON(t *testing.T) {
 	}
 
 	var out, stderr bytes.Buffer
+	now := time.Date(2026, time.September, 7, 12, 0, 0, 0, time.UTC)
 	obs := &reconcileobservation.Observation{
 		SchemaVersion: reconcileobservation.SchemaVersion,
 		City:          "testcity",
-		Templates:     []reconcileobservation.TemplateRow{},
+		Generation: reconcileobservation.Generation{
+			InstanceID: "testhost:42",
+			PID:        42,
+			StartedAt:  now,
+			IsCurrent:  true,
+		},
+		Cycle: reconcileobservation.Cycle{
+			TickID:     "testcity-42-1",
+			Trigger:    reconcileobservation.TriggerPatrol,
+			StartedAt:  now,
+			EndedAt:    now.Add(time.Second),
+			DurationMS: 1000,
+			Completion: reconcileobservation.CompletionCompleted,
+			Reconciled: true,
+		},
+		Completeness: reconcileobservation.Completeness{SessionSnapshotComplete: true},
+		Templates:    []reconcileobservation.TemplateRow{},
 	}
 	if code := writeReconciliationSnapshotJSON(&out, &stderr, obs); code != 0 {
 		t.Fatalf("write JSON code=%d stderr=%q", code, stderr.String())
@@ -173,7 +190,8 @@ func TestReconciliationSnapshotDeclaresAndEmitsJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
 		t.Fatalf("output is not JSON: %v\n%s", err, out.String())
 	}
-	if result["ok"] != true || result["city"] != "testcity" {
+	if result["schema_version"] != "1" || result["ok"] != true || result["city"] != "testcity" {
 		t.Fatalf("output lost success discriminator or observation: %v", result)
 	}
+	validateJSONResultSchema(t, []string{"trace", "snapshot"}, out.Bytes())
 }

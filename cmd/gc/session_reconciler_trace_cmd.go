@@ -219,7 +219,37 @@ func cmdTraceSnapshot(jsonOut bool, stdout, stderr io.Writer) int {
 }
 
 func writeReconciliationSnapshotJSON(stdout, stderr io.Writer, obs *reconcileobservation.Observation) int {
-	return writeCLIJSONLineOrExit(stdout, stderr, "gc trace snapshot", obs)
+	result := reconciliationSnapshotJSON{
+		SchemaVersion:      "1",
+		OK:                 true,
+		City:               obs.City,
+		Generation:         obs.Generation,
+		Cycle:              obs.Cycle,
+		Completeness:       obs.Completeness,
+		Totals:             obs.Totals,
+		Templates:          obs.Templates,
+		TemplatesTruncated: obs.TemplatesTruncated,
+		TemplateCount:      obs.TemplateCount,
+		Trace:              obs.Trace,
+	}
+	return writeCLIJSONLineOrExit(stdout, stderr, "gc trace snapshot", result)
+}
+
+// reconciliationSnapshotJSON is the CLI projection of the controller-owned
+// observation. The CLI's common string schema version is deliberately separate
+// from the API model's integer schema version.
+type reconciliationSnapshotJSON struct {
+	SchemaVersion      string                             `json:"schema_version"`
+	OK                 bool                               `json:"ok"`
+	City               string                             `json:"city"`
+	Generation         reconcileobservation.Generation    `json:"generation"`
+	Cycle              reconcileobservation.Cycle         `json:"cycle"`
+	Completeness       reconcileobservation.Completeness  `json:"completeness"`
+	Totals             reconcileobservation.Totals        `json:"totals"`
+	Templates          []reconcileobservation.TemplateRow `json:"templates"`
+	TemplatesTruncated bool                               `json:"templates_truncated"`
+	TemplateCount      int                                `json:"template_count"`
+	Trace              reconcileobservation.TraceState    `json:"trace"`
 }
 
 func newTraceStartCmd(stdout, stderr io.Writer) *cobra.Command {

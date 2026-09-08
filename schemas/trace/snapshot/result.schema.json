@@ -19,7 +19,7 @@
   ],
   "properties": {
     "ok": { "const": true },
-    "schema_version": { "type": "integer", "const": 1 },
+    "schema_version": { "const": "1" },
     "city": { "type": "string", "minLength": 1 },
     "generation": {
       "type": "object",
