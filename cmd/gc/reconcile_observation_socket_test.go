@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -146,4 +147,51 @@ func TestReconciliationSnapshotSubcommandIsRegistered(t *testing.T) {
 		}
 	}
 	t.Fatal("gc trace has no snapshot subcommand")
+}
+
+func TestReconciliationSnapshotDeclaresAndEmitsJSON(t *testing.T) {
+	var schemaOut, schemaErr bytes.Buffer
+	root := newRootCmd(&schemaOut, &schemaErr)
+	handled, code := handleJSONSchemaRequest(root, []string{"trace", "snapshot", "--json-schema=result"}, &schemaOut)
+	if !handled || code != 0 {
+		t.Fatalf("schema request handled=%v code=%d stderr=%q stdout=%q", handled, code, schemaErr.String(), schemaOut.String())
+	}
+	if schemaErr.Len() != 0 {
+		t.Fatalf("schema request stderr=%q", schemaErr.String())
+	}
+
+	var out, stderr bytes.Buffer
+	now := time.Date(2026, time.September, 7, 12, 0, 0, 0, time.UTC)
+	obs := &reconcileobservation.Observation{
+		SchemaVersion: reconcileobservation.SchemaVersion,
+		City:          "testcity",
+		Generation: reconcileobservation.Generation{
+			InstanceID: "testhost:42",
+			PID:        42,
+			StartedAt:  now,
+			IsCurrent:  true,
+		},
+		Cycle: reconcileobservation.Cycle{
+			TickID:     "testcity-42-1",
+			Trigger:    reconcileobservation.TriggerPatrol,
+			StartedAt:  now,
+			EndedAt:    now.Add(time.Second),
+			DurationMS: 1000,
+			Completion: reconcileobservation.CompletionCompleted,
+			Reconciled: true,
+		},
+		Completeness: reconcileobservation.Completeness{SessionSnapshotComplete: true},
+		Templates:    []reconcileobservation.TemplateRow{},
+	}
+	if code := writeReconciliationSnapshotJSON(&out, &stderr, obs); code != 0 {
+		t.Fatalf("write JSON code=%d stderr=%q", code, stderr.String())
+	}
+	var result map[string]any
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out.String())
+	}
+	if result["schema_version"] != "1" || result["ok"] != true || result["city"] != "testcity" {
+		t.Fatalf("output lost success discriminator or observation: %v", result)
+	}
+	validateJSONResultSchema(t, []string{"trace", "snapshot"}, out.Bytes())
 }

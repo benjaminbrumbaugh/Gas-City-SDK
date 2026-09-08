@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gascity.dev/schemas/trace/snapshot/result.schema.json",
+  "title": "gc trace snapshot result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "schema_version",
+    "city",
+    "generation",
+    "cycle",
+    "completeness",
+    "totals",
+    "templates",
+    "templates_truncated",
+    "template_count",
+    "trace"
+  ],
+  "properties": {
+    "ok": { "const": true },
+    "schema_version": { "const": "1" },
+    "city": { "type": "string", "minLength": 1 },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instance_id", "pid", "started_at", "is_current"],
+      "properties": {
+        "instance_id": { "type": "string", "minLength": 1 },
+        "pid": { "type": "integer", "minimum": 1 },
+        "started_at": { "type": "string", "format": "date-time" },
+        "is_current": { "type": "boolean" },
+        "host": { "type": "string" },
+        "gc_version": { "type": "string" },
+        "gc_commit": { "type": "string" },
+        "build_date": { "type": "string" },
+        "config_revision": { "type": "string" }
+      }
+    },
+    "cycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tick_id", "trigger", "started_at", "ended_at", "duration_ms", "completion", "reconciled"],
+      "properties": {
+        "tick_id": { "type": "string", "minLength": 1 },
+        "trace_id": { "type": "string" },
+        "trigger": {
+          "type": "string",
+          "enum": ["patrol", "poke", "startup", "reload_followup", "control", "unknown"]
+        },
+        "trigger_detail": { "type": "string" },
+        "started_at": { "type": "string", "format": "date-time" },
+        "ended_at": { "type": "string", "format": "date-time" },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "completion": {
+          "type": "string",
+          "enum": ["completed", "aborted", "panic_recovered", "trace_error"]
+        },
+        "reconciled": { "type": "boolean" }
+      }
+    },
+    "completeness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["store_query_partial", "session_query_partial", "session_snapshot_complete", "continuation_claim_query_partial"],
+      "properties": {
+        "store_query_partial": { "type": "boolean" },
+        "session_query_partial": { "type": "boolean" },
+        "session_snapshot_complete": { "type": "boolean" },
+        "continuation_claim_query_partial": { "type": "boolean" },
+        "scale_check_partial_templates": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "pool_scale_check_partial_templates": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "named_scale_check_partial_templates": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["desired_session_count", "open_session_count", "ready_wait_count", "work_set_count"],
+      "properties": {
+        "desired_session_count": { "type": "integer", "minimum": 0 },
+        "open_session_count": { "type": "integer", "minimum": 0 },
+        "ready_wait_count": { "type": "integer", "minimum": 0 },
+        "work_set_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "templates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["template", "desired_count", "open_count", "pool_desired", "work_requested", "scale_check_count", "evaluation"],
+        "properties": {
+          "template": { "type": "string", "minLength": 1 },
+          "desired_count": { "type": "integer", "minimum": 0 },
+          "open_count": { "type": "integer", "minimum": 0 },
+          "pool_desired": { "type": "integer", "minimum": 0 },
+          "work_requested": { "type": "boolean" },
+          "scale_check_count": { "type": "integer", "minimum": 0 },
+          "evaluation": {
+            "type": "string",
+            "enum": ["eligible", "dependency_blocked", "store_partial", "skipped"]
+          },
+          "reason": { "type": "string" },
+          "demand_partial": { "type": "boolean" }
+        }
+      }
+    },
+    "templates_truncated": { "type": "boolean" },
+    "template_count": { "type": "integer", "minimum": 0 },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "dropped_record_count": { "type": "integer", "minimum": 0 },
+        "dropped_batch_count": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
