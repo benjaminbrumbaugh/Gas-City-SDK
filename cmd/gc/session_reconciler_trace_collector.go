@@ -888,6 +888,19 @@ func (c *SessionReconcilerTraceCycle) RecordTraceControl(action string, scopeTyp
 // are intentionally open-ended: known rollup keys are merged through
 // coalesceTraceField, so caller values keep priority there; additional non-nil
 // caller fields are preserved for site-specific trace context.
+// droppedCounts reports what this cycle lost to the trace's bounded flush
+// budget. The reconciliation observation publishes these so a consumer can tell
+// "the trace has no record of this cycle" from "this cycle did not happen" —
+// the observation itself is unaffected by a dropped flush.
+func (c *SessionReconcilerTraceCycle) droppedCounts() (records, batches int) {
+	if c == nil {
+		return 0, 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.droppedRecords, c.droppedBatches
+}
+
 func (c *SessionReconcilerTraceCycle) End(completion TraceCompletionStatus, fields map[string]any) error {
 	if c == nil || c.tracer == nil || !c.tracer.Enabled() {
 		return nil

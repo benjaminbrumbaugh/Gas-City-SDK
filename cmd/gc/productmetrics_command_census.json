@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "next_id": 220,
+  "next_id": 221,
   "permanent_ids": [
     {
       "name": "help",
@@ -4525,6 +4525,21 @@
       "classification": "trace-show",
       "owner": "immediate",
       "id": 176
+    },
+    {
+      "path": "gc trace snapshot",
+      "aliases": [],
+      "conditional_modes": [],
+      "hidden": false,
+      "effective_hidden": false,
+      "disable_flag_parsing": false,
+      "shape": "runnable",
+      "recording_policy": "recordable",
+      "mode": "standard",
+      "notice_policy": "eligible",
+      "classification": "trace-snapshot",
+      "owner": "immediate",
+      "id": 220
     },
     {
       "path": "gc trace start",

@@ -16,6 +16,7 @@ import (
 	"github.com/gastownhall/gascity/internal/mail"
 	"github.com/gastownhall/gascity/internal/orderdispatch"
 	"github.com/gastownhall/gascity/internal/orders"
+	"github.com/gastownhall/gascity/internal/reconcileobservation"
 	"github.com/gastownhall/gascity/internal/rollout"
 	"github.com/gastownhall/gascity/internal/routingdecision"
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -298,6 +299,30 @@ type WebhookDispatchProvider interface {
 	// WebhookDispatcher returns the order dispatcher, or nil when webhook dispatch
 	// is unavailable for this city.
 	WebhookDispatcher() orderdispatch.Dispatcher
+}
+
+// ReconciliationObservationProvider is optionally implemented by State to
+// expose the controller's latest factual observation of a reconciliation cycle.
+// Modeled on RawConfigProvider/WebhookDispatchProvider rather than added to the
+// base State interface, so the two production State implementers and every test
+// fake are not forced to grow a controller they may not have.
+//
+// The observation is produced by the city runtime in cmd/gc, which is package
+// main and so cannot be imported here; internal/reconcileobservation carries the
+// model across that boundary, exactly as internal/orderdispatch does for the
+// webhook dispatch seam.
+//
+// A State that does not implement this, or that returns nil because no cycle
+// has completed yet, gets a 503 rather than a zero-valued 200. "No observation"
+// and "an observation of nothing" are different answers and the endpoint must
+// not collapse them.
+type ReconciliationObservationProvider interface {
+	// ReconciliationObservation returns the latest published observation, or
+	// nil when the controller has not completed a cycle. Implementations must
+	// not query a store, probe a runtime, spawn a subprocess or read a file:
+	// this is a read of an already-published in-memory value, and the
+	// endpoint's cost guarantee depends on that.
+	ReconciliationObservation() *reconcileobservation.Observation
 }
 
 // RolloutFlagsProvider is optionally implemented by State to expose the

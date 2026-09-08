@@ -30,6 +30,7 @@ import (
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/packman"
 	"github.com/gastownhall/gascity/internal/pathutil"
+	"github.com/gastownhall/gascity/internal/reconcileobservation"
 	"github.com/gastownhall/gascity/internal/runtime"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/supervisor"
@@ -149,6 +150,7 @@ func startControllerSocket(
 	convergenceReqCh chan convergenceRequest,
 	pokeCh chan struct{},
 	controlDispatcherCh chan struct{},
+	observeReconciliation func() *reconcileobservation.Observation,
 ) (net.Listener, error) {
 	if !hostingMode.known() {
 		return nil, fmt.Errorf("starting controller socket: invalid hosting mode %q", hostingMode)
@@ -169,7 +171,7 @@ func startControllerSocket(
 			if err != nil {
 				return // listener closed
 			}
-			go handleControllerConn(conn, cityPath, hostingMode, cancelFn, forceShutdown, dirty, reloadReqCh, convergenceReqCh, pokeCh, controlDispatcherCh)
+			go handleControllerConn(conn, cityPath, hostingMode, cancelFn, forceShutdown, dirty, reloadReqCh, convergenceReqCh, pokeCh, controlDispatcherCh, observeReconciliation)
 		}
 	}()
 	return lis, nil
@@ -191,6 +193,10 @@ func handleControllerConn(
 	convergenceReqCh chan convergenceRequest,
 	pokeCh chan struct{},
 	controlDispatcherCh chan struct{},
+	// observeReconciliation reads the controller's latest published
+	// reconciliation observation. Nil when no runtime is attached, which the
+	// command reports as "no observation" rather than as an empty one.
+	observeReconciliation func() *reconcileobservation.Observation,
 ) {
 	defer conn.Close()                                 //nolint:errcheck // best-effort cleanup
 	conn.SetDeadline(time.Now().Add(95 * time.Second)) //nolint:errcheck // symmetric read+write deadline; 5s margin over 30s enqueue + 60s reply
@@ -258,6 +264,8 @@ func handleControllerConn(
 			}
 		case line == "trace-status":
 			handleTraceStatusSocketCmd(conn, cityPath)
+		case line == "reconciliation-snapshot":
+			handleReconciliationSnapshotSocketCmd(conn, observeReconciliation)
 		}
 	}
 }
@@ -1320,7 +1328,17 @@ func runController(
 
 	sockPath := controllerSocketPath(cityPath)
 	forceShutdown := &atomic.Bool{}
-	lis, err := startControllerSocket(cityPath, controllerHostingStandalone, cancel, forceShutdown, configDirty, reloadReqCh, convergenceReqCh, pokeCh, controlDispatcherCh)
+	// The socket opens before the runtime is built, so the observation reader
+	// is late-bound: until the runtime is installed below, a snapshot request
+	// correctly reports that no observation exists rather than an empty one.
+	var socketRuntime atomic.Pointer[CityRuntime]
+	observeReconciliation := func() *reconcileobservation.Observation {
+		if rt := socketRuntime.Load(); rt != nil {
+			return rt.ReconciliationObservation()
+		}
+		return nil
+	}
+	lis, err := startControllerSocket(cityPath, controllerHostingStandalone, cancel, forceShutdown, configDirty, reloadReqCh, convergenceReqCh, pokeCh, controlDispatcherCh, observeReconciliation)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc start: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
@@ -1379,6 +1397,7 @@ func runController(
 		fmt.Fprintf(stderr, "gc start: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
+	socketRuntime.Store(cr)
 
 	// This process is the city's controller — the lock above says so — so its
 	// opened binding is the residency answer the assigned-work spine reads.
@@ -1398,6 +1417,10 @@ func runController(
 	cs.pokeCh = pokeCh
 	cs.configDirty = configDirty
 	cs.services = cr.svc
+	// The reconciliation observation the tick publishes, exposed through the
+	// optional API capability. A function rather than a snapshot, so a read
+	// always sees the latest published cycle.
+	cs.reconcileObs = cr.ReconciliationObservation
 	cs.emergencyCh = make(chan emergency.Record, 64)
 	cr.setControllerState(cs)
 

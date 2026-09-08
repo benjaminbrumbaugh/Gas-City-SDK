@@ -598,6 +598,16 @@ export type CityUnregisterSucceededPayload = {
     request_id: string;
 };
 
+export type Completeness = {
+    continuation_claim_query_partial: boolean;
+    named_scale_check_partial_templates?: Array<string> | null;
+    pool_scale_check_partial_templates?: Array<string> | null;
+    scale_check_partial_templates?: Array<string> | null;
+    session_query_partial: boolean;
+    session_snapshot_complete: boolean;
+    store_query_partial: boolean;
+};
+
 export type ConditionalWritesDegradedPayload = {
     bd_version?: string;
     mode: string;
@@ -812,6 +822,18 @@ export type ConvoyRemoveInputBody = {
      * Bead IDs to remove.
      */
     items?: Array<string> | null;
+};
+
+export type Cycle = {
+    completion: string;
+    duration_ms: number;
+    ended_at: string;
+    reconciled: boolean;
+    started_at: string;
+    tick_id: string;
+    trace_id?: string;
+    trigger: string;
+    trigger_detail?: string;
 };
 
 export type DecisionPayload = {
@@ -1507,6 +1529,18 @@ export type FormulaVarDefResponse = {
     type: string;
 };
 
+export type Generation = {
+    build_date?: string;
+    config_revision?: string;
+    gc_commit?: string;
+    gc_version?: string;
+    host?: string;
+    instance_id: string;
+    is_current: boolean;
+    pid: number;
+    started_at: string;
+};
+
 export type GitStatus = {
     ahead: number;
     behind: number;
@@ -2167,6 +2201,19 @@ export type OkWithIdResponseBody = {
      * Operation result.
      */
     status: string;
+};
+
+export type Observation = {
+    city: string;
+    completeness: Completeness;
+    cycle: Cycle;
+    generation: Generation;
+    schema_version: number;
+    template_count: number;
+    templates: Array<TemplateRow> | null;
+    templates_truncated: boolean;
+    totals: Totals;
+    trace: TraceState;
 };
 
 export type OptionChoiceDto = {
@@ -5527,6 +5574,31 @@ export type TargetSnapshot = {
     resolved_provider: string;
     rig: string;
     target: string;
+};
+
+export type TemplateRow = {
+    demand_partial?: boolean;
+    desired_count: number;
+    evaluation: string;
+    open_count: number;
+    pool_desired: number;
+    reason?: string;
+    scale_check_count: number;
+    template: string;
+    work_requested: boolean;
+};
+
+export type Totals = {
+    desired_session_count: number;
+    open_session_count: number;
+    ready_wait_count: number;
+    work_set_count: number;
+};
+
+export type TraceState = {
+    dropped_batch_count?: number;
+    dropped_record_count?: number;
+    enabled: boolean;
 };
 
 /**
@@ -16825,6 +16897,48 @@ export type GetV0CityByCityNameReadinessResponses = {
 };
 
 export type GetV0CityByCityNameReadinessResponse = GetV0CityByCityNameReadinessResponses[keyof GetV0CityByCityNameReadinessResponses];
+
+export type GetV0CityByCityNameReconciliationData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/reconciliation';
+};
+
+export type GetV0CityByCityNameReconciliationErrors = {
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type GetV0CityByCityNameReconciliationError = GetV0CityByCityNameReconciliationErrors[keyof GetV0CityByCityNameReconciliationErrors];
+
+export type GetV0CityByCityNameReconciliationResponses = {
+    /**
+     * OK
+     */
+    200: Observation;
+};
+
+export type GetV0CityByCityNameReconciliationResponse = GetV0CityByCityNameReconciliationResponses[keyof GetV0CityByCityNameReconciliationResponses];
 
 export type DeleteV0CityByCityNameRigByNameData = {
     body?: never;

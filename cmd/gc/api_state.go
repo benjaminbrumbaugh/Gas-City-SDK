@@ -36,6 +36,7 @@ import (
 	"github.com/gastownhall/gascity/internal/orderdispatch"
 	"github.com/gastownhall/gascity/internal/orders"
 	"github.com/gastownhall/gascity/internal/pathutil"
+	"github.com/gastownhall/gascity/internal/reconcileobservation"
 	"github.com/gastownhall/gascity/internal/rig"
 	"github.com/gastownhall/gascity/internal/rollout"
 	"github.com/gastownhall/gascity/internal/rollout/gate"
@@ -95,6 +96,11 @@ type controllerState struct {
 	pokeCh                 chan struct{} // nil when poke is not available; triggers immediate reconciler tick
 	configDirty            *atomic.Bool  // optional dirty flag shared with the reconciler reload path
 	services               workspacesvc.Registry
+	// reconcileObs reads the controller's published reconciliation
+	// observation. Assigned once at wiring time when a city runtime exists,
+	// like ct/pokeCh/configDirty above, and nil for an API state built without
+	// one — which is the endpoint's 503, not an empty observation.
+	reconcileObs           func() *reconcileobservation.Observation
 	extmsgSvc              *extmsg.Services
 	adapterReg             *extmsg.AdapterRegistry
 	maintenanceLoop        *supervisor.StoreMaintenanceLoop // nil when [maintenance.dolt] enabled=false
@@ -2961,6 +2967,19 @@ func (cs *controllerState) ServiceRegistry() workspacesvc.Registry {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return cs.services
+}
+
+// ReconciliationObservation implements api.ReconciliationObservationProvider.
+//
+// It reads an already-published immutable value and returns it. It must never
+// grow a store query, a runtime probe or a file read: the endpoint's promise is
+// that its cost does not track the city's workload, and that promise lives
+// here, not in the handler.
+func (cs *controllerState) ReconciliationObservation() *reconcileobservation.Observation {
+	if cs.reconcileObs == nil {
+		return nil
+	}
+	return cs.reconcileObs()
 }
 
 // WebhookDispatcher implements api.WebhookDispatchProvider — the H1/E0.5 dispatch
