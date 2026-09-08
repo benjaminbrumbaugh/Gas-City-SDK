@@ -367,9 +367,14 @@ export const zConvoyAddInputBody = z.object({
 });
 
 export const zConvoyCheckResponse = z.object({
+    acceptance_gated: z.boolean(),
+    acceptance_issues: z.array(z.string()).nullish(),
+    acceptance_state: z.string(),
+    accepted_complete: z.boolean(),
     closed: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
     complete: z.boolean(),
     convoy_id: z.string(),
+    remediation_ids: z.array(z.string()).nullish(),
     total: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' })
 });
 
@@ -380,7 +385,13 @@ export const zConvoyCreateInputBody = z.object({
 });
 
 export const zConvoyProgress = z.object({
+    acceptance_gated: z.boolean(),
+    acceptance_issues: z.array(z.string()).nullish(),
+    acceptance_state: z.string(),
+    accepted_complete: z.boolean(),
     closed: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    complete: z.boolean(),
+    remediation_ids: z.array(z.string()).nullish(),
     total: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' })
 });
 

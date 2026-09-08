@@ -1006,8 +1006,8 @@ func (c *Client) GetConvoy(id string) (CachedRead[ConvoyStatusView], error) {
 }
 
 // CheckConvoy fetches one convoy's completion status via
-// GET /v0/city/{cityName}/convoy/{id}/check. Returns child totals and a
-// Complete flag that is true when total > 0 and all children are closed.
+// GET /v0/city/{cityName}/convoy/{id}/check. Complete retains administrative
+// terminality; AcceptedComplete adds opt-in verdict-aware acceptance.
 func (c *Client) CheckConvoy(id string) (CachedRead[ConvoyCheckView], error) {
 	if err := c.requireCityScope(); err != nil {
 		return CachedRead[ConvoyCheckView]{}, err

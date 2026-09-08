@@ -1060,7 +1060,7 @@ gc convoy
 | Subcommand | Description |
 |------------|-------------|
 | [gc convoy add](#gc-convoy-add) | Add an issue to a convoy |
-| [gc convoy check](#gc-convoy-check) | Auto-close convoys where all issues are closed |
+| [gc convoy check](#gc-convoy-check) | Auto-close administratively and semantically complete convoys |
 | [gc convoy close](#gc-convoy-close) | Close a convoy |
 | [gc convoy control](#gc-convoy-control) | Execute control beads or run the control-dispatcher loop |
 | [gc convoy create](#gc-convoy-create) | Create a convoy and optionally track issues |
@@ -1090,10 +1090,11 @@ gc convoy add <convoy-id> <issue-id> [flags]
 
 ## gc convoy check
 
-Scan open convoys and auto-close any where all child issues are resolved.
+Scan open convoys and auto-close those eligible for accepted completion.
 
-Evaluates each open convoy's children. If all children have status
-"closed", the convoy is automatically closed and an event is recorded.
+Legacy convoys close when all children are terminal. Verdict-aware convoys
+also require every declared review gate to PASS against the anchored candidate
+bytes and all linked remediation work to be resolved.
 
 ```
 gc convoy check [flags]
@@ -1107,8 +1108,10 @@ gc convoy check [flags]
 
 Close a convoy bead manually.
 
-Marks the convoy as closed regardless of child issue status. Use
-"gc convoy check" to auto-close convoys where all issues are resolved.
+Legacy convoys close regardless of child issue status. A convoy with an
+acceptance contract closes only after accepted completion; manual close does
+not bypass BLOCK, missing, malformed, or candidate-mismatched review evidence.
+Use "gc convoy check" to auto-close accepted convoys.
 
 ```
 gc convoy close <id> [flags]
@@ -1204,7 +1207,8 @@ Land an owned convoy, verifying all children are closed.
 
 Landing is the natural lifecycle termination for owned convoys created
 via "gc sling --owned". It verifies all children are closed (or uses
---force), closes the convoy bead, and records a ConvoyClosed event.
+--force), closes the convoy bead, and records a ConvoyClosed event. Force
+cannot bypass an opted-in verdict-aware acceptance contract.
 
 ```
 gc convoy land <convoy-id> [flags]
@@ -1221,7 +1225,7 @@ gc convoy land gc-42 --dry-run
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--dry-run` | bool |  | preview what would happen |
-| `--force` | bool |  | land even with open children |
+| `--force` | bool |  | land legacy convoys even with open children (never bypasses acceptance gates) |
 | `--json` | bool |  | emit JSONL result |
 
 ## gc convoy list
@@ -1229,7 +1233,8 @@ gc convoy land gc-42 --dry-run
 List all open convoys with completion progress.
 
 Shows each convoy's ID, title, and the number of closed vs total
-child issues.
+child issues. Verdict-aware convoys also show whether accepted completion
+passed or remains blocked/stranded.
 
 ```
 gc convoy list [flags]
@@ -1257,7 +1262,8 @@ gc convoy reopen-source <source-bead-id> [flags]
 Show detailed status of a convoy and all its child issues.
 
 Displays the convoy's ID, title, status, completion progress, and a
-table of all child issues with their status and assignee.
+table of all child issues with their status and assignee. Verdict-aware
+convoys include acceptance issues and explicit remediation bead IDs.
 
 ```
 gc convoy status <id> [flags]

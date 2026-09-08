@@ -33,10 +33,27 @@ type ConvoyCreateResult struct {
 
 // ConvoyProgressResult holds the progress of a convoy.
 type ConvoyProgressResult struct {
-	ConvoyID string
-	Total    int
-	Closed   int
-	Complete bool
+	ConvoyID         string
+	Total            int
+	Closed           int
+	DanglingTracks   int
+	Complete         bool // administrative terminality; preserved for legacy clients
+	AcceptanceGated  bool
+	AcceptedComplete bool
+	AcceptanceState  string
+	AcceptanceIssues []string
+	RemediationIDs   []string
+}
+
+// AcceptanceRefusalError distinguishes a healthy, evaluated semantic refusal
+// from store or graph failures encountered while evaluating acceptance.
+type AcceptanceRefusalError struct {
+	Progress ConvoyProgressResult
+}
+
+func (e *AcceptanceRefusalError) Error() string {
+	p := e.Progress
+	return fmt.Sprintf("convoy %s acceptance is %s (remediation_ids=%v; issues=%v)", p.ConvoyID, p.AcceptanceState, p.RemediationIDs, p.AcceptanceIssues)
 }
 
 // ConvoyCreate creates a convoy bead, applies metadata, links child items,
@@ -101,18 +118,25 @@ func ConvoyProgress(_ ConvoyDeps, classes MemberClasses, id string) (ConvoyProgr
 
 	total := len(children)
 	closed := 0
+	dangling := 0
 	for _, c := range children {
 		if IsTerminalStatus(c.Status) {
 			closed++
 		}
+		if IsUnresolvedTrackedItem(c) {
+			dangling++
+		}
 	}
 
-	return ConvoyProgressResult{
-		ConvoyID: id,
-		Total:    total,
-		Closed:   closed,
-		Complete: total > 0 && closed == total,
-	}, nil
+	result := ConvoyProgressResult{
+		ConvoyID:       id,
+		Total:          total,
+		Closed:         closed,
+		Complete:       total > 0 && closed == total,
+		DanglingTracks: dangling,
+	}
+	evaluateAcceptance(b, children, &result)
+	return result, nil
 }
 
 // ConvoyAddItems links beads to an existing convoy.
@@ -138,8 +162,8 @@ func ConvoyAddItems(_ ConvoyDeps, classes MemberClasses, convoyID string, items 
 
 // ConvoyClose closes a convoy bead and emits a ConvoyClosed event.
 func ConvoyClose(deps ConvoyDeps, store beads.Store, id string) error {
-	if _, err := store.Get(id); err != nil {
-		return fmt.Errorf("getting convoy %s: %w", id, err)
+	if _, err := ValidateConvoyClose(store, id); err != nil {
+		return err
 	}
 
 	if err := store.Close(id); err != nil {
@@ -154,4 +178,18 @@ func ConvoyClose(deps ConvoyDeps, store beads.Store, id string) error {
 	}
 
 	return nil
+}
+
+// ValidateConvoyClose preserves legacy close semantics unless the convoy has
+// explicitly opted into verdict-aware acceptance. Opted-in convoys may close
+// only after administrative and accepted completion both hold.
+func ValidateConvoyClose(store beads.Store, id string) (ConvoyProgressResult, error) {
+	progress, err := ConvoyProgress(ConvoyDeps{}, MemberClasses{Convoy: store}, id)
+	if err != nil {
+		return ConvoyProgressResult{}, err
+	}
+	if progress.AcceptanceGated && !progress.AcceptedComplete {
+		return progress, &AcceptanceRefusalError{Progress: progress}
+	}
+	return progress, nil
 }

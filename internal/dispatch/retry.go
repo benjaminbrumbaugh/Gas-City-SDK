@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/coordinatoroutcome"
 	"github.com/gastownhall/gascity/internal/pathutil"
 )
 
@@ -272,57 +272,7 @@ type retryEvalResult struct {
 // typedDeliverableCloseFor reports whether subject carries a complete, strict
 // gc-outcome-close deliverable envelope for itself. Producer names are open-world.
 func typedDeliverableCloseFor(subject beads.Bead) bool {
-	raw := strings.TrimSpace(subject.Metadata[beadmeta.CoordinatorOutcomeProducerDispositionMetadataKey])
-	if raw == "" {
-		return false
-	}
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	var envelope struct {
-		ContractVersion int     `json:"contract_version"`
-		Disposition     string  `json:"disposition"`
-		WorkID          string  `json:"work_id"`
-		RecordedBy      string  `json:"recorded_by"`
-		Reason          string  `json:"reason"`
-		Producer        *string `json:"producer"`
-		PassingVerdict  string  `json:"passing_verdict"`
-	}
-	if err := decoder.Decode(&envelope); err != nil {
-		return false
-	}
-	// Reject trailing data after the envelope: DisallowUnknownFields only guards the
-	// first object, so a valid envelope followed by more JSON or garbage must fail
-	// closed rather than forge a pass.
-	if err := decoder.Decode(new(json.RawMessage)); err != io.EOF {
-		return false
-	}
-	if envelope.Disposition != beadmeta.CoordinatorDispositionDeliverable {
-		return false
-	}
-	if envelope.ContractVersion != beadmeta.CoordinatorOutcomeContractVersion {
-		return false
-	}
-	if envelope.WorkID != subject.ID {
-		return false
-	}
-	if strings.TrimSpace(envelope.RecordedBy) == "" || strings.TrimSpace(envelope.Reason) == "" {
-		return false
-	}
-	if envelope.Producer == nil || strings.TrimSpace(*envelope.Producer) == "" {
-		return false
-	}
-	if envelope.PassingVerdict != "" {
-		switch envelope.PassingVerdict {
-		case beadmeta.CoordinatorPassingVerdictReview, beadmeta.CoordinatorPassingVerdictEvidence:
-		default:
-			return false
-		}
-		if subject.Metadata[beadmeta.ReviewGateMetadataKey] != "consumed" ||
-			subject.Metadata[envelope.PassingVerdict] != beadmeta.OutcomePass {
-			return false
-		}
-	}
-	return true
+	return coordinatoroutcome.IsDeliverablePass(subject)
 }
 
 func classifyRetryAttempt(subject beads.Bead) retryEvalResult {

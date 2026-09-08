@@ -85,8 +85,12 @@ const (
 	// CoordinatorOutcomeProducerDispositionMetadataKey holds the typed-close JSON
 	// envelope written by gc-outcome-close.
 	CoordinatorOutcomeProducerDispositionMetadataKey = "gc.coordinator_outcome.producer_disposition"
-	CurrentRunIDMetadataKey                          = "gc.current_run_id"
-	CwdMetadataKey                                   = "gc.cwd"
+	// ConvoyAcceptanceMetadataKey opts a convoy into verdict-aware acceptance.
+	// Its strict JSON contract anchors one candidate work id/commit and names the
+	// review-gate bead ids whose typed-close envelopes must accept those bytes.
+	ConvoyAcceptanceMetadataKey = "gc.convoy_acceptance.v1"
+	CurrentRunIDMetadataKey     = "gc.current_run_id"
+	CwdMetadataKey              = "gc.cwd"
 	// AttachFencePendingMetadataKey marks a fenced attach's sub-DAG root
 	// between speculative (deferred, non-runnable) creation and the CAS-last
 	// epoch fence committing. Cleared on activation; a root still carrying it
@@ -399,6 +403,7 @@ var KnownMetadataKeys = []string{
 	ControllerRetryFirstSeenMetadataKey,
 	ControllerRetryCountMetadataKey,
 	CoordinatorOutcomeProducerDispositionMetadataKey,
+	ConvoyAcceptanceMetadataKey,
 	CurrentRunIDMetadataKey,
 	CwdMetadataKey,
 	AttachFencePendingMetadataKey,

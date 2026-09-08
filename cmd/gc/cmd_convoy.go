@@ -292,7 +292,8 @@ func newConvoyListCmd(stdout, stderr io.Writer) *cobra.Command {
 		Long: `List all open convoys with completion progress.
 
 Shows each convoy's ID, title, and the number of closed vs total
-child issues.`,
+child issues. Verdict-aware convoys also show whether accepted completion
+passed or remains blocked/stranded.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if cmdConvoyList(jsonOut, stdout, stderr) != 0 {
@@ -411,8 +412,14 @@ func convoySummaryFromAPI(convoy beads.Bead, progress api.ConvoyCheckView) convo
 
 func convoyProgressFromAPI(progress api.ConvoyCheckView) convoyProgressJSON {
 	return convoyProgressJSON{
-		Closed: progress.Closed,
-		Total:  progress.Total,
+		Closed:           progress.Closed,
+		Total:            progress.Total,
+		Complete:         progress.Complete,
+		AcceptanceGated:  progress.AcceptanceGated,
+		AcceptedComplete: progress.AcceptedComplete,
+		AcceptanceState:  progress.AcceptanceState,
+		AcceptanceIssues: append([]string(nil), progress.AcceptanceIssues...),
+		RemediationIDs:   append([]string(nil), progress.RemediationIDs...),
 	}
 }
 
@@ -627,9 +634,15 @@ type convoyWithStore struct {
 }
 
 type convoyProgressJSON struct {
-	Closed         int `json:"closed"`
-	Total          int `json:"total"`
-	DanglingTracks int `json:"dangling_tracks,omitempty"`
+	Closed           int      `json:"closed"`
+	Total            int      `json:"total"`
+	Complete         bool     `json:"complete"`
+	AcceptanceGated  bool     `json:"acceptance_gated"`
+	AcceptedComplete bool     `json:"accepted_complete"`
+	AcceptanceState  string   `json:"acceptance_state"`
+	AcceptanceIssues []string `json:"acceptance_issues,omitempty"`
+	RemediationIDs   []string `json:"remediation_ids,omitempty"`
+	DanglingTracks   int      `json:"dangling_tracks,omitempty"`
 }
 
 type convoyFieldsJSON struct {
@@ -714,7 +727,28 @@ func convoyProgressFromChildren(children []beads.Bead) convoyProgressJSON {
 			progress.DanglingTracks++
 		}
 	}
+	progress.Complete = progress.Total > 0 && progress.Closed == progress.Total
+	progress.AcceptedComplete = progress.Complete
+	if progress.Complete {
+		progress.AcceptanceState = convoycore.AcceptanceStateComplete
+	} else {
+		progress.AcceptanceState = convoycore.AcceptanceStateInProgress
+	}
 	return progress
+}
+
+func convoyProgressFromCore(progress convoycore.ConvoyProgressResult) convoyProgressJSON {
+	return convoyProgressJSON{
+		Closed:           progress.Closed,
+		Total:            progress.Total,
+		Complete:         progress.Complete,
+		AcceptanceGated:  progress.AcceptanceGated,
+		AcceptedComplete: progress.AcceptedComplete,
+		AcceptanceState:  progress.AcceptanceState,
+		AcceptanceIssues: append([]string(nil), progress.AcceptanceIssues...),
+		RemediationIDs:   append([]string(nil), progress.RemediationIDs...),
+		DanglingTracks:   progress.DanglingTracks,
+	}
 }
 
 func formatConvoyProgress(progress convoyProgressJSON) string {
@@ -787,13 +821,16 @@ func doConvoyListAcrossStores(stores []convoyStoreView, jsonOut bool, stdout, st
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tTITLE\tPROGRESS") //nolint:errcheck // best-effort stdout
 	for _, c := range convoys {
-		children, err := listConvoyChildren(c.store, c.bead.ID, true)
+		progress, err := convoycore.ConvoyProgress(convoycore.ConvoyDeps{}, convoycore.MemberClasses{Convoy: c.store}, c.bead.ID)
 		if err != nil {
-			fmt.Fprintf(stderr, "gc convoy list: children of %s: %v\n", c.bead.ID, err) //nolint:errcheck // best-effort stderr
+			fmt.Fprintf(stderr, "gc convoy list: progress of %s: %v\n", c.bead.ID, err) //nolint:errcheck // best-effort stderr
 			return 1
 		}
-		progress := convoyProgressFromChildren(children)
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", c.bead.ID, c.bead.Title, formatConvoyProgress(progress)) //nolint:errcheck // best-effort stdout
+		formatted := formatConvoyProgress(convoyProgressFromCore(progress))
+		if progress.AcceptanceGated {
+			formatted += " [" + progress.AcceptanceState + "]"
+		}
+		fmt.Fprintf(tw, "%s	%s	%s\n", c.bead.ID, c.bead.Title, formatted) //nolint:errcheck // best-effort stdout
 	}
 	tw.Flush() //nolint:errcheck // best-effort stdout
 	return 0
@@ -807,7 +844,13 @@ func writeConvoyListJSON(convoys []convoyWithStore, stdout, stderr io.Writer) in
 			fmt.Fprintf(stderr, "gc convoy list: children of %s: %v\n", c.bead.ID, err) //nolint:errcheck // best-effort stderr
 			return 1
 		}
+		progress, err := convoycore.ConvoyProgress(convoycore.ConvoyDeps{}, convoycore.MemberClasses{Convoy: c.store}, c.bead.ID)
+		if err != nil {
+			fmt.Fprintf(stderr, "gc convoy list: progress of %s: %v\n", c.bead.ID, err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
 		item := convoySummaryFromBead(c.bead, children)
+		item.Progress = convoyProgressFromCore(progress)
 		items = append(items, item)
 	}
 	if err := writeCLIJSONLine(stdout, convoyListResultJSON{
@@ -855,7 +898,8 @@ func newConvoyStatusCmd(stdout, stderr io.Writer) *cobra.Command {
 		Long: `Show detailed status of a convoy and all its child issues.
 
 Displays the convoy's ID, title, status, completion progress, and a
-table of all child issues with their status and assignee.`,
+table of all child issues with their status and assignee. Verdict-aware
+convoys include acceptance issues and explicit remediation bead IDs.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
 			if cmdConvoyStatus(args, jsonOut, stdout, stderr) != 0 {
@@ -1001,7 +1045,12 @@ func doConvoyStatusWithJSON(store beads.Store, args []string, jsonOut bool, stdo
 		return 1
 	}
 
-	progress := convoyProgressFromChildren(children)
+	progressResult, err := convoycore.ConvoyProgress(convoycore.ConvoyDeps{}, convoycore.MemberClasses{Convoy: store}, id)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc convoy status: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	progress := convoyProgressFromCore(progressResult)
 
 	if jsonOut {
 		return writeConvoyStatusJSON(convoy, children, progress, stdout, stderr)
@@ -1012,6 +1061,15 @@ func doConvoyStatusWithJSON(store beads.Store, args []string, jsonOut bool, stdo
 	w(fmt.Sprintf("Title:    %s", convoy.Title))
 	w(fmt.Sprintf("Status:   %s", convoy.Status))
 	w(fmt.Sprintf("Progress: %s", formatConvoyProgress(progress)))
+	if progress.AcceptanceGated {
+		w(fmt.Sprintf("Acceptance: %s (accepted_complete=%t)", progress.AcceptanceState, progress.AcceptedComplete))
+		for _, issue := range progress.AcceptanceIssues {
+			w("  Issue: " + issue)
+		}
+		if len(progress.RemediationIDs) > 0 {
+			w("  Remediation: " + strings.Join(progress.RemediationIDs, ", "))
+		}
+	}
 	fields := getConvoyFields(convoy)
 	if hasLabel(convoy.Labels, "owned") {
 		w("Lifecycle: owned")
@@ -1253,8 +1311,10 @@ func newConvoyCloseCmd(stdout, stderr io.Writer) *cobra.Command {
 		Short: "Close a convoy",
 		Long: `Close a convoy bead manually.
 
-Marks the convoy as closed regardless of child issue status. Use
-"gc convoy check" to auto-close convoys where all issues are resolved.`,
+Legacy convoys close regardless of child issue status. A convoy with an
+acceptance contract closes only after accepted completion; manual close does
+not bypass BLOCK, missing, malformed, or candidate-mismatched review evidence.
+Use "gc convoy check" to auto-close accepted convoys.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
 			code := 0
@@ -1315,8 +1375,7 @@ func doConvoyCloseJSON(store beads.Store, rec events.Recorder, args []string, js
 		fmt.Fprintf(stderr, "gc convoy close: bead %s is not a convoy\n", id) //nolint:errcheck // best-effort stderr
 		return 1
 	}
-
-	if err := closeConvoyWithReason(store, id, convoyManualCloseReason); err != nil {
+	if err := closeConvoyWithReasonValidated(store, id, convoyManualCloseReason); err != nil {
 		fmt.Fprintf(stderr, "gc convoy close: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
@@ -1338,11 +1397,12 @@ func newConvoyCheckCmd(stdout, stderr io.Writer) *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "check",
-		Short: "Auto-close convoys where all issues are closed",
-		Long: `Scan open convoys and auto-close any where all child issues are resolved.
+		Short: "Auto-close administratively and semantically complete convoys",
+		Long: `Scan open convoys and auto-close those eligible for accepted completion.
 
-Evaluates each open convoy's children. If all children have status
-"closed", the convoy is automatically closed and an event is recorded.`,
+Legacy convoys close when all children are terminal. Verdict-aware convoys
+also require every declared review gate to PASS against the anchored candidate
+bytes and all linked remediation work to be resolved.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			code := 0
@@ -1433,6 +1493,16 @@ type explicitReasonCloser interface {
 // rejected as terse). For stores whose Close path does not consult
 // the metadata, the field still serves as a permanent audit trail of
 // why the convoy was closed.
+func closeConvoyWithReasonValidated(store beads.Store, id, reason string) error {
+	if _, err := convoycore.ValidateConvoyClose(store, id); err != nil {
+		return err
+	}
+	return closeConvoyWithReason(store, id, reason)
+}
+
+// closeConvoyWithReason performs the already-authorized close mutation. Callers
+// serving user or automation requests must use closeConvoyWithReasonValidated;
+// keeping this helper mutation-only preserves BdStore's single-command close.
 func closeConvoyWithReason(store beads.Store, id, reason string) error {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -1470,23 +1540,13 @@ func doConvoyCheckAcrossStoresJSON(stores []convoyStoreView, rec events.Recorder
 		if hasLabel(item.bead.Labels, "owned") {
 			continue
 		}
-		children, err := listConvoyChildren(item.store, item.bead.ID, true)
+		progress, err := convoycore.ConvoyProgress(convoycore.ConvoyDeps{}, convoycore.MemberClasses{Convoy: item.store}, item.bead.ID)
 		if err != nil {
-			fmt.Fprintf(stderr, "gc convoy check: children of %s: %v\n", item.bead.ID, err) //nolint:errcheck // best-effort stderr
+			fmt.Fprintf(stderr, "gc convoy check: progress of %s: %v\n", item.bead.ID, err) //nolint:errcheck // best-effort stderr
 			return 1
 		}
-		if len(children) == 0 {
-			continue
-		}
-		allClosed := true
-		for _, ch := range children {
-			if !convoycore.IsTerminalStatus(ch.Status) {
-				allClosed = false
-				break
-			}
-		}
-		if allClosed {
-			if err := closeConvoyWithReason(item.store, item.bead.ID, convoyAutocloseReason); err != nil {
+		if progress.AcceptedComplete {
+			if err := closeConvoyWithReasonValidated(item.store, item.bead.ID, convoyAutocloseReason); err != nil {
 				fmt.Fprintf(stderr, "gc convoy check: closing %s: %v\n", item.bead.ID, err) //nolint:errcheck // best-effort stderr
 				return 1
 			}
@@ -1622,7 +1682,8 @@ func newConvoyLandCmd(stdout, stderr io.Writer) *cobra.Command {
 
 Landing is the natural lifecycle termination for owned convoys created
 via "gc sling --owned". It verifies all children are closed (or uses
---force), closes the convoy bead, and records a ConvoyClosed event.`,
+--force), closes the convoy bead, and records a ConvoyClosed event. Force
+cannot bypass an opted-in verdict-aware acceptance contract.`,
 		Example: `  gc convoy land gc-42
   gc convoy land gc-42 --force
   gc convoy land gc-42 --dry-run`,
@@ -1644,7 +1705,7 @@ via "gc sling --owned". It verifies all children are closed (or uses
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&force, "force", false, "land even with open children")
+	cmd.Flags().BoolVar(&force, "force", false, "land legacy convoys even with open children (never bypasses acceptance gates)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview what would happen")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit JSONL result")
 	return cmd
@@ -1714,9 +1775,24 @@ func doConvoyLandJSON(store beads.Store, rec events.Recorder, args []string, opt
 	}
 
 	// Check children.
+	progress, err := convoycore.ConvoyProgress(convoycore.ConvoyDeps{}, convoycore.MemberClasses{Convoy: store}, convoyID)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc convoy land: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
 	children, err := listConvoyChildren(store, convoyID, true)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc convoy land: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	if progress.AcceptanceGated && !progress.AcceptedComplete {
+		fmt.Fprintf(stderr, "gc convoy land: acceptance gate is %s; --force cannot override semantic acceptance\n", progress.AcceptanceState) //nolint:errcheck
+		for _, issue := range progress.AcceptanceIssues {
+			fmt.Fprintf(stderr, "  %s\n", issue) //nolint:errcheck
+		}
+		if len(progress.RemediationIDs) > 0 {
+			fmt.Fprintf(stderr, "  remediation: %s\n", strings.Join(progress.RemediationIDs, ", ")) //nolint:errcheck
+		}
 		return 1
 	}
 
@@ -1747,7 +1823,7 @@ func doConvoyLandJSON(store beads.Store, rec events.Recorder, args []string, opt
 	}
 
 	// Close the convoy.
-	if err := closeConvoyWithReason(store, convoyID, convoyLandCloseReason); err != nil {
+	if err := closeConvoyWithReasonValidated(store, convoyID, convoyLandCloseReason); err != nil {
 		fmt.Fprintf(stderr, "gc convoy land: closing convoy: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
@@ -1945,17 +2021,12 @@ func autocloseConvoyIfComplete(store beads.Store, rec events.Recorder, convoy be
 		return
 	}
 
-	children, err := listConvoyChildren(store, convoy.ID, true)
-	if err != nil || len(children) == 0 {
+	progress, err := convoycore.ConvoyProgress(convoycore.ConvoyDeps{}, convoycore.MemberClasses{Convoy: store}, convoy.ID)
+	if err != nil || !progress.AcceptedComplete {
 		return
 	}
-	for _, ch := range children {
-		if !convoycore.IsTerminalStatus(ch.Status) {
-			return
-		}
-	}
 
-	if err := closeConvoyWithReason(store, convoy.ID, convoyAutocloseReason); err != nil {
+	if err := closeConvoyWithReasonValidated(store, convoy.ID, convoyAutocloseReason); err != nil {
 		return
 	}
 

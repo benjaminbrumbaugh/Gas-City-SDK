@@ -158,7 +158,7 @@ func TestConvoyCheckFromGen_Valid(t *testing.T) {
 
 func TestConvoyCheckFromGen_Empty(t *testing.T) {
 	got := convoyCheckFromGen(nil)
-	if got != (ConvoyCheckView{}) {
+	if got.ConvoyID != "" || got.Total != 0 || got.Closed != 0 || got.Complete || got.AcceptanceGated || got.AcceptedComplete || got.AcceptanceState != "" || got.AcceptanceIssues != nil || got.RemediationIDs != nil {
 		t.Errorf("got = %+v, want zero-value", got)
 	}
 }

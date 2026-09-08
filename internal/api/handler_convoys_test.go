@@ -2,11 +2,13 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
@@ -304,6 +306,64 @@ func TestConvoyCheckTracksTombstoneItemsAsComplete(t *testing.T) {
 	}
 }
 
+func TestConvoyCheckExposesAdministrativeAndAcceptedCompletion(t *testing.T) {
+	state := newFakeMutatorState(t)
+	h := newTestCityHandler(t, state)
+	store := state.stores["myrig"]
+	const commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	candidate, _ := store.Create(beads.Bead{Title: "candidate", Metadata: map[string]string{beadmeta.WorkCommitMetadataKey: commit}})
+	review, _ := store.Create(beads.Bead{Title: "gate"})
+	remediation, _ := store.Create(beads.Bead{Title: "repair"})
+	contract := fmt.Sprintf(`{"contract_version":1,"candidate_work_id":%q,"candidate_commit":%q,"review_gate_ids":[%q]}`, candidate.ID, commit, review.ID)
+	convoy, _ := store.Create(beads.Bead{Title: "program", Type: "convoy", Metadata: map[string]string{beadmeta.ConvoyAcceptanceMetadataKey: contract}})
+	for _, id := range []string{candidate.ID, review.ID, remediation.ID} {
+		if err := store.DepAdd(convoy.ID, id, "tracks"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	envelope := fmt.Sprintf(`{"contract_version":1,"disposition":"deliverable","work_id":%q,"recorded_by":"gate-agent","reason":"blocked","producer":"gate-agent","passing_verdict":"review_verdict","candidate_work_id":%q,"candidate_commit":%q,"remediation_ids":[%q]}`, review.ID, candidate.ID, commit, remediation.ID)
+	for key, value := range map[string]string{
+		beadmeta.CoordinatorOutcomeProducerDispositionMetadataKey: envelope,
+		beadmeta.ReviewGateMetadataKey:                            "consumed",
+		beadmeta.CoordinatorPassingVerdictReview:                  "block",
+	} {
+		if err := store.SetMetadata(review.ID, key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store.Close(candidate.ID) //nolint:errcheck
+	store.Close(review.ID)    //nolint:errcheck
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", cityURL(state, "/convoy/")+convoy.ID+"/check", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("check: status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	var resp convoyCheckResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Complete || !resp.AcceptanceGated || resp.AcceptedComplete || resp.AcceptanceState != "blocked-remediation" {
+		t.Fatalf("resp = %+v, want administrative incomplete and blocked-remediation acceptance", resp)
+	}
+	if len(resp.RemediationIDs) != 1 || resp.RemediationIDs[0] != remediation.ID {
+		t.Fatalf("remediation_ids = %v, want [%s]", resp.RemediationIDs, remediation.ID)
+	}
+
+	closeRec := httptest.NewRecorder()
+	h.ServeHTTP(closeRec, newPostRequest(cityURL(state, "/convoy/")+convoy.ID+"/close", nil))
+	if closeRec.Code != http.StatusConflict {
+		t.Fatalf("close blocked convoy: status = %d, want 409; body=%s", closeRec.Code, closeRec.Body.String())
+	}
+	gotConvoy, err := store.Get(convoy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotConvoy.Status != "open" {
+		t.Fatalf("convoy status = %q after refused API close, want open", gotConvoy.Status)
+	}
+}
+
 func TestConvoyCheckDanglingTracksAreIncomplete(t *testing.T) {
 	state := newFakeMutatorState(t)
 	h := newTestCityHandler(t, state)
@@ -353,6 +413,36 @@ func TestConvoyCheckComplete(t *testing.T) {
 	json.NewDecoder(rec.Body).Decode(&resp) //nolint:errcheck
 	if resp["complete"] != true {
 		t.Errorf("complete = %v, want true", resp["complete"])
+	}
+}
+
+type failAfterFirstGetStore struct {
+	beads.Store
+	gets int
+}
+
+func (s *failAfterFirstGetStore) Get(id string) (beads.Bead, error) {
+	s.gets++
+	if s.gets > 1 {
+		return beads.Bead{}, fmt.Errorf("injected acceptance read failure")
+	}
+	return s.Store.Get(id)
+}
+
+func TestConvoyCloseMapsAcceptanceStoreFailureToInternalError(t *testing.T) {
+	state := newFakeMutatorState(t)
+	base := state.stores["myrig"]
+	convoy, err := base.Create(beads.Bead{Title: "program", Type: "convoy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.stores["myrig"] = &failAfterFirstGetStore{Store: base}
+	h := newTestCityHandler(t, state)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newPostRequest(cityURL(state, "/convoy/")+convoy.ID+"/close", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("close status = %d, want 500; body = %s", rec.Code, rec.Body.String())
 	}
 }
 

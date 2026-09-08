@@ -759,17 +759,37 @@ export type ConvoyAddInputBody = {
 
 export type ConvoyCheckResponse = {
     /**
-     * Closed child bead count.
+     * True when the convoy opts into verdict-aware acceptance.
+     */
+    acceptance_gated: boolean;
+    /**
+     * Bounded reasons semantic acceptance is withheld.
+     */
+    acceptance_issues?: Array<string> | null;
+    /**
+     * Verdict-aware lifecycle state: in-progress, complete, blocked-remediation, or stranded.
+     */
+    acceptance_state: string;
+    /**
+     * True when administrative completion and every declared acceptance gate pass.
+     */
+    accepted_complete: boolean;
+    /**
+     * Administratively terminal child bead count.
      */
     closed: number;
     /**
-     * True when all child beads are closed and total > 0.
+     * Administrative completion: all child beads are terminal and total is non-zero.
      */
     complete: boolean;
     /**
      * Convoy ID.
      */
     convoy_id: string;
+    /**
+     * Explicit remediation beads referenced by typed review verdicts.
+     */
+    remediation_ids?: Array<string> | null;
     /**
      * Total child bead count.
      */
@@ -808,9 +828,33 @@ export type ConvoyGetResponse = {
 
 export type ConvoyProgress = {
     /**
-     * Closed child bead count.
+     * True when the convoy opts into verdict-aware acceptance.
+     */
+    acceptance_gated: boolean;
+    /**
+     * Bounded reasons semantic acceptance is withheld.
+     */
+    acceptance_issues?: Array<string> | null;
+    /**
+     * Verdict-aware lifecycle state: in-progress, complete, blocked-remediation, or stranded.
+     */
+    acceptance_state: string;
+    /**
+     * True when administrative completion and every declared acceptance gate pass.
+     */
+    accepted_complete: boolean;
+    /**
+     * Administratively terminal child bead count.
      */
     closed: number;
+    /**
+     * Administrative completion: all child beads are terminal and total is non-zero.
+     */
+    complete: boolean;
+    /**
+     * Explicit remediation beads referenced by typed review verdicts.
+     */
+    remediation_ids?: Array<string> | null;
     /**
      * Total child bead count.
      */
