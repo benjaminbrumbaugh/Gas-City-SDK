@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/citylayout"
+	"github.com/gastownhall/gascity/internal/reconcileobservation"
 	"github.com/spf13/cobra"
 )
 
@@ -165,13 +166,7 @@ func cmdTraceSnapshot(jsonOut bool, stdout, stderr io.Writer) int {
 	}
 	obs := reply.Observation
 	if jsonOut {
-		enc := json.NewEncoder(stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(obs); err != nil {
-			fmt.Fprintf(stderr, "gc trace snapshot: %v\n", err) //nolint:errcheck
-			return 1
-		}
-		return 0
+		return writeReconciliationSnapshotJSON(stdout, stderr, obs)
 	}
 	fmt.Fprintf(stdout, "city       %s\n", obs.City)                //nolint:errcheck
 	fmt.Fprintf(stdout, "generation %s", obs.Generation.InstanceID) //nolint:errcheck
@@ -221,6 +216,10 @@ func cmdTraceSnapshot(jsonOut bool, stdout, stderr io.Writer) int {
 			row.ScaleCheckCount, row.Evaluation)
 	}
 	return 0
+}
+
+func writeReconciliationSnapshotJSON(stdout, stderr io.Writer, obs *reconcileobservation.Observation) int {
+	return writeCLIJSONLineOrExit(stdout, stderr, "gc trace snapshot", obs)
 }
 
 func newTraceStartCmd(stdout, stderr io.Writer) *cobra.Command {
