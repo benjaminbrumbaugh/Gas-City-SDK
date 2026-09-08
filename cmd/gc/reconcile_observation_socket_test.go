@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -146,4 +147,33 @@ func TestReconciliationSnapshotSubcommandIsRegistered(t *testing.T) {
 		}
 	}
 	t.Fatal("gc trace has no snapshot subcommand")
+}
+
+func TestReconciliationSnapshotDeclaresAndEmitsJSON(t *testing.T) {
+	var schemaOut, schemaErr bytes.Buffer
+	root := newRootCmd(&schemaOut, &schemaErr)
+	handled, code := handleJSONSchemaRequest(root, []string{"trace", "snapshot", "--json-schema=result"}, &schemaOut)
+	if !handled || code != 0 {
+		t.Fatalf("schema request handled=%v code=%d stderr=%q stdout=%q", handled, code, schemaErr.String(), schemaOut.String())
+	}
+	if schemaErr.Len() != 0 {
+		t.Fatalf("schema request stderr=%q", schemaErr.String())
+	}
+
+	var out, stderr bytes.Buffer
+	obs := &reconcileobservation.Observation{
+		SchemaVersion: reconcileobservation.SchemaVersion,
+		City:          "testcity",
+		Templates:     []reconcileobservation.TemplateRow{},
+	}
+	if code := writeReconciliationSnapshotJSON(&out, &stderr, obs); code != 0 {
+		t.Fatalf("write JSON code=%d stderr=%q", code, stderr.String())
+	}
+	var result map[string]any
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out.String())
+	}
+	if result["ok"] != true || result["city"] != "testcity" {
+		t.Fatalf("output lost success discriminator or observation: %v", result)
+	}
 }
