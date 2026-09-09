@@ -662,6 +662,37 @@ func TestVerifyTargetFenceAcceptsTheConfiguredTarget(t *testing.T) {
 	}
 }
 
+func TestVerifyTargetFenceFailsClosedOnTargetPolicyRotation(t *testing.T) {
+	now := time.Now().UTC()
+	cases := []struct {
+		name   string
+		mutate func(*Target)
+	}{
+		{"delivery mode", func(target *Target) { target.DeliveryMode = DeliveryInterrupt }},
+		{"session mode", func(target *Target) { target.SessionMode = SessionNew }},
+		{"interrupt authorization", func(target *Target) { target.InterruptAllowed = true }},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			service := NewService(beads.NewMemStore())
+			record := queuedTestRecord(t, service, now)
+			base := record.Request.Target
+			rotated := base
+			testCase.mutate(&rotated)
+			if _, err := service.VerifyTargetFence(context.Background(), record.ID, rotated, now.Add(time.Second)); !errors.Is(err, ErrStaleTarget) {
+				t.Fatalf("VerifyTargetFence error = %v, want ErrStaleTarget", err)
+			}
+			stored, err := service.Get(context.Background(), record.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.Outcome() != OutcomeStaleTarget {
+				t.Fatalf("outcome = %q, want stale_target", stored.Outcome())
+			}
+		})
+	}
+}
+
 func TestDispatcherMarksLostReceiptUncertainRatherThanFailed(t *testing.T) {
 	now := time.Now().UTC()
 	store := beads.NewMemStore()

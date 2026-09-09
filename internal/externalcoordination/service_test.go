@@ -45,6 +45,13 @@ func (s *responseRaceStore) ConditionalWriterHandle() (beads.ConditionalWriter, 
 
 type noConditionalResponseStore struct{ beads.Store }
 
+type getErrorStore struct {
+	beads.Store
+	err error
+}
+
+func (s getErrorStore) Get(string) (beads.Bead, error) { return beads.Bead{}, s.err }
+
 type failOnceScrubStore struct {
 	beads.Store
 	writer beads.ConditionalWriter
@@ -167,6 +174,20 @@ func TestEnqueueIsIdempotentAndPreservesCausalEnvelope(t *testing.T) {
 	}
 	if second.Request.WorkRef != "gc-123" || second.Request.CorrelationID != "corr-123" {
 		t.Fatalf("causal envelope lost: %+v", second.Request)
+	}
+}
+
+func TestFindByRequestIDPreservesDurableGetErrors(t *testing.T) {
+	store := beads.NewMemStore()
+	service := NewService(store)
+	record, err := service.Enqueue(context.Background(), testRequestInput(time.Now().UTC()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = NewService(getErrorStore{Store: store, err: context.Canceled}).findByRequestID(context.Background(), record.Request.RequestID)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("findByRequestID error = %v, want context.Canceled", err)
 	}
 }
 

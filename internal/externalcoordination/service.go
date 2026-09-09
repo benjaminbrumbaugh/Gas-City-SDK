@@ -467,8 +467,12 @@ func (s *Service) scrubContent(id string, now time.Time) error {
 }
 
 func (s *Service) findByRequestID(ctx context.Context, requestID string) (RequestRecord, error) {
-	if record, err := s.Get(ctx, requestID); err == nil {
+	record, err := s.Get(ctx, requestID)
+	if err == nil {
 		return record, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return RequestRecord{}, err
 	}
 	items, err := s.store.List(beads.ListQuery{Label: requestLabel, IncludeClosed: true, AllowScan: true})
 	if err != nil {
@@ -668,6 +672,9 @@ func targetFenceMatches(admitted, current Target) bool {
 		admitted.Provider == current.Provider &&
 		admitted.AccountID == current.AccountID &&
 		admitted.ConversationID == current.ConversationID &&
+		admitted.SessionMode == current.SessionMode &&
+		admitted.DeliveryMode == current.DeliveryMode &&
+		admitted.InterruptAllowed == current.InterruptAllowed &&
 		admitted.ConfigRevision == current.ConfigRevision
 }
 
