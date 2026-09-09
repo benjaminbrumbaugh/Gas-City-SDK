@@ -2685,12 +2685,11 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			// consume a store failure the recycler is written to fail safe on.
 			// Both paths land on the same restart marker the block below consumes,
 			// so running last costs nothing.
-			if wedged := detectUsageLimitModalWedge(
+			if resetAt, wedged := detectUsageLimitModalWedge(
 				alive,
 				usageLimitModalWedgeRecorded(infoByID[id], clk.Now()),
 				clk.Now(),
-				lastActivity,
-				lastActivityErr,
+				func() (time.Time, error) { return lastActivity, lastActivityErr },
 				func() (string, error) { return peek(rateLimitPeekLines) },
 				func() (bool, error) { return sessionAttachedForConfigDrift(id, sp, cityPath, store, cfg, name) },
 				func(stage string, err error) {
@@ -2702,7 +2701,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				// respawn. The restart request is decision-state for the block
 				// below, so it stays on the snapshot, mirroring the progress-stall
 				// recycler.
-				tick.applyStore(id, sessFront, usageLimitModalWedgePatch(clk.Now()))
+				tick.applyStore(id, sessFront, usageLimitModalWedgePatch(clk.Now(), resetAt))
 				tick.apply(id, sessionpkg.MetadataPatch{"restart_requested": "true"})
 				rec.Record(events.Event{
 					Type:    events.SessionQuarantined,
