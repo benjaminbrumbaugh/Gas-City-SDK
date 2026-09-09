@@ -207,8 +207,11 @@ func TestDispatcherDeliversRegisteredTransportAndLeavesCompletionOpen(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.State != StateRunning {
-		t.Fatalf("state = %q, want running until external coordination response", stored.State)
+	if stored.State != StateSubmitted {
+		t.Fatalf("state = %q, want submitted until external coordination response", stored.State)
+	}
+	if stored.Outcome() != OutcomeNone {
+		t.Fatalf("outcome = %q, want none: transport acceptance is not execution", stored.Outcome())
 	}
 }
 

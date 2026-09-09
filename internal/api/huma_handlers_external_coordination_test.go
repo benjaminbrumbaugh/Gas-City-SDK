@@ -115,8 +115,8 @@ func TestExternalCoordinationResponseRouteAcceptsCurrentExternalAdapterRegistrat
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.State != externalcoordination.StateCompleted {
-		t.Fatalf("stored request state = %q, want completed", stored.State)
+	if stored.State != externalcoordination.StateOutcomeRecorded {
+		t.Fatalf("stored request state = %q, want outcome_recorded", stored.State)
 	}
 }
 
@@ -149,8 +149,8 @@ func TestExternalCoordinationResponseRouteAcknowledgesExactReplayAndRejectsDiver
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.State != externalcoordination.StateCompleted {
-		t.Fatalf("stored request state after conflict = %q, want completed", stored.State)
+	if stored.State != externalcoordination.StateOutcomeRecorded {
+		t.Fatalf("stored request state after conflict = %q, want outcome_recorded", stored.State)
 	}
 }
 
@@ -172,6 +172,7 @@ func TestExternalCoordinationResponseRouteRejectsReplacedExternalAdapterRegistra
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A stale callback must not advance the request past its claim.
 	if stored.State != externalcoordination.StateRunning {
 		t.Fatalf("stored request state after stale callback = %q, want running", stored.State)
 	}

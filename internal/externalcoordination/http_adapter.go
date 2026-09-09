@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -20,6 +22,7 @@ type HTTPAdapter struct {
 	capabilities  Capability
 	authorization string
 	client        *http.Client
+	configErr     error
 }
 
 // HTTPAdapterOption configures transport behavior without putting credentials
@@ -54,7 +57,55 @@ func NewHTTPAdapter(name, callbackURL string, capabilities Capability, opts ...H
 			opt(adapter)
 		}
 	}
+	adapter.configErr = validateCallbackURL(adapter.callbackURL)
+	// Never follow a redirect. A 3xx would move the request, and its
+	// Authorization header, to an origin the configuration never authorized.
+	// Copy the client so a caller-supplied one is not mutated.
+	client := *adapter.client
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	adapter.client = &client
 	return adapter
+}
+
+// validateCallbackURL enforces the transport's URL fence. The callback URL is
+// configuration, never route data, and unsafe forms are rejected before any
+// request is built.
+func validateCallbackURL(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return fmt.Errorf("%w: callback URL is not configured", ErrDeliveryNotAttempted)
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%w: callback URL is malformed", ErrDeliveryNotAttempted)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("%w: callback URL has no host", ErrDeliveryNotAttempted)
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("%w: callback URL must not carry userinfo", ErrDeliveryNotAttempted)
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("%w: callback URL must not carry a query or fragment", ErrDeliveryNotAttempted)
+	}
+	switch parsed.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if isLoopbackHost(parsed.Hostname()) {
+			return nil
+		}
+		return fmt.Errorf("%w: plain HTTP callback URL is only allowed on loopback", ErrDeliveryNotAttempted)
+	default:
+		return fmt.Errorf("%w: callback URL scheme %q is not allowed", ErrDeliveryNotAttempted, parsed.Scheme)
+	}
+}
+
+// isLoopbackHost reports whether a host is a literal loopback address reserved
+// for local operation.
+func isLoopbackHost(host string) bool {
+	return host == "127.0.0.1" || host == "::1" || host == "localhost"
 }
 
 // Name returns the configured adapter name.
@@ -68,16 +119,19 @@ func (a *HTTPAdapter) Capabilities() Capability { return a.capabilities }
 // bodies are treated as transient failures so transport acceptance cannot be
 // misreported as execution completion.
 func (a *HTTPAdapter) Deliver(ctx context.Context, request Request) (DeliveryReceipt, error) {
-	if a == nil || a.callbackURL == "" {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: "callback URL is not configured"}, ErrUnavailable
+	if a == nil {
+		return DeliveryReceipt{State: StateFailed, Error: "adapter is not configured"}, fmt.Errorf("%w: nil adapter", ErrDeliveryNotAttempted)
+	}
+	if a.configErr != nil {
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: a.configErr.Error()}, a.configErr
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("marshal external coordination request: %w", err)
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("%w: marshal external coordination request: %w", ErrDeliveryNotAttempted, err)
 	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, a.callbackURL, bytes.NewReader(body))
 	if err != nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("create external coordination request: %w", err)
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("%w: create external coordination request: %w", ErrDeliveryNotAttempted, err)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("X-GC-Coordination-Request-ID", request.RequestID)
@@ -87,25 +141,37 @@ func (a *HTTPAdapter) Deliver(ctx context.Context, request Request) (DeliveryRec
 	}
 	response, err := a.client.Do(httpRequest)
 	if err != nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("deliver external coordination request: %w", err)
+		// The request may already have been observed by the coordinator. This
+		// is deliberately not a definitive failure.
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateUncertain}, fmt.Errorf("deliver external coordination request: %w", err)
 	}
 	defer response.Body.Close() //nolint:errcheck
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("read external coordination response: %w", err)
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateUncertain}, fmt.Errorf("read external coordination response: %w", err)
+	}
+	if response.StatusCode >= 300 && response.StatusCode < 400 {
+		// A redirect was returned rather than followed. The coordinator never
+		// processed the request, so this is a definitive non-acceptance.
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: fmt.Sprintf("adapter returned redirect HTTP %d", response.StatusCode)}, nil
+	}
+	if response.StatusCode >= 500 {
+		// A server error is ambiguous: the request may have been observed
+		// before the failure, so it must be reconciled rather than retried.
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateUncertain}, fmt.Errorf("adapter returned HTTP %d", response.StatusCode)
 	}
 	if response.StatusCode >= 400 {
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: fmt.Sprintf("adapter returned HTTP %d", response.StatusCode)}, nil
 	}
 	var receipt DeliveryReceipt
 	if err := json.Unmarshal(responseBody, &receipt); err != nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("decode external coordination receipt: %w", err)
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateUncertain}, fmt.Errorf("decode external coordination receipt: %w", err)
 	}
 	if receipt.RequestID != request.RequestID {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("external coordination receipt request_id %q does not match %q", receipt.RequestID, request.RequestID)
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateUncertain}, fmt.Errorf("external coordination receipt request_id %q does not match %q", receipt.RequestID, request.RequestID)
 	}
 	if receipt.Attempt != request.Attempt || receipt.CorrelationID != request.CorrelationID {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("external coordination receipt causal fence does not match request")
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateUncertain}, fmt.Errorf("external coordination receipt causal fence does not match request")
 	}
 	if receipt.State == StateCompleted {
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: "adapter reported completion at delivery boundary"}, ErrPrematureCompletion
@@ -123,6 +189,11 @@ type Dispatcher struct {
 	Queue   *Service
 	Adapter Adapter
 	Worker  string
+	// Fence, when set, is the currently configured target. It is re-checked
+	// immediately before submission so a request admitted for an older target
+	// fails closed instead of being delivered to a target that was never
+	// authorized for it.
+	Fence *Target
 }
 
 // DeliverNext claims and delivers the oldest queued request available to the
@@ -142,9 +213,16 @@ func (d *Dispatcher) DeliverNext(ctx context.Context, now time.Time) (*RequestRe
 	if len(queued) == 0 {
 		return nil, nil, nil
 	}
+	// Capability mismatch is a definitive pre-submission rejection: nothing was
+	// ever sent, so failing cannot duplicate a delivery.
 	if err := validateCapabilities(d.Adapter.Capabilities(), queued[0].Request); err != nil {
 		_ = d.Queue.Fail(ctx, queued[0].ID, err, now)
 		return nil, nil, err
+	}
+	if d.Fence != nil {
+		if _, err := d.Queue.VerifyTargetFence(ctx, queued[0].ID, *d.Fence, now); err != nil {
+			return nil, nil, err
+		}
 	}
 	record, err := d.Queue.Claim(ctx, queued[0].ID, worker, now)
 	if err != nil {
@@ -152,8 +230,20 @@ func (d *Dispatcher) DeliverNext(ctx context.Context, now time.Time) (*RequestRe
 	}
 	receipt, deliverErr := d.Adapter.Deliver(ctx, record.Request)
 	if deliverErr != nil {
-		_ = d.Queue.Fail(ctx, record.ID, deliverErr, now)
+		// Fail closed toward uncertainty. Only an error that proves nothing was
+		// transmitted may fail definitively; anything else may already have been
+		// observed by the coordinator and must be reconciled before a retry or
+		// fallback, or the recipient sees the same request twice.
+		if errors.Is(deliverErr, ErrDeliveryNotAttempted) {
+			_ = d.Queue.Fail(ctx, record.ID, deliverErr, now)
+		} else {
+			_ = d.Queue.MarkUncertain(ctx, record.ID, deliveryFailureClass(deliverErr), now)
+		}
 		return &record, &receipt, deliverErr
+	}
+	if receipt.State == StateUncertain {
+		_ = d.Queue.MarkUncertain(ctx, record.ID, deliveryFailureClass(nil), now)
+		return &record, &receipt, nil
 	}
 	if receipt.State == StateFailed {
 		if receipt.Error == "" {
@@ -166,6 +256,24 @@ func (d *Dispatcher) DeliverNext(ctx context.Context, now time.Time) (*RequestRe
 		return &record, &receipt, err
 	}
 	return &record, &receipt, nil
+}
+
+// deliveryFailureClass reduces a transport error to a sanitized diagnostic
+// label. The error text itself is not persisted, because it can carry a URL,
+// a redirect location, or a credential echoed by the transport.
+func deliveryFailureClass(err error) string {
+	switch {
+	case err == nil:
+		return "adapter reported an untrustworthy receipt"
+	case errors.Is(err, ErrPrematureCompletion):
+		return "adapter claimed completion at the delivery boundary"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "transport deadline exceeded after send"
+	case errors.Is(err, context.Canceled):
+		return "transport canceled after send"
+	default:
+		return "transport failed after send"
+	}
 }
 
 func validateCapabilities(capabilities Capability, request Request) error {

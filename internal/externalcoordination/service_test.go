@@ -199,8 +199,8 @@ func TestClaimDeliveryAndResponseBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.State != StateRunning {
-		t.Fatalf("after accepted delivery state = %q, want running", stored.State)
+	if stored.State != StateSubmitted {
+		t.Fatalf("after accepted delivery state = %q, want submitted", stored.State)
 	}
 	if err := service.RecordResponse(context.Background(), Response{
 		RequestID:     claimed.Request.RequestID,
@@ -217,8 +217,8 @@ func TestClaimDeliveryAndResponseBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.State != StateCompleted {
-		t.Fatalf("after response state = %q, want completed", stored.State)
+	if stored.State != StateOutcomeRecorded {
+		t.Fatalf("after response state = %q, want outcome_recorded", stored.State)
 	}
 }
 
@@ -338,7 +338,7 @@ func TestRecordResponseRetriesRequiredEphemeralScrubAfterTerminalCommit(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if committed.Metadata[metadataState] != string(StateCompleted) || committed.Metadata[metadataResponseCommitment] == "" {
+	if committed.Metadata[metadataState] != string(StateOutcomeRecorded) || committed.Metadata[metadataResponseCommitment] == "" {
 		t.Fatalf("terminal response was not committed before scrub: %v", committed.Metadata)
 	}
 	if committed.Metadata["external_coordination.response_scrub_pending"] != "true" {
@@ -428,8 +428,8 @@ func TestRecordResponseResolvesConditionalWriterThroughDeclaredStoreWrapper(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.State != StateCompleted {
-		t.Fatalf("state after wrapped response = %q, want completed", stored.State)
+	if stored.State != StateOutcomeRecorded {
+		t.Fatalf("state after wrapped response = %q, want outcome_recorded", stored.State)
 	}
 }
 
@@ -571,8 +571,11 @@ func TestHTTPAdapterRejectsOmittedOrMismatchedReceiptFence(t *testing.T) {
 			responseBody = tt.receipt
 			receipt, err := adapter.Deliver(context.Background(), request)
 			if tt.wantErr {
-				if err == nil || receipt.State != StateFailed {
-					t.Fatalf("Deliver() receipt=%+v err=%v, want failed receipt and error", receipt, err)
+				// A receipt that fails the causal fence is untrustworthy, and
+				// the request was already transmitted, so the delivery is
+				// uncertain and must be reconciled rather than retried.
+				if err == nil || receipt.State != StateUncertain {
+					t.Fatalf("Deliver() receipt=%+v err=%v, want uncertain receipt and error", receipt, err)
 				}
 				return
 			}

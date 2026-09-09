@@ -156,10 +156,29 @@ func (s *Server) dispatchExternalCoordinationRequest(ctx context.Context, record
 	if transport == nil {
 		return
 	}
+	// Re-resolve the configured target and fence the submission with it, so a
+	// request admitted before a configuration change fails closed instead of
+	// being delivered to a target that was never authorized for it.
+	fence := record.Request.Target
+	if cfg := s.state.Config().ExternalCoordination; cfg.Enabled {
+		fence = externalcoordination.Target{
+			LogicalRole:      "external-coordination",
+			TargetID:         cfg.Target,
+			Adapter:          cfg.Adapter,
+			Provider:         cfg.Provider,
+			AccountID:        cfg.AccountID,
+			ConversationID:   cfg.ConversationID,
+			DeliveryMode:     externalcoordination.DeliveryMode(cfg.EffectiveDelivery()),
+			SessionMode:      externalcoordination.SessionMode(cfg.EffectiveSessionPolicy()),
+			InterruptAllowed: cfg.EffectiveInterruptPolicy() == "emergency_only",
+			ConfigRevision:   cfg.ConfigRevision,
+		}
+	}
 	dispatcher := externalcoordination.Dispatcher{
 		Queue:   externalcoordination.NewService(s.state.CityBeadStore()),
 		Adapter: externalcoordination.NewTransportAdapter(transport, s.state.CityName()),
 		Worker:  "city-api-external-coordination-dispatcher",
+		Fence:   &fence,
 	}
 	_, _, _ = dispatcher.DeliverNext(ctx, time.Now())
 }

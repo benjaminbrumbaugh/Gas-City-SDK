@@ -3,6 +3,31 @@
 // The package deliberately knows nothing about Gas Town roles or Hermes. A
 // configured orchestrator can enqueue a durable request for an external
 // coordinator, and an adapter can deliver it to the selected coordinator.
+//
+// # Stable delivery rules
+//
+// These rules are the contract every caller and adapter may rely on:
+//
+//   - RouteIdentity is opaque correlation data. It is never authority, never
+//     target selection, and never a URL. The one configured target is the only
+//     transport target; a route cannot introduce a second one.
+//   - A notification delivers lifecycle information. It never authorizes an
+//     intervention or an execution request, and never inherits one's authority.
+//   - StateSubmitted means the delivery boundary accepted the request. It does
+//     not mean the recipient completed, or even read, any work.
+//   - StateUncertain must be reconciled against the same target and idempotency
+//     key before any retry or fallback. Transport delivery is at-least-once, so
+//     retrying an unreconciled submission can show the recipient the same
+//     request twice.
+//   - ReceivedAt is the persisted server observation time of the first valid
+//     correlated response. An exact replay returns it unchanged; a different
+//     response body for the same request is rejected rather than overwriting
+//     history.
+//   - A stale target fence fails the existing record closed. A record admitted
+//     for one target is never redirected onto a newly configured target,
+//     because that target was never authorized for it.
+//   - Credentials, callback URLs, prompt bodies, and redirect locations never
+//     enter durable records or ordinary logs.
 package externalcoordination
 
 import (
@@ -87,6 +112,63 @@ const (
 	StateExpired DeliveryState = "expired"
 	// StateCancelled records an operator cancellation.
 	StateCancelled DeliveryState = "cancelled" //nolint:misspell // public wire state spelling
+
+	// StateSubmitted records a trustworthy acceptance receipt from the one
+	// configured target. It means the delivery boundary accepted the request,
+	// never that the recipient completed work.
+	StateSubmitted DeliveryState = "submitted"
+	// StateUncertain records a submission that may have been observed but for
+	// which no trustworthy receipt exists. It must be reconciled against the
+	// same target and idempotency key before any retry or fallback.
+	StateUncertain DeliveryState = "uncertain"
+	// StateReconciled records that an uncertain submission was checked against
+	// the same target and key. An unknown reconciliation returns to uncertain.
+	StateReconciled DeliveryState = "reconciled"
+	// StateResponded records a correlated, authorized recipient response that
+	// still requires follow-up.
+	StateResponded DeliveryState = "responded"
+	// StateOutcomeRecorded is the normal terminal success state: a durable,
+	// typed outcome with immutable timestamps.
+	StateOutcomeRecorded DeliveryState = "outcome_recorded"
+)
+
+// Outcome is the typed terminal result recorded for one delivery. It is
+// deliberately separate from DeliveryState so a failure state is not confused
+// with the reason that produced it.
+type Outcome string
+
+const (
+	// OutcomeNone means no terminal outcome has been recorded yet.
+	OutcomeNone Outcome = ""
+	// OutcomeNotificationDelivered records a lifecycle notification accepted by
+	// the configured target. It never asserts recipient execution.
+	OutcomeNotificationDelivered Outcome = "notification_delivered"
+	// OutcomeResponseRecorded records a validated, correlated recipient response.
+	OutcomeResponseRecorded Outcome = "response_recorded"
+	// OutcomeRejected records a definitive non-acceptance.
+	OutcomeRejected Outcome = "rejected"
+	// OutcomeStaleTarget records a fence failure: the configured target changed
+	// after this request was admitted. The record is never redirected onto the
+	// newly configured target.
+	OutcomeStaleTarget Outcome = "stale_target"
+	// OutcomeExpired records an expiry before a definitive result.
+	OutcomeExpired Outcome = "expired"
+	// OutcomeCancelled records an operator cancellation.
+	OutcomeCancelled Outcome = "cancelled" //nolint:misspell // matches the public wire state spelling
+)
+
+// ReconcileResult is the finding of checking an uncertain submission against
+// the same target and idempotency key.
+type ReconcileResult string
+
+const (
+	// ReconcileAccepted means the target confirmed it holds the submission.
+	ReconcileAccepted ReconcileResult = "accepted"
+	// ReconcileRejected means the target definitively never accepted it.
+	ReconcileRejected ReconcileResult = "rejected"
+	// ReconcileUnknown means the check was inconclusive; the request stays
+	// uncertain and remains ineligible for retry or fallback.
+	ReconcileUnknown ReconcileResult = "unknown"
 )
 
 // Capability describes an adapter's supported coordinator operations.
@@ -176,7 +258,45 @@ type RequestRecord struct {
 	revision             int64
 	responseCommitment   string
 	responseScrubPending bool
+
+	// Durable policy data, decoded from the request bead's metadata. These are
+	// unexported so the HTTP wire shape of RequestRecord stays unchanged; read
+	// them through the accessor methods below.
+	outcome          Outcome
+	submittedAt      time.Time
+	uncertainAt      time.Time
+	uncertaintyClass string
+	reconciledAt     time.Time
+	respondedAt      time.Time
+	receivedAt       time.Time
 }
+
+// Outcome returns the typed terminal outcome, or OutcomeNone when the delivery
+// has not reached a terminal state.
+func (r RequestRecord) Outcome() Outcome { return r.outcome }
+
+// SubmittedAt returns the persisted time the configured target returned a
+// trustworthy acceptance receipt.
+func (r RequestRecord) SubmittedAt() time.Time { return r.submittedAt }
+
+// UncertainAt returns the persisted time a submission became uncertain.
+func (r RequestRecord) UncertainAt() time.Time { return r.uncertainAt }
+
+// UncertaintyClass returns the sanitized failure class recorded when a
+// submission became uncertain. It never contains a URL, credential, or
+// response body.
+func (r RequestRecord) UncertaintyClass() string { return r.uncertaintyClass }
+
+// ReconciledAt returns the persisted time an uncertain submission was last
+// reconciled against the same target and idempotency key.
+func (r RequestRecord) ReconciledAt() time.Time { return r.reconciledAt }
+
+// RespondedAt returns the persisted time a correlated response was validated.
+func (r RequestRecord) RespondedAt() time.Time { return r.respondedAt }
+
+// ReceivedAt returns the first valid correlated response observation time.
+// An exact replay returns this stored value unchanged; it never moves.
+func (r RequestRecord) ReceivedAt() time.Time { return r.receivedAt }
 
 // DeliveryReceipt reports adapter acceptance, not external coordinator execution completion.
 type DeliveryReceipt struct {
