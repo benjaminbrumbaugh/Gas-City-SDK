@@ -320,6 +320,12 @@ func (p *Provider) IsAttached(name string) bool {
 	return p.tm.IsSessionAttached(name)
 }
 
+// ObserveAttachment preserves tmux display-message failures for controller
+// paths where treating an unreadable state as detached would be unsafe.
+func (p *Provider) ObserveAttachment(name string) (bool, error) {
+	return p.tm.sessionAttached(name)
+}
+
 // ProcessAlive reports whether the named session has a live agent
 // process matching one of the given names in its process tree.
 // Returns true if processNames is empty (no check possible).

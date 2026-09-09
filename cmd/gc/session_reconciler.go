@@ -34,7 +34,10 @@ import (
 	"github.com/gastownhall/gascity/internal/telemetry"
 )
 
-const maxIdleSleepProbesPerTick = 3
+const (
+	maxIdleSleepProbesPerTick  = 3
+	maxUsageFenceProbesPerTick = 3
+)
 
 type wakeTarget struct {
 	// info is the typed session.Info the wake evaluation + start-candidate stage
@@ -1630,6 +1633,28 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		return rollbackPendingCreate(info, sessFront, clk.Now().UTC(), stderr)
 	}
 	phaseStart = time.Now()
+	usageFenceProbeTargets := selectUsageFenceProbeTargets(orderedIDs, dt)
+	// Durable per-session usage-limit records also fence sibling starts on the
+	// same resolved provider preset. Persisting that preset on the source record
+	// keeps the fence effective if the role is removed from desired state before
+	// the provider's reset deadline.
+	providerUsageFences := make(map[string]time.Time)
+	for i := range orderedRows {
+		info := orderedRows[i].Info
+		until, recorded := usageLimitModalFenceUntil(info, clk.Now())
+		if !recorded {
+			continue
+		}
+		identity := strings.TrimSpace(info.ProviderFenceIdentity)
+		if identity == "" {
+			if tp, ok := desiredState[strings.TrimSpace(info.SessionNameMetadata)]; ok && tp.ResolvedProvider != nil {
+				identity = strings.TrimSpace(tp.ResolvedProvider.Name)
+			}
+		}
+		if identity != "" && until.After(providerUsageFences[identity]) {
+			providerUsageFences[identity] = until
+		}
+	}
 	for i := range orderedRows {
 		if ctx != nil && ctx.Err() != nil {
 			return 0
@@ -2279,6 +2304,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			shadowTick.captureRuntime(id, "observeRuntimeProviderLiveness", name, triFromBool(running), triFromBool(alive))
 		}
 		peek := cachedSessionPeek(cityPath, store, sp, cfg, id, tp.Hints.ProcessNames)
+		lastActivityOf := cachedSessionActivity(sp, name)
 		recordResetStallIfDue(infoByID[id], tp.TemplateName, name, alive, startupTimeout, clk.Now().UTC(), dt, rec, stderr, trace)
 
 		// Zombie capture: session exists but process dead — grab scrollback for forensics.
@@ -2525,7 +2551,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		claimlessThreshold := cfg.Session.ProgressStallTimeoutDuration()
 		claimHolderThreshold := cfg.Session.ClaimHolderStallTimeoutDuration()
 		if gateThreshold := minPositiveDuration(claimlessThreshold, claimHolderThreshold); gateThreshold > 0 && alive && sessionActivityReportable(sp, name) {
-			lastActivity, lastActivityErr := sp.GetLastActivity(name)
+			lastActivity, lastActivityErr := lastActivityOf()
 			if lastActivityErr != nil {
 				fmt.Fprintf(stderr, "session reconciler: reading last activity before progress-stall recycle for %s: %v\n", name, lastActivityErr) //nolint:errcheck
 			}
@@ -2693,6 +2719,146 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			}
 		}
 
+		// Usage-limit modal wedge: an alive session parked on the provider's
+		// usage-limit choice dialog is dead behind a healthy-looking runtime. The
+		// dialog blocks on a keypress no managed session sends and never clears
+		// itself — not even once the limit window closes — so the tmux session,
+		// the provider process and the bead's own heartbeat all keep reporting
+		// green while the agent makes no further progress, ever. Score it
+		// unhealthy, quarantine the slot so a still-limited account is not walked
+		// straight back into the same wall, and request the fresh restart that is
+		// the only repair. `gc runtime drain` cannot help here: a modal-frozen
+		// agent never polls drain-check, so it can never drain-ack. The dialog is
+		// also never answered — its second arm buys more usage, which is not a
+		// spend the reconciler may commit on an operator's behalf.
+		//
+		// This runs in the controller rather than in a monitoring agent by
+		// design. Any agent watching for this modal is itself a provider session
+		// and wedges on the identical dialog, which is exactly how the failure
+		// stayed invisible: the watchdog and the session it watched froze
+		// together, three seconds apart. The controller shares no failure mode
+		// with what it observes, and it inspects each session's own pane, so it
+		// cannot mistake its own output for a wedge either.
+		//
+		// Unlike the progress-stall recycle above this is not opt-in: a pane
+		// parked on this dialog is unambiguous evidence, not a threshold a city
+		// has to tune, and no legitimate agent ever sits on it. It runs after
+		// that recycle because it is the only live-session check that captures a
+		// pane, and both requests land on the same restart marker the block below
+		// consumes, so running last costs nothing.
+		recordedUntil, usageFenceRecorded := usageLimitModalFenceUntil(infoByID[id], clk.Now())
+		usageFenceRestartValidated := false
+		providerName := ""
+		if tp.ResolvedProvider != nil {
+			providerName = strings.TrimSpace(tp.ResolvedProvider.Name)
+		}
+		if usageFenceRecorded && providerName != "" && recordedUntil.After(providerUsageFences[providerName]) {
+			providerUsageFences[providerName] = recordedUntil
+		}
+		if alive && usageFenceRecorded && usageFenceProbeTargets[id] {
+			// A prior kill can fail after the durable fence was written. Retry only
+			// after re-observing the full wedge predicate; an old fence alone is not
+			// evidence that a human did not resolve the modal after the failed stop.
+			probeFailed := false
+			_, stillWedged := detectUsageLimitModalWedge(
+				alive,
+				false,
+				clk.Now(),
+				func() (time.Time, error) { return sp.GetLastActivity(name) },
+				func() (string, error) { return sp.Peek(name, rateLimitPeekLines) },
+				func() (bool, error) { return sessionAttachedForConfigDrift(id, sp, cityPath, store, cfg, name) },
+				func(stage string, err error) {
+					probeFailed = true
+					fmt.Fprintf(stderr, "session reconciler: checking %s before usage-limit restart retry for %s: %v; leaving runtime untouched\n", stage, name, err) //nolint:errcheck
+				},
+			)
+			if stillWedged {
+				if err := usageLimitModalRuntimeMatchesInstance(sp, name, infoByID[id]); err != nil {
+					fmt.Fprintf(stderr, "session reconciler: usage-limit restart retry for %s no longer matches the observed runtime: %v; disarming restart\n", name, err) //nolint:errcheck
+					tick.applyStore(id, sessFront, sessionpkg.MetadataPatch{"restart_requested": ""})
+					continue
+				}
+				usageFenceRestartValidated = true
+				tick.apply(id, sessionpkg.MetadataPatch{"restart_requested": "true"})
+			} else if !probeFailed && infoByID[id].RestartRequested == "true" {
+				// Preserve the provider fence until expiry, but disarm the destructive
+				// restart now that current runtime evidence no longer proves a wedge.
+				tick.applyStore(id, sessFront, sessionpkg.MetadataPatch{"restart_requested": ""})
+			}
+		} else if alive && usageFenceProbeTargets[id] && sessionActivityReportable(sp, name) {
+			observedPane := ""
+			resetAt, wedged := detectUsageLimitModalWedge(
+				alive,
+				false,
+				clk.Now(),
+				lastActivityOf,
+				func() (string, error) {
+					pane, err := peek(rateLimitPeekLines)
+					if err == nil {
+						observedPane = pane
+					}
+					return pane, err
+				},
+				func() (bool, error) { return sessionAttachedForConfigDrift(id, sp, cityPath, store, cfg, name) },
+				func(stage string, err error) {
+					fmt.Fprintf(stderr, "session reconciler: reading %s before usage-limit modal check for %s: %v\n", stage, name, err) //nolint:errcheck
+				},
+			)
+			if wedged && dt.usageFencePaneStable(id, observedPane, clk.Now()) {
+				if err := usageLimitModalRuntimeMatchesInstance(sp, name, infoByID[id]); err != nil {
+					fmt.Fprintf(stderr, "session reconciler: usage-limit observation for %s no longer matches the observed runtime: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
+					continue
+				}
+				// Never kill unless both the provider fence and the fresh-session
+				// handoff are durable. A successful stop followed by a failed
+				// metadata write must not leave a dead session eligible to wake with
+				// its stale conversation identity.
+				wedgePatch := usageLimitModalWedgePatch(clk.Now(), resetAt)
+				wedgePatch["provider_fence_identity"] = providerName
+				pinned := pinnedConfiguredNamedSessionKillProtected(infoByID[id])
+				if !pinned {
+					newSessionKey, hasCapability := freshRestartSessionKeyInfo(tp, infoByID[id])
+					for key, value := range sessionpkg.RestartRequestPatch(newSessionKey, clk.Now()) {
+						wedgePatch[key] = value
+					}
+					if hasCapability && newSessionKey == "" {
+						wedgePatch["session_key"] = ""
+					}
+					// Keep the durable request armed until the ordinary restart block
+					// stops the runtime and consumes it.
+					wedgePatch["restart_requested"] = "true"
+				}
+				next, err := sessFront.UpdateMetadataInfo(infoByID[id], wedgePatch)
+				if err != nil {
+					fmt.Fprintf(stderr, "session reconciler: recording usage-limit fence for %s: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
+				} else {
+					usageFenceRestartValidated = !pinned
+					tick.set(id, next)
+					if until, ok := usageLimitModalFenceUntil(next, clk.Now()); ok && providerName != "" && until.After(providerUsageFences[providerName]) {
+						providerUsageFences[providerName] = until
+					}
+					eventMessage := "parked on the provider usage-limit dialog; scored unhealthy and restarting on a fresh session"
+					if pinned {
+						eventMessage = "parked on the provider usage-limit dialog; scored unhealthy while the pinned session remains running"
+					}
+					rec.Record(events.Event{
+						Type:    events.SessionQuarantined,
+						Actor:   "gc",
+						Subject: tp.DisplayName(),
+						Message: eventMessage,
+					})
+					fmt.Fprintf(stderr, "session reconciler: %s is %s\n", name, eventMessage) //nolint:errcheck
+					if trace != nil {
+						trace.RecordDecision(TraceSiteReconcilerUsageLimitModal, TraceReasonUsageLimitModal, TraceOutcomeUnhealthy, tp.TemplateName, name, traceRecordPayload{
+							"session_bead_id": id,
+						})
+					}
+				}
+			} else if !wedged {
+				dt.clearUsageFencePane(id)
+			}
+		}
+
 		// Restart-requested: agent asked for a fresh session
 		// (gc runtime request-restart / gc handoff). This runs after
 		// drain-ack handling, but before autonomous rate-limit,
@@ -2708,6 +2874,12 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			}
 			beadRequested := infoByID[id].RestartRequested == "true"
 			if tmuxRequested || beadRequested {
+				if runtimeRunning && strings.TrimSpace(infoByID[id].HealthReason) == sessionHealthReasonUsageLimitModal && !usageFenceRestartValidated {
+					// A durable fence can outlive a failed stop. Do not let its
+					// restart marker bypass the bounded fresh-evidence retry path
+					// above; a detached human may have resolved the modal meanwhile.
+					continue
+				}
 				// A pinned configured named session is an operator-declared
 				// critical conversation (for example, the mayor). Do not let
 				// collateral reconciler restart flags (progress-stall, stale
@@ -2730,6 +2902,21 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					}
 					fmt.Fprintf(stderr, "session reconciler: skipping abrupt restart-requested kill for pinned named session %s (bead %s)\n", name, id) //nolint:errcheck
 					continue
+				}
+				if runtimeRunning && strings.TrimSpace(infoByID[id].HealthReason) == sessionHealthReasonUsageLimitModal {
+					attached, err := runtime.ObserveAttachment(sp, name)
+					if err != nil {
+						fmt.Fprintf(stderr, "session reconciler: checking attachment immediately before usage-limit restart for %s: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
+						continue
+					}
+					if attached {
+						continue
+					}
+					if err := usageLimitModalRuntimeMatchesInstance(sp, name, infoByID[id]); err != nil {
+						fmt.Fprintf(stderr, "session reconciler: usage-limit restart for %s no longer matches the observed runtime: %v; disarming restart\n", name, err) //nolint:errcheck
+						tick.applyStore(id, sessFront, sessionpkg.MetadataPatch{"restart_requested": ""})
+						continue
+					}
 				}
 				if runtimeRunning {
 					if err := workerKillSessionTargetWithConfig("", store, sp, cfg, name); err != nil {
@@ -2756,7 +2943,8 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				if hasCapability && newSessionKey == "" {
 					batch["session_key"] = ""
 				}
-				if err := sessionFrontDoor(store).ApplyPatch(id, batch); err != nil {
+				_, err := sessionFrontDoor(store).UpdateMetadataInfo(infoByID[id], batch)
+				if err != nil {
 					fmt.Fprintf(stderr, "session reconciler: recording restart handoff for %s: %v\n", name, err) //nolint:errcheck
 					continue
 				}
@@ -3773,6 +3961,24 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					}
 				}
 			}
+			// A durable usage-limit observation fences every session sharing the
+			// resolved provider identity, independently of the optional external
+			// provider-health gate. Provider identities are account-scoped in city
+			// configuration, so this prevents sibling roles from immediately
+			// respawning into the same exhausted account.
+			if target.tp.ResolvedProvider != nil {
+				phProvider := target.tp.ResolvedProvider.Name
+				if until, fenced := providerUsageFences[phProvider]; fenced && clk.Now().Before(until) {
+					fmt.Fprintf(stderr, "session reconciler: provider %q fenced by usage-limit observation until %s; skipping respawn for %s\n", phProvider, until.UTC().Format(time.RFC3339), name) //nolint:errcheck
+					if trace != nil {
+						trace.RecordDecision(TraceSiteReconcilerProviderHealthGate, TraceReasonUsageLimitModal, TraceOutcomeRespawnSkipped, target.tp.TemplateName, name, traceRecordPayload{
+							"provider": phProvider,
+							"until":    until.UTC().Format(time.RFC3339),
+						})
+					}
+					continue
+				}
+			}
 			// Provider-health gate (ADR-0013 A1 M3a): skip respawn when the
 			// provider is red. Does NOT consume the wake budget (no append to
 			// startCandidates). Episode tracking fires exactly one alert per
@@ -4079,6 +4285,32 @@ func cachedSessionPeek(cityPath string, store beads.Store, sp runtime.Provider, 
 		cachedLines = lines
 		cached = true
 		return content, nil
+	}
+}
+
+// cachedSessionActivity memoizes one provider activity read per session per
+// reconcile tick. Both live-session health checks — the usage-limit modal wedge
+// and the progress-stall recycler — want the same timestamp, and reading it
+// costs a tmux subprocess, so the tick pays for it at most once per session.
+//
+// Only successful reads are cached, mirroring cachedSessionPeek: a transient
+// provider failure must not suppress the later check in the same tick.
+func cachedSessionActivity(sp runtime.Provider, name string) func() (time.Time, error) {
+	var (
+		cached   bool
+		activity time.Time
+	)
+	return func() (time.Time, error) {
+		if cached {
+			return activity, nil
+		}
+		next, err := sp.GetLastActivity(name)
+		if err != nil {
+			return time.Time{}, err
+		}
+		activity = next
+		cached = true
+		return activity, nil
 	}
 }
 
@@ -5353,10 +5585,11 @@ func sessionAttachedForConfigDrift(id string, sp runtime.Provider, cityPath stri
 	} else if attached {
 		return true, nil
 	}
-	if sp.IsAttached(name) {
-		return true, observeErr
+	attached, directErr := runtime.ObserveAttachment(sp, name)
+	if attached {
+		return true, errors.Join(observeErr, directErr)
 	}
-	return false, observeErr
+	return false, errors.Join(observeErr, directErr)
 }
 
 func sessionConfigDriftKey(info sessionpkg.Info, cfg *config.City, tp TemplateParams) string {

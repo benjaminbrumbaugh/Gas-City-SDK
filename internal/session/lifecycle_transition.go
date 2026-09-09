@@ -302,6 +302,9 @@ func ConfirmStartedPatch(now time.Time) MetadataPatch {
 		"pending_create_claim":      "",
 		"pending_create_started_at": "",
 		"sleep_reason":              "",
+		"quarantined_until":         "",
+		"session_health":            "healthy",
+		"session_health_reason":     "",
 	}
 }
 
@@ -385,6 +388,10 @@ func CommitStartedPatch(input CommitStartedPatchInput) MetadataPatch {
 	// already-running runtime leaves the in-flight interval's epoch untouched.
 	if input.StartsAwakeInterval {
 		patch["awake_started_at"] = awakeIntervalStartedAt(input.Now)
+		patch["quarantined_until"] = ""
+		patch["session_health"] = "healthy"
+		patch["session_health_reason"] = ""
+		patch["provider_fence_identity"] = ""
 	}
 	// Priming confirmation pair (both-or-neither). Stamped atomically with
 	// started_config_hash so priming inherits its crash semantics and lifetime.

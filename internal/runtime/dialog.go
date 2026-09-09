@@ -4,17 +4,20 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 var (
-	dialogPollInterval       = 500 * time.Millisecond
-	dialogPollTimeout        = 8 * time.Second
-	startupDialogAcceptDelay = 500 * time.Millisecond
-	bypassDialogConfirmDelay = 200 * time.Millisecond
-	startupDialogPeekLines   = 120
+	providerRateLimitResetPattern = regexp.MustCompile(`(?i)\b(?:resets?|try again)\s+(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})\s+at\s+)?(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)(?:\s*\(([^)\r\n]+)\))?`)
+	dialogPollInterval            = 500 * time.Millisecond
+	dialogPollTimeout             = 8 * time.Second
+	startupDialogAcceptDelay      = 500 * time.Millisecond
+	bypassDialogConfirmDelay      = 200 * time.Millisecond
+	startupDialogPeekLines        = 120
 	// When a startup stream emits only irrelevant snapshots and then goes quiet,
 	// fall back instead of waiting the full dialog timeout.
 	startupDialogStreamIdleGrace = 100 * time.Millisecond
@@ -1445,13 +1448,15 @@ func ContainsModelSwitchModal(content string) bool {
 func ContainsProviderRateLimitScreen(content string) bool {
 	if strings.Contains(content, "Usage limit reached") ||
 		strings.Contains(content, "You've hit your limit") ||
+		strings.Contains(content, "You've hit your usage limit") ||
+		strings.Contains(content, "You've hit your session limit") ||
 		strings.Contains(content, "/rate-limit-options") {
 		return true
 	}
 	if containsClaudeSpendLimitModal(content) {
 		return true
 	}
-	if ContainsUsageLimitChoiceModal(content) {
+	if containsClaudeUsageLimitChoiceModal(content) {
 		return true
 	}
 	return strings.Contains(strings.ToLower(content), "rate limit") &&
@@ -1488,23 +1493,19 @@ func containsClaudeSpendLimitModal(content string) bool {
 }
 
 // usageLimitChoiceModalWindowLines bounds how many consecutive lines the
-// usage-limit choice modal's anchors may span. The modal renders its question,
-// both option rows and its confirm footer inside one bordered box; a small
-// window tolerates the border and a blank line between them while still
-// rejecting the same tokens scattered across unrelated scrollback.
+// usage-limit choice modal's anchors may span. The modal renders its question
+// and both options inside one bordered box on adjacent lines; a small window
+// tolerates a border or blank line between them while still rejecting the same
+// tokens scattered across unrelated scrollback.
 const usageLimitChoiceModalWindowLines = 8
 
-// Anchor text of the usage-limit choice modal. The second option requests more
-// usage from the account owner, which is paid spend — these constants exist to
-// RECOGNIZE the modal, never to answer it.
 const (
-	usageLimitQuestionText    = "What do you want to do?"
 	usageLimitStopOptionText  = "Stop and wait for limit to reset"
 	usageLimitAdminOptionText = "Ask your admin for more usage"
 	dialogConfirmFooterText   = "Enter to confirm"
 )
 
-// ContainsUsageLimitChoiceModal reports whether pane content shows the
+// containsClaudeUsageLimitChoiceModal reports whether pane content shows the
 // account usage-limit modal that asks the operator to choose between waiting
 // for the limit to reset and requesting more usage.
 //
@@ -1522,60 +1523,52 @@ const (
 // "Adjust monthly spend limit") are absent because this is a different modal
 // (gc-gqk).
 //
-// Anchors must co-occur inside one on-screen block, laid out the way the modal
-// renders: the question, the two options on DIFFERENT rows, the confirm footer,
-// and a selection glyph. Consumers peek via CapturePane, which reads scrollback,
-// and a whole-buffer match on these strings would classify any pane that merely
-// PRINTED them — an agent reading gc-gqk itself, for instance — as rate-limited.
-// That direction is not the harmless one: the rate-limit quarantine re-detects
-// the same scrollback every reconcile cycle, so a false positive masks a real
-// crash indefinitely with no self-heal, exactly as the spend-limit matcher's
-// comment records. Co-occurrence alone is not enough for that job, because a
-// single line satisfies it: sweeping every pane for these phrases echoes all of
-// them onto the observing pane's own command line, which is the false positive
-// the witness who found this modal actually hit.
-//
-// Text stays necessary but not sufficient — a pane rendering a bug report about
-// the modal reproduces every anchor — so callers that act on a match corroborate
-// it with an independent signal that the pane is genuinely frozen.
+// Anchors must co-occur inside one on-screen block. Consumers peek via
+// CapturePane, which reads scrollback, and a whole-buffer match on these
+// strings would classify any pane that merely PRINTED them — an agent reading
+// gc-gqk itself, for instance — as rate-limited. That direction is not the
+// harmless one: the rate-limit quarantine re-detects the same scrollback every
+// reconcile cycle, so a false positive masks a real crash indefinitely with no
+// self-heal, exactly as the spend-limit matcher's comment records.
 //
 // Deliberately NOT wired into ContainsRateLimitDialog, whose consumers send
 // keystrokes to dismiss a dialog. Option 2 here ("Ask your admin for more
 // usage") is a paid-spend action and must never be selected by an agent, so
 // this modal is classified for health purposes only and left for a human to
 // answer.
-//
-// Exported because the health decision belongs to the controller, not to a
-// watching agent: any agent watching for this modal is itself a provider session
-// and wedges on the identical dialog.
-func ContainsUsageLimitChoiceModal(content string) bool {
+func containsClaudeUsageLimitChoiceModal(content string) bool {
 	lines := strings.Split(content, "\n")
-	for start := range lines {
-		if usageLimitChoiceModalInWindow(lines[start:min(start+usageLimitChoiceModalWindowLines, len(lines))]) {
-			return true
+	last := len(lines) - 1
+	for last >= 0 && strings.TrimSpace(lines[last]) == "" {
+		last--
+	}
+	if last < 0 || !strings.Contains(lines[last], dialogConfirmFooterText) {
+		return false
+	}
+	start := max(0, last-usageLimitChoiceModalWindowLines+1)
+	for i := last - 1; i >= start; i-- {
+		if strings.Contains(lines[i], dialogConfirmFooterText) {
+			start = i + 1
+			break
 		}
 	}
-	return false
+	return usageLimitChoiceModalInWindow(lines[start : last+1])
 }
 
-// usageLimitChoiceModalInWindow reports whether one window of consecutive lines
-// carries every anchor of the usage-limit choice modal, laid out the way the
-// modal actually renders: a question, then two option ROWS, then the footer.
-//
-// Requiring the two options on DIFFERENT lines is what separates the rendered
-// modal from a single line that merely quotes it. Co-occurrence inside the
-// window is not enough on its own, because one line satisfies it — which is the
-// shape a sweep for this modal produces, echoing every anchor phrase onto the
-// observing pane's own command line. That pane is healthy; quarantining it
-// masks a real crash for as long as the scrollback survives.
+// ContainsUsageLimitChoiceModal reports whether pane content shows Claude's
+// account usage-limit choice modal. It classifies the pane for health policy
+// only; callers must not send input because one option requests paid usage.
+func ContainsUsageLimitChoiceModal(content string) bool {
+	return containsClaudeUsageLimitChoiceModal(content)
+}
+
 func usageLimitChoiceModalInWindow(window []string) bool {
 	var stopRows, adminRows []int
-	question := false
+	header := false
 	footer := false
-	glyph := false
 	for i, line := range window {
-		if strings.Contains(line, usageLimitQuestionText) {
-			question = true
+		if strings.Contains(line, "What do you want to do?") {
+			header = true
 		}
 		if strings.Contains(line, usageLimitStopOptionText) {
 			stopRows = append(stopRows, i)
@@ -1586,16 +1579,13 @@ func usageLimitChoiceModalInWindow(window []string) bool {
 		if strings.Contains(line, dialogConfirmFooterText) {
 			footer = true
 		}
-		if isSelectionGlyphRow(line) {
-			glyph = true
-		}
 	}
-	if !question || !footer || !glyph {
+	if !header || !footer {
 		return false
 	}
 	for _, stop := range stopRows {
 		for _, admin := range adminRows {
-			if stop != admin {
+			if stop != admin && (isSelectionGlyphRow(window[stop]) || isSelectionGlyphRow(window[admin])) {
 				return true
 			}
 		}
@@ -1603,11 +1593,8 @@ func usageLimitChoiceModalInWindow(window []string) bool {
 	return false
 }
 
-// isSelectionGlyphRow reports whether a line is a menu's selected option row: a
-// selection glyph followed by option text. A leading box border is stripped
-// first so a glyph rendered inside a bordered modal still counts.
 func isSelectionGlyphRow(line string) bool {
-	trimmed := strings.TrimRight(strings.ReplaceAll(line, "\u00a0", " "), " \t")
+	trimmed := strings.TrimRight(strings.ReplaceAll(line, " ", " "), " 	")
 	trimmed = stripLeadingBoxBorder(trimmed)
 	for _, glyph := range []string{"❯", "›", ">"} {
 		if rest, ok := strings.CutPrefix(trimmed, glyph+" "); ok && strings.TrimSpace(rest) != "" {
@@ -1615,6 +1602,101 @@ func isSelectionGlyphRow(line string) bool {
 		}
 	}
 	return false
+}
+
+// ProviderRateLimitResetAt extracts a provider-stated reset deadline from a
+// rate-limit screen. A time-only deadline that has already passed rolls to the
+// next day; a dated deadline rolls to the next year. Invalid explicit timezones
+// are rejected rather than guessed.
+func ProviderRateLimitResetAt(content string, now time.Time) (time.Time, bool) {
+	match := providerRateLimitResetPattern.FindStringSubmatch(content)
+	if len(match) != 7 {
+		return time.Time{}, false
+	}
+	loc := now.Location()
+	if zone := strings.TrimSpace(match[6]); zone != "" {
+		var err error
+		loc, err = time.LoadLocation(zone)
+		if err != nil {
+			return time.Time{}, false
+		}
+	}
+	localNow := now.In(loc)
+	hour, err := strconv.Atoi(match[3])
+	if err != nil || hour < 1 || hour > 12 {
+		return time.Time{}, false
+	}
+	minute := 0
+	if match[4] != "" {
+		minute, err = strconv.Atoi(match[4])
+		if err != nil || minute > 59 {
+			return time.Time{}, false
+		}
+	}
+	if strings.EqualFold(match[5], "pm") && hour != 12 {
+		hour += 12
+	}
+	if strings.EqualFold(match[5], "am") && hour == 12 {
+		hour = 0
+	}
+	year, month, day := localNow.Date()
+	hasDate := match[1] != ""
+	if hasDate {
+		var ok bool
+		month, ok = providerRateLimitMonth(match[1])
+		if !ok {
+			return time.Time{}, false
+		}
+		day, err = strconv.Atoi(match[2])
+		if err != nil || day < 1 || day > 31 {
+			return time.Time{}, false
+		}
+	}
+	reset := time.Date(year, month, day, hour, minute, 0, 0, loc)
+	if reset.Month() != month || reset.Day() != day || reset.Hour() != hour || reset.Minute() != minute {
+		return time.Time{}, false
+	}
+	if !reset.After(localNow) {
+		if hasDate {
+			reset = reset.AddDate(1, 0, 0)
+		} else {
+			reset = reset.AddDate(0, 0, 1)
+		}
+	}
+	return reset, true
+}
+
+// ProviderUsageLimitResetAt extracts a reset deadline only when the provider's
+// usage-limit message and deadline occupy the final visible line. The stricter
+// shape is for disruptive health policy: it avoids attributing reset-like text
+// elsewhere in scrollback, or source code displaying this literal, to the
+// provider's current screen.
+func ProviderUsageLimitResetAt(content string, now time.Time) (time.Time, bool) {
+	lines := strings.Split(content, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "You've hit your usage limit") &&
+			!strings.HasPrefix(line, "You've hit your session limit") &&
+			!strings.HasPrefix(line, "Usage limit reached") {
+			return time.Time{}, false
+		}
+		return ProviderRateLimitResetAt(line, now)
+	}
+	return time.Time{}, false
+}
+
+func providerRateLimitMonth(raw string) (time.Month, bool) {
+	months := map[string]time.Month{
+		"jan": time.January, "feb": time.February, "mar": time.March,
+		"apr": time.April, "may": time.May, "jun": time.June,
+		"jul": time.July, "aug": time.August, "sep": time.September,
+		"oct": time.October, "nov": time.November, "dec": time.December,
+	}
+	month, ok := months[strings.ToLower(strings.TrimSpace(raw))]
+	return month, ok
 }
 
 // ProviderTerminalErrorReason classifies high-confidence provider errors that

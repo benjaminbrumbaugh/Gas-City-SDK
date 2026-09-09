@@ -44,6 +44,31 @@ func (f *fakeExecutor) executeCtx(_ context.Context, args []string) (string, err
 	return f.execute(args)
 }
 
+func TestSessionAttachedPreservesObservationError(t *testing.T) {
+	wantErr := errors.New("injected display-message failure")
+	tm := &Tmux{cfg: DefaultConfig(), exec: &fakeExecutor{err: wantErr}}
+
+	attached, err := tm.sessionAttached("worker-1")
+	if attached {
+		t.Fatal("sessionAttached reported attached when observation failed")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("sessionAttached error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestSessionAttachedRecognizesMultipleClients(t *testing.T) {
+	tm := &Tmux{cfg: DefaultConfig(), exec: &fakeExecutor{out: "2"}}
+
+	attached, err := tm.sessionAttached("worker-1")
+	if err != nil {
+		t.Fatalf("sessionAttached: %v", err)
+	}
+	if !attached {
+		t.Fatal("sessionAttached reported detached with two attached clients")
+	}
+}
+
 func TestNewSessionWithCommandAndEnvClearsEmptyVars(t *testing.T) {
 	exec := &fakeExecutor{}
 	tm := NewTmux()

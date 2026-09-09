@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -26,6 +27,9 @@ const (
 	// therefore enough to separate the two, and it keeps the check honest without
 	// depending on which pane the observer happens to be looking at.
 	usageLimitModalFrozenPane = 2 * time.Minute
+	// A usage subscription can legitimately reset several days out, but a
+	// stale dated line must never roll into a year-long automatic fence.
+	maxUsageLimitQuarantineDuration = 8 * 24 * time.Hour
 )
 
 // detectUsageLimitModalWedge reports whether one alive session is permanently
@@ -38,49 +42,52 @@ const (
 // fresh session; answering the dialog is not an option, because its second arm
 // requests more usage from the account owner and that is paid spend.
 //
-// Probes run lazily and in cost order. lastActivity/lastActivityErr are the
-// caller's own activity read — the reconciler's progress-stall gate already pays
-// for it, and an unconditional read of its own would put a tmux subprocess per
-// alive session on every tick, the cost the desired-session fast path forbids.
-// A stale timestamp is what gates the pane capture, and a pane match gates the
-// attachment probe. Every failure fails closed — a session whose state cannot be
-// read is left alone rather than quarantined on a guess — and the two probes this
-// function owns report through onProbeError. An activity read that failed is the
-// caller's to log, so it is declined silently here rather than reported twice.
-// recorded suppresses re-reporting a wedge that is already carrying its
-// quarantine.
+// Probes run lazily and in cost order: the free activity read gates the pane
+// capture, and a pane match gates the attachment probe. Every probe failure is
+// reported through onProbeError and fails closed — a session whose state cannot
+// be read is left alone rather than quarantined on a guess. recorded suppresses
+// re-reporting a wedge that is already carrying its quarantine.
 func detectUsageLimitModalWedge(
 	alive bool,
 	recorded bool,
 	now time.Time,
-	lastActivity time.Time,
-	lastActivityErr error,
+	lastActivity func() (time.Time, error),
 	capturePane func() (string, error),
 	attached func() (bool, error),
 	onProbeError func(stage string, err error),
-) bool {
-	if !alive || recorded || lastActivityErr != nil {
-		return false
+) (time.Time, bool) {
+	if !alive || recorded {
+		return time.Time{}, false
 	}
-	if lastActivity.IsZero() || now.Sub(lastActivity) < usageLimitModalFrozenPane {
-		return false
+	activity, err := lastActivity()
+	if err != nil {
+		onProbeError("last activity", err)
+		return time.Time{}, false
+	}
+	if activity.IsZero() || now.Sub(activity) < usageLimitModalFrozenPane {
+		return time.Time{}, false
 	}
 	pane, err := capturePane()
 	if err != nil {
 		onProbeError("pane capture", err)
-		return false
+		return time.Time{}, false
 	}
 	if !runtime.ContainsUsageLimitChoiceModal(pane) {
-		return false
+		return time.Time{}, false
 	}
+	// The strict modal matcher above establishes that this is the current
+	// interactive frame. Its confirm footer is necessarily the final line, so
+	// the provider's optional reset text appears inside the modal rather than in
+	// the final-line shape required by ProviderUsageLimitResetAt.
+	resetAt, _ := runtime.ProviderRateLimitResetAt(pane, now)
 	isAttached, err := attached()
 	if err != nil {
 		onProbeError("attachment", err)
-		return false
+		return time.Time{}, false
 	}
 	// An attached human can answer the dialog themselves, and choosing between
 	// waiting and buying more usage is theirs to make.
-	return !isAttached
+	return resetAt, !isAttached
 }
 
 // usageLimitModalWedgePatch is the session metadata a detected usage-limit-modal
@@ -96,12 +103,12 @@ func detectUsageLimitModalWedge(
 // Deliberately absent is the drainable flag. It is what distinguishes a terminal
 // provider error — a misconfiguration only an operator can repair — from this
 // wedge, which a fresh session clears (see sessionHasProviderTerminalErrorInfo).
-func usageLimitModalWedgePatch(now time.Time) sessionpkg.MetadataPatch {
-	return sessionpkg.MetadataPatch{
-		sessionHealthStateMetadataKey:  "unhealthy",
-		sessionHealthReasonMetadataKey: sessionHealthReasonUsageLimitModal,
-		"quarantined_until":            now.UTC().Add(defaultRateLimitQuarantineDuration).Format(time.RFC3339),
+func usageLimitModalWedgePatch(now, resetAt time.Time) sessionpkg.MetadataPatch {
+	until := now.Add(defaultRateLimitQuarantineDuration)
+	if resetAt.After(now) && resetAt.Sub(now) <= maxUsageLimitQuarantineDuration {
+		until = resetAt
 	}
+	return sessionpkg.ProviderFencePatch(until, sessionHealthReasonUsageLimitModal)
 }
 
 // usageLimitModalWedgeRecorded reports whether a session already carries an
@@ -110,12 +117,39 @@ func usageLimitModalWedgePatch(now time.Time) sessionpkg.MetadataPatch {
 // named session declines the abrupt kill — so the condition stays visible
 // without re-announcing itself every reconciler tick.
 func usageLimitModalWedgeRecorded(info sessionpkg.Info, now time.Time) bool {
+	_, recorded := usageLimitModalFenceUntil(info, now)
+	return recorded
+}
+
+func usageLimitModalFenceUntil(info sessionpkg.Info, now time.Time) (time.Time, bool) {
 	if strings.TrimSpace(info.HealthReason) != sessionHealthReasonUsageLimitModal {
-		return false
+		return time.Time{}, false
 	}
 	until, err := time.Parse(time.RFC3339, strings.TrimSpace(info.QuarantinedUntil))
 	if err != nil {
-		return false
+		return time.Time{}, false
 	}
-	return now.Before(until)
+	if until.Sub(now) > maxUsageLimitQuarantineDuration {
+		return time.Time{}, false
+	}
+	return until, now.Before(until)
+}
+
+// usageLimitModalRuntimeMatchesInstance binds destructive provider-fence work
+// to the runtime incarnation whose pane was observed. Missing or unreadable
+// tokens fail closed: a stale controller observation must never stop a healthy
+// replacement that now occupies the same session name.
+func usageLimitModalRuntimeMatchesInstance(sp runtime.Provider, name string, info sessionpkg.Info) error {
+	expected := strings.TrimSpace(info.InstanceToken)
+	if expected == "" {
+		return fmt.Errorf("session bead has no instance token")
+	}
+	actual, err := sp.GetMeta(name, "GC_INSTANCE_TOKEN")
+	if err != nil {
+		return fmt.Errorf("read live instance token: %w", err)
+	}
+	if strings.TrimSpace(actual) != expected {
+		return fmt.Errorf("%w: expected %q, got %q", errTokenMismatch, expected, strings.TrimSpace(actual))
+	}
+	return nil
 }

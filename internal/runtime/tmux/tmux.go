@@ -1586,8 +1586,22 @@ func releaseNudgeLock(session string) {
 
 // IsSessionAttached returns true if the session has any clients attached.
 func (t *Tmux) IsSessionAttached(target string) bool {
+	attached, err := t.sessionAttached(target)
+	return err == nil && attached
+}
+
+// sessionAttached preserves the observation error for controller decisions
+// where treating an unreadable attachment state as detached would be unsafe.
+func (t *Tmux) sessionAttached(target string) (bool, error) {
 	attached, err := t.run("display-message", "-t", target, "-p", "#{session_attached}")
-	return err == nil && attached == "1"
+	if err != nil {
+		return false, err
+	}
+	clients, err := strconv.Atoi(strings.TrimSpace(attached))
+	if err != nil {
+		return false, fmt.Errorf("parse session attachment count %q: %w", attached, err)
+	}
+	return clients > 0, nil
 }
 
 // WakePane triggers a SIGWINCH in a pane by resizing it slightly then restoring.

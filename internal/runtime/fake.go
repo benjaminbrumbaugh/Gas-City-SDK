@@ -337,6 +337,27 @@ func (f *Fake) IsAttached(name string) bool {
 	return f.Attached[name]
 }
 
+// ObserveAttachment is the error-preserving attachment capability used by
+// destructive controller paths.
+func (f *Fake) ObserveAttachment(name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, Call{Method: "ObserveAttachment", Name: name})
+	if f.broken {
+		return false, fmt.Errorf("session unavailable")
+	}
+	if seq := f.AttachedSequence[name]; len(seq) > 0 {
+		next := seq[0]
+		if len(seq) == 1 {
+			delete(f.AttachedSequence, name)
+		} else {
+			f.AttachedSequence[name] = seq[1:]
+		}
+		return next, nil
+	}
+	return f.Attached[name], nil
+}
+
 // Attach records the call but returns immediately (no terminal to attach).
 // When broken, always returns an error.
 func (f *Fake) Attach(name string) error {

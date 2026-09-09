@@ -208,3 +208,14 @@ func RateLimitQuarantinePatch(until time.Time) MetadataPatch {
 		"pending_create_started_at": "",
 	}
 }
+
+// ProviderFencePatch records that an alive runtime is blocked on a provider
+// usage fence. It reuses the normal rate-limit lifecycle transition so wake is
+// suppressed until the provider's reset deadline, while preserving an explicit
+// health reason for operators and diagnostics.
+func ProviderFencePatch(until time.Time, reason string) MetadataPatch {
+	patch := RateLimitQuarantinePatch(until)
+	patch["session_health"] = "unhealthy"
+	patch["session_health_reason"] = reason
+	return patch
+}
