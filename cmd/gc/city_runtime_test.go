@@ -6722,6 +6722,7 @@ func writeCityRuntimeSoftReloadConfig(t *testing.T, tomlPath, shutdownTimeout st
 	requireNoLeakedDoltAfterForPaths(t, filepath.Dir(tomlPath))
 	skippedOrders := []string{
 		"beads-health",
+		"create-failure-detect",
 		"cross-rig-deps",
 		"gate-sweep",
 		"jsonl-export",

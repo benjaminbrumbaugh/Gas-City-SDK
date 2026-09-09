@@ -331,3 +331,34 @@ func TestRenudgeStaleHumanGatesScriptContract(t *testing.T) {
 		t.Error("renudge-stale-human-gates.sh must exit non-zero when a re-nudge failed, or the loud-fail message is never logged (#4543)")
 	}
 }
+
+// TestCreateFailureDetectOrder pins the spawn-outage detector's contract: a
+// cooldown-triggered exec order running the create-failure-detect script.
+// It is the companion to spawn-storm-detect — that one counts work beads
+// bouncing back to the pool, this one counts agents that never start.
+func TestCreateFailureDetectOrder(t *testing.T) {
+	assertCooldownExecOrder(t, "create-failure-detect.toml", "create-failure-detect.sh")
+}
+
+// TestCreateFailureDetectBoundsItsQuery guards the detector's cost and its
+// portability. Two properties must hold:
+//
+//  1. The session-bead list is bounded with --closed-after. Closed session
+//     beads are retained for the reaper's 720h purge age, so an unbounded
+//     list would pull the full retained history every 5 minutes.
+//  2. The window cutoff is computed portably. GNU-only `date -d` returns
+//     empty on BSD/macOS, and the script exits on an empty cutoff — which
+//     would disable the detector entirely on a macOS city.
+func TestCreateFailureDetectBoundsItsQuery(t *testing.T) {
+	data, err := fs.ReadFile(PackFS, "assets/scripts/create-failure-detect.sh")
+	if err != nil {
+		t.Fatalf("reading create-failure-detect.sh: %v", err)
+	}
+	body := string(data)
+	if !strings.Contains(body, "--closed-after") {
+		t.Error("create-failure-detect.sh must bound its session-bead list with --closed-after; an unbounded list scans the full 720h retention every run")
+	}
+	if !strings.Contains(body, "date -u -v-") {
+		t.Error("create-failure-detect.sh must compute the window cutoff portably via the BSD `date -u -v-` fallback; GNU-only `date -d` disables the detector on macOS")
+	}
+}

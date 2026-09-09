@@ -29,6 +29,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   publish time: the registry byte-compares it with `[pack].name`, so it can
   only restate the name `pack.toml` already declares.
 
+### Added
+
+- **`order:create-failure-detect` alerts on fleet-wide session-create
+  failures.** A session start that never reaches `creation_complete` is
+  rolled back and closed with `close_reason="session create failed: ..."`,
+  and that close reason is the only trace it leaves: the agent never runs,
+  no work bead moves, and `gc doctor` stays green because the pools are
+  configured correctly — they just cannot spawn. On 2026-08-05 that regime
+  ran ~19 hours at a ~100% failure rate (1,550 of 1,590 session closures)
+  with nothing reporting it. The new core-pack exec order scores the
+  create-failed share of session closures over a rolling window and
+  escalates when it crosses a threshold, naming the templates carrying the
+  failures. Tunable via `GC_CREATE_FAILURE_WINDOW_MINUTES` (60),
+  `GC_CREATE_FAILURE_THRESHOLD` (50%), `GC_CREATE_FAILURE_MIN_CLOSURES`
+  (20, an absolute floor so small-N percentages don't page) and
+  `GC_CREATE_FAILURE_ALERT_COOLDOWN` (3600s, so a long outage doesn't
+  mail on every 5-minute run). It complements `spawn-storm-detect`: that
+  one sees work bouncing back to the pool, this one sees agents that never
+  start. (gc-cqgz)
+
 ### Fixed
 
 - **Mail archive and delete now expand whitespace-joined message IDs.** Each

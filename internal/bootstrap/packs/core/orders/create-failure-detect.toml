@@ -1,0 +1,15 @@
+# Detect fleet-wide session-create failures (spawn outage indicator).
+#
+# Scores the share of recent session closures that are rolled-back creates
+# (close_reason "session create failed: ...") over a rolling window and
+# escalates when it crosses a threshold. A spawn outage is otherwise
+# invisible: the agent never starts, no work bead moves, and gc doctor
+# stays green because the pools are configured correctly.
+#
+# Complements spawn-storm-detect, which counts per-bead recovery loops —
+# that one sees work bouncing, this one sees agents never starting.
+[order]
+description = "Detect fleet-wide session-create failures over a rolling window"
+trigger = "cooldown"
+interval = "5m"
+exec = "$PACK_DIR/assets/scripts/create-failure-detect.sh"

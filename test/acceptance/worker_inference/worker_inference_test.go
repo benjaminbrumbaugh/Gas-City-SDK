@@ -58,6 +58,7 @@ const (
 
 var inferenceDisabledOrders = []string{
 	"beads-health",
+	"create-failure-detect",
 	"cross-rig-deps",
 	"dolt-health",
 	"dolt-remotes-patrol",
