@@ -24,46 +24,24 @@ if ! command -v lsof >/dev/null 2>&1; then
     exit 2
 fi
 
-timeout_bin=""
-if command -v gtimeout >/dev/null 2>&1; then
-    timeout_bin="gtimeout"
-elif command -v timeout >/dev/null 2>&1; then
-    timeout_bin="timeout"
-fi
-
-run_bounded() {
-    limit="$1"
-    shift
-    if [ -n "$timeout_bin" ]; then
-        "$timeout_bin" --kill-after=2 "$limit" "$@"
-        return $?
-    fi
-    if command -v python3 >/dev/null 2>&1; then
-        python3 - "$limit" "$@" <<'PY'
-import subprocess
-import sys
-
-limit = float(sys.argv[1])
-cmd = sys.argv[2:]
-try:
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=limit)
-except subprocess.TimeoutExpired as exc:
-    sys.stdout.write(exc.stdout or "")
-    sys.stderr.write(exc.stderr or "")
-    sys.exit(124)
-sys.stdout.write(proc.stdout)
-sys.stderr.write(proc.stderr)
-sys.exit(proc.returncode)
-PY
-        return $?
-    fi
-    echo "timeout/gtimeout/python3 not found; cannot run bounded command" >&2
-    return 124
-}
+# Bounded execution, shared with assets/scripts/runtime.sh so this check
+# and the dolt CLI commands agree on what 124 means. This check runs
+# before a server exists, so it cannot take runtime.sh (which resolves a
+# port and exits 78 when there is none) — it sources the bounded helper
+# directly. Resolved via ${0%/*} rather than `dirname` because the doctor
+# sandbox may not put coreutils on PATH.
+. "${GC_PACK_DIR:-${0%/*}/../..}/assets/scripts/bounded.sh"
 
 version_output=$(run_bounded 10 dolt version 2>/dev/null)
 version_status=$?
 if [ "$version_status" -ne 0 ]; then
+    if [ "$version_status" -eq "$RUN_BOUNDED_UNAVAILABLE_RC" ]; then
+        # The probe never ran. Reporting a timeout here would send the
+        # operator to debug a healthy Dolt (sdk-4is).
+        echo "dolt version diagnostic unavailable: could not bound the command"
+        echo "install coreutils or python3, then re-run gc doctor"
+        exit 1
+    fi
     if [ "$version_status" -eq 124 ]; then
         echo "dolt version timed out after 10s"
         echo "retry after fixing local Dolt startup or PATH"

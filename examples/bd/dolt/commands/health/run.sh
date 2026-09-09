@@ -81,6 +81,18 @@ server_running=false
 server_pid=0
 server_latency=0
 server_reachable=false
+# How the reachability verdict was reached. `reachable` alone cannot say
+# whether the SQL ping was refused, hung past its bound, or never ran at
+# all — and those call for different responses, so the report states it:
+#   not_run     — no probe was attempted (nothing listening on the port)
+#   ok          — the server answered SELECT 1
+#   timeout     — the probe ran and exceeded its bound (server wedged)
+#   failed      — the server refused or errored the probe
+#   unavailable — the probe could NOT be run, so reachability is UNKNOWN.
+#                 This is not a health verdict: never escalate on it, and
+#                 never read the accompanying reachable=false as a downed
+#                 server (sdk-4is).
+server_probe="not_run"
 
 # Portable millisecond timestamp. BSD date(1) on macOS treats %N as a
 # literal 'N' (exits 0, output like "1776740122N"), so the GNU-only
@@ -160,11 +172,24 @@ if [ "$should_probe_sql" = true ]; then
   export DOLT_CLI_PASSWORD="${GC_DOLT_PASSWORD:-}"
   # Bound the ping. A TCP-reachable but unresponsive server (stuck
   # goroutine, saturated pool, migration lock) would otherwise hang.
-  if run_bounded 5 dolt $conn_args sql -q "SELECT 1" >/dev/null 2>&1; then
+  probe_rc=0
+  run_bounded 5 dolt $conn_args sql -q "SELECT 1" >/dev/null 2>&1 || probe_rc=$?
+  if [ "$probe_rc" -eq 0 ]; then
     server_reachable=true
+    server_probe="ok"
     end_ms=$(now_ms)
     server_latency=$((end_ms - start_ms))
     [ "$server_latency" -lt 0 ] && server_latency=0
+  elif [ "$probe_rc" -eq "$RUN_BOUNDED_UNAVAILABLE_RC" ]; then
+    # The probe never ran, so we learned nothing about the server. Say so
+    # loudly on stderr: silence here is what let a missing timeout binary
+    # masquerade as a downed data plane.
+    server_probe="unavailable"
+    echo "dolt health: diagnostic unavailable — the SQL probe could not be bounded and was NOT run; server reachability is UNKNOWN, not false" >&2
+  elif [ "$probe_rc" -eq 124 ]; then
+    server_probe="timeout"
+  else
+    server_probe="failed"
   fi
 fi
 
@@ -546,6 +571,11 @@ if [ "$json_output" = true ]; then
   # `server.reachable`, not `server.running`, because a process can
   # hold the port while its goroutines are wedged.
   #
+  # `server.probe` qualifies that verdict: `ok`/`timeout`/`failed` are
+  # real findings, but `unavailable` means the probe never ran, so
+  # `reachable` is unknown rather than false and MUST NOT be escalated
+  # on (sdk-4is).
+  #
   # `server.external` distinguishes a configured remote endpoint from a local
   # managed server. For an external endpoint GC owns no local process, so
   # `server.running` / `server.pid` are local-process defaults (false / 0) and
@@ -557,6 +587,7 @@ if [ "$json_output" = true ]; then
   "server": {
     "running": $server_running,
     "reachable": $server_reachable,
+    "probe": "$server_probe",
     "external": $is_external,
     "pid": $server_pid,
     "port": $GC_DOLT_PORT,
@@ -631,6 +662,9 @@ elif [ "$is_external" = true ]; then
   echo "Server: external endpoint unreachable ($host:$GC_DOLT_PORT)"
 else
   echo "Server: not running"
+fi
+if [ "$server_probe" = "unavailable" ]; then
+  echo "  SQL probe: diagnostic unavailable — the probe was NOT run; reachability is unknown, not false"
 fi
 
 if [ -n "$db_info" ]; then

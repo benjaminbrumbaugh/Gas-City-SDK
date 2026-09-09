@@ -51,6 +51,7 @@ git-binary
 jq-binary
 pgrep-binary
 lsof-binary
+bounded-exec
 beads-role
 controller
 supervisor-http-api

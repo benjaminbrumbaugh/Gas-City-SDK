@@ -1523,6 +1523,40 @@ func TestRenderPromptCityRootPromptsShared(t *testing.T) {
 	}
 }
 
+// TestRenderPromptCityRootFragmentOverridesImportedPack pins the precedence a
+// city depends on to patch a fragment it does not own: on a name collision
+// between an imported pack's fragment and the city root's, the city root wins.
+//
+// This is load-bearing for gc-z8b / sdk-4is. The gastown pack's
+// operational-awareness fragment prescribed a bare `timeout N` for the Dolt
+// pre-restart evidence bundle. macOS ships no timeout(1), so those steps died
+// with "command not found" and produced a bundle indistinguishable from a
+// wedged data plane — three separate patrols escalated a healthy Dolt as
+// CRITICAL. The pack lives in a separate, version-pinned repository, so the
+// city's only immediate remedy is to ship its own definition of the same
+// fragment. If this precedence ever inverts, that fix silently stops applying
+// and the false-outage hazard returns with no other signal.
+func TestRenderPromptCityRootFragmentOverridesImportedPack(t *testing.T) {
+	f := fsys.NewFake()
+	packDir := "/city/.gc/cache/repos/abc123/gastown"
+	f.Files[packDir+"/template-fragments/operational-awareness.template.md"] = []byte(
+		`{{ define "operational-awareness" }}timeout 60 gc dolt health --json{{ end }}`)
+	f.Files["/city/template-fragments/operational-awareness.template.md"] = []byte(
+		`{{ define "operational-awareness" }}bound 60 gc dolt health --json{{ end }}`)
+	f.Files["/city/agents/deacon/prompt.template.md"] = []byte(
+		`{{ template "operational-awareness" . }}`)
+
+	got := renderPrompt(f, "/city", "", "agents/deacon/prompt.template.md",
+		PromptContext{AgentName: "deacon"}, "", io.Discard, []string{packDir}, nil, nil)
+
+	if got != "bound 60 gc dolt health --json" {
+		t.Errorf("renderPrompt(city-root overrides imported pack) = %q, want the city-root definition to win", got)
+	}
+	if strings.Contains(got, "timeout 60") {
+		t.Errorf("rendered prompt still carries the pack's bare `timeout N`: %q", got)
+	}
+}
+
 // TestRenderPromptCityRootFragmentsPerAgentWins ensures the new city-root
 // fragment load does not displace per-agent fragments (which must still win
 // on name collision).

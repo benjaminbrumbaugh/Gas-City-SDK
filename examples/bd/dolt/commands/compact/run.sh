@@ -479,6 +479,8 @@ metadata_files() {
       rig_status=$?
       if [ "$rig_status" -eq 124 ]; then
         printf 'compact: gc rig list timed out after %ss; falling back to local filesystem metadata scan\n' "$rig_list_timeout" >&2
+      elif [ "$rig_status" -eq "$RUN_BOUNDED_UNAVAILABLE_RC" ]; then
+        printf 'compact: gc rig list diagnostic unavailable (bound %s could not be applied; command NOT run); falling back to local filesystem metadata scan\n' "$rig_list_timeout" >&2
       else
         printf 'compact: gc rig list failed rc=%s; falling back to local filesystem metadata scan\n' "$rig_status" >&2
       fi
