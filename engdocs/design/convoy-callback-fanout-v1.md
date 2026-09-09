@@ -68,8 +68,10 @@ something admission invents.
 ## Target fence
 
 `TargetFence` pins the sole configured External Coordination target by opaque
-target identity plus configuration revision. It is persisted with each record
-and compared on every re-admission. A changed or missing fence fails closed with
+target identity plus configuration revision. Admission canonicalizes the target
+identity before the fence is persisted, so the same configured target never
+reads as a stale fence on surrounding whitespace alone. The fence is persisted
+with each record and compared verbatim on every re-admission. A changed or missing fence fails closed with
 `ErrStaleTargetFence`; the existing record is never redirected to a target that
 was never authorized for that event. A new target may only be used by a new
 admission with its own fence.
