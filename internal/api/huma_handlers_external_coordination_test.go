@@ -381,3 +381,49 @@ func postExternalCoordinationResponse(t *testing.T, h http.Handler, state State,
 	body := externalCoordinationResponseTestBody(claimed, "response-1", "", time.Now())
 	return postExternalCoordinationResponseBody(t, h, state, body, "", registration)
 }
+
+// TestExternalCoordinationDispatchSurvivesCoordinationRemovedAfterAdmission pins
+// the nil-configuration edge of the delivery-time target fence. The fence
+// deliberately re-reads configuration instead of trusting the snapshot that
+// admitted the request, and dispatch runs detached in runBackground, so the
+// configuration it reads is by construction a later one. An operator who removes
+// the [external_coordination] section entirely leaves it nil rather than merely
+// disabled. runBackground has no recover(), so an unguarded dereference here
+// would take down the whole API server; and delivering under the admitted target
+// would defeat the fence, so the request must simply stay queued.
+func TestExternalCoordinationDispatchSurvivesCoordinationRemovedAfterAdmission(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	h := newTestCityHandler(t, state)
+	registerExternalCoordinationResponseTestAdapter(t, h, state)
+
+	service := externalcoordination.NewService(state.CityBeadStore())
+	queued, err := service.Enqueue(context.Background(), externalcoordination.RequestInput{
+		SourceAgent:   "mayor",
+		Target:        externalcoordination.Target{TargetID: "hermes-desktop", Adapter: "hermes", Provider: "hermes", AccountID: "desktop", ConversationID: "coordination-smoke", ConfigRevision: 1},
+		Reason:        externalcoordination.ReasonDirectRequest,
+		Prompt:        "one-off smoke question",
+		CorrelationID: "corr-coordination-removed",
+		Now:           time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The section is removed after admission, while the adapter is still
+	// registered, so dispatch reaches the fence with no configured target.
+	fake, ok := state.(*fakeState)
+	if !ok {
+		t.Fatalf("state = %T, want *fakeState", state)
+	}
+	fake.cfg.ExternalCoordination = nil
+
+	(&Server{state: state}).dispatchExternalCoordinationRequest(context.Background(), queued)
+
+	stored, err := service.Get(context.Background(), queued.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != externalcoordination.StateQueued {
+		t.Fatalf("state after dispatch with coordination removed = %q, want %q", stored.State, externalcoordination.StateQueued)
+	}
+}

@@ -2,6 +2,7 @@ package externalcoordination
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +127,7 @@ func TestTransportAdapterPublishesCausallyLinkedRequest(t *testing.T) {
 		WorkRef:        "gc-123",
 		CorrelationID:  "corr-1",
 		IdempotencyKey: "idem-1",
+		RouteIdentity:  map[string]string{"conversation": "opaque-thread-9", "harness.thread": "thread-9"},
 	}
 	receipt, err := adapter.Deliver(context.Background(), request)
 	if err != nil {
@@ -142,6 +144,35 @@ func TestTransportAdapterPublishesCausallyLinkedRequest(t *testing.T) {
 	}
 	if transport.published.IdempotencyKey != "idem-1" || transport.published.Metadata["work_ref"] != "gc-123" || transport.published.Metadata["correlation_id"] != "corr-1" {
 		t.Fatalf("causal metadata = %+v", transport.published.Metadata)
+	}
+	if got := transport.published.Metadata[routeIdentityMetadataPrefix+"conversation"]; got != "opaque-thread-9" {
+		t.Fatalf("route identity conversation = %q, want opaque-thread-9", got)
+	}
+	if got := transport.published.Metadata[routeIdentityMetadataPrefix+"harness.thread"]; got != "thread-9" {
+		t.Fatalf("route identity harness.thread = %q, want thread-9", got)
+	}
+	if transport.published.Conversation.ConversationID != "conversation-1" {
+		t.Fatalf("route identity changed configured conversation target: %+v", transport.published.Conversation)
+	}
+}
+
+func TestTransportAdapterRejectsInvalidRouteBeforePublish(t *testing.T) {
+	transport := &fakeTransport{}
+	request := Request{
+		RequestID:     "request-route-invalid",
+		Attempt:       1,
+		Target:        Target{Provider: "hermes", AccountID: "desktop", ConversationID: "conversation-1"},
+		Prompt:        "Need authorization.",
+		CorrelationID: "corr-route-invalid",
+		RouteIdentity: map[string]string{"thread": "https://other.example/callback"},
+	}
+
+	_, err := NewTransportAdapter(transport, "city-a").Deliver(context.Background(), request)
+	if !errors.Is(err, ErrDeliveryNotAttempted) || !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("Deliver error = %v, want ErrDeliveryNotAttempted and ErrInvalidInput", err)
+	}
+	if transport.published.Text != "" || transport.published.Conversation.ConversationID != "" {
+		t.Fatalf("invalid route reached transport: %+v", transport.published)
 	}
 }
 

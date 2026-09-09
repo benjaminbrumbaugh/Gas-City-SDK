@@ -98,8 +98,13 @@ func (s *Server) humaHandleExternalCoordinationRequest(ctx context.Context, inpu
 	return &ExternalCoordinationRequestOutput{Body: record}, nil
 }
 
-func normalizeExternalCoordinationTarget(request *externalcoordination.RequestInput, cfg *config.ExternalCoordinationConfig, city string) error {
-	expected := externalcoordination.Target{
+// configuredExternalCoordinationTarget projects the configured coordination
+// target. Admission and the delivery-time fence must derive the target from
+// configuration identically: if the two derivations ever drifted, a rotated
+// target would stop failing closed, which is the one thing the fence exists to
+// prevent. Deriving both from here makes that drift impossible.
+func configuredExternalCoordinationTarget(cfg *config.ExternalCoordinationConfig) externalcoordination.Target {
+	return externalcoordination.Target{
 		LogicalRole:      "external-coordination",
 		TargetID:         cfg.Target,
 		Adapter:          cfg.Adapter,
@@ -111,6 +116,10 @@ func normalizeExternalCoordinationTarget(request *externalcoordination.RequestIn
 		InterruptAllowed: cfg.EffectiveInterruptPolicy() == "emergency_only",
 		ConfigRevision:   cfg.ConfigRevision,
 	}
+}
+
+func normalizeExternalCoordinationTarget(request *externalcoordination.RequestInput, cfg *config.ExternalCoordinationConfig, city string) error {
+	expected := configuredExternalCoordinationTarget(cfg)
 	got := request.Target
 	if (got.LogicalRole != "" && got.LogicalRole != expected.LogicalRole) ||
 		(got.TargetID != "" && got.TargetID != expected.TargetID) ||
@@ -158,22 +167,16 @@ func (s *Server) dispatchExternalCoordinationRequest(ctx context.Context, record
 	}
 	// Re-resolve the configured target and fence the submission with it, so a
 	// request admitted before a configuration change fails closed instead of
-	// being delivered to a target that was never authorized for it.
-	fence := record.Request.Target
-	if cfg := s.state.Config().ExternalCoordination; cfg.Enabled {
-		fence = externalcoordination.Target{
-			LogicalRole:      "external-coordination",
-			TargetID:         cfg.Target,
-			Adapter:          cfg.Adapter,
-			Provider:         cfg.Provider,
-			AccountID:        cfg.AccountID,
-			ConversationID:   cfg.ConversationID,
-			DeliveryMode:     externalcoordination.DeliveryMode(cfg.EffectiveDelivery()),
-			SessionMode:      externalcoordination.SessionMode(cfg.EffectiveSessionPolicy()),
-			InterruptAllowed: cfg.EffectiveInterruptPolicy() == "emergency_only",
-			ConfigRevision:   cfg.ConfigRevision,
-		}
+	// being delivered to a target that was never authorized for it. Dispatch is
+	// detached, so this is by construction not the configuration that admitted
+	// the request; if external coordination has since been disabled or removed
+	// there is no authorized target left to fence against, and the request stays
+	// queued rather than being delivered under a target the city no longer has.
+	cfg := s.state.Config()
+	if cfg == nil || cfg.ExternalCoordination == nil || !cfg.ExternalCoordination.Enabled {
+		return
 	}
+	fence := configuredExternalCoordinationTarget(cfg.ExternalCoordination)
 	dispatcher := externalcoordination.Dispatcher{
 		Queue:   externalcoordination.NewService(s.state.CityBeadStore()),
 		Adapter: externalcoordination.NewTransportAdapter(transport, s.state.CityName()),

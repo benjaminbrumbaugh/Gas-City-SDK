@@ -125,6 +125,11 @@ func (a *HTTPAdapter) Deliver(ctx context.Context, request Request) (DeliveryRec
 	if a.configErr != nil {
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: a.configErr.Error()}, a.configErr
 	}
+	route, err := sanitizeRouteIdentity(request.RouteIdentity)
+	if err != nil {
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: err.Error()}, fmt.Errorf("%w: %w", ErrDeliveryNotAttempted, err)
+	}
+	request.RouteIdentity = route
 	body, err := json.Marshal(request)
 	if err != nil {
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("%w: marshal external coordination request: %w", ErrDeliveryNotAttempted, err)

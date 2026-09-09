@@ -11,6 +11,8 @@ import (
 
 const maxBridgeMetadataValueBytes = 512
 
+const routeIdentityMetadataPrefix = "route_identity."
+
 // TransportAdapter adapts the SDK's existing external-messaging transport
 // registry to the external coordination callback contract. This is useful for adapters that can
 // publish into a configured coordinator conversation; provider-specific session
@@ -52,7 +54,7 @@ func (a *TransportAdapter) Deliver(ctx context.Context, request Request) (Delive
 	}
 	metadata, err := bridgeMetadata(request)
 	if err != nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: err.Error()}, err
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: err.Error()}, fmt.Errorf("%w: %w", ErrDeliveryNotAttempted, err)
 	}
 	result, err := a.transport.Publish(ctx, extmsg.PublishRequest{
 		Conversation: extmsg.ConversationRef{
@@ -93,7 +95,11 @@ func bridgeMetadata(request Request) (map[string]string, error) {
 	if len(request.CorrelationID) > maxBridgeMetadataValueBytes {
 		return nil, fmt.Errorf("%w: correlation_id exceeds bridge metadata limit", ErrInvalidInput)
 	}
-	return map[string]string{
+	route, err := sanitizeRouteIdentity(request.RouteIdentity)
+	if err != nil {
+		return nil, err
+	}
+	metadata := map[string]string{
 		"hca_request_id":    request.RequestID,
 		"hca_attempt":       strconv.Itoa(request.Attempt),
 		"source_agent":      boundBridgeMetadataValue(request.SourceAgent),
@@ -101,7 +107,11 @@ func bridgeMetadata(request Request) (map[string]string, error) {
 		"work_ref":          boundBridgeMetadataValue(request.WorkRef),
 		"correlation_id":    request.CorrelationID,
 		"content_retention": string(request.ContentRetention),
-	}, nil
+	}
+	for key, value := range route {
+		metadata[routeIdentityMetadataPrefix+key] = value
+	}
+	return metadata, nil
 }
 
 func boundBridgeMetadataValue(value string) string {

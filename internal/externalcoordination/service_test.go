@@ -170,6 +170,26 @@ func TestEnqueueIsIdempotentAndPreservesCausalEnvelope(t *testing.T) {
 	}
 }
 
+func TestFailureDetailsAreRedactedBeforeDurablePersistence(t *testing.T) {
+	now := time.Now().UTC()
+	store := beads.NewMemStore()
+	service := NewService(store)
+	record := queuedTestRecord(t, service, now)
+	if err := service.Fail(context.Background(), record.ID, errors.New("POST https://coordinator.example/callback failed with Authorization: Bearer abc123"), now.Add(time.Second)); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+	stored, err := store.Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	durable := strings.ToLower(fmt.Sprint(stored.Metadata))
+	for _, forbidden := range []string{"coordinator.example", "bearer abc123", "authorization"} {
+		if strings.Contains(durable, forbidden) {
+			t.Fatalf("durable failure details leaked %q: %v", forbidden, stored.Metadata)
+		}
+	}
+}
+
 func TestClaimDeliveryAndResponseBoundaries(t *testing.T) {
 	now := time.Now().UTC()
 	service := NewService(beads.NewMemStore())
@@ -219,6 +239,21 @@ func TestClaimDeliveryAndResponseBoundaries(t *testing.T) {
 	}
 	if stored.State != StateOutcomeRecorded {
 		t.Fatalf("after response state = %q, want outcome_recorded", stored.State)
+	}
+}
+
+func TestTerminalFailureCannotBeOverwritten(t *testing.T) {
+	now := time.Now().UTC()
+	service := NewService(beads.NewMemStore())
+	record := queuedTestRecord(t, service, now)
+	if err := service.Fail(context.Background(), record.ID, errors.New("first failure"), now.Add(time.Second)); err != nil {
+		t.Fatalf("first Fail: %v", err)
+	}
+	if err := service.Fail(context.Background(), record.ID, errors.New("second failure"), now.Add(2*time.Second)); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("second Fail error = %v, want ErrIllegalTransition", err)
+	}
+	if err := service.Cancel(context.Background(), record.ID, now.Add(3*time.Second)); !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("Cancel after terminal failure error = %v, want ErrIllegalTransition", err)
 	}
 }
 
@@ -515,6 +550,7 @@ func TestHTTPAdapterPreservesRequestIdentityAndRejectsPrematureCompletion(t *tes
 	defer server.Close()
 
 	input := testRequestInput(time.Now())
+	input.RouteIdentity = map[string]string{"conversation": "abc-123"}
 	service := NewService(beads.NewMemStore())
 	record, err := service.Enqueue(context.Background(), input)
 	if err != nil {
@@ -527,6 +563,9 @@ func TestHTTPAdapterPreservesRequestIdentityAndRejectsPrematureCompletion(t *tes
 	}
 	if receipt.State != StateQueued || got.RequestID != record.Request.RequestID || got.WorkRef != "gc-123" {
 		t.Fatalf("receipt=%+v request=%+v", receipt, got)
+	}
+	if got.RouteIdentity["conversation"] != "abc-123" {
+		t.Fatalf("route identity = %+v, want conversation=abc-123", got.RouteIdentity)
 	}
 
 	premature := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -274,7 +274,7 @@ func (s *Service) Complete(ctx context.Context, id string, receipt DeliveryRecei
 		metadataDelivered:   now.UTC().Format(time.RFC3339Nano),
 	}
 	if receipt.Error != "" {
-		meta[metadataError] = receipt.Error
+		meta[metadataError] = sanitizeDurableError(receipt.Error)
 	}
 	if err := s.store.Update(id, beads.UpdateOpts{Status: &status, Metadata: meta}); err != nil {
 		return fmt.Errorf("record external coordination delivery %s: %w", id, err)
@@ -462,9 +462,12 @@ func (s *Service) Fail(ctx context.Context, id string, cause error, now time.Tim
 	if record.State == StateUncertain {
 		return fmt.Errorf("%w: %s must be reconciled before it can fail", ErrUnreconciled, id)
 	}
+	if IsTerminal(record.State) {
+		return fmt.Errorf("%w: %s is already terminal at %s", ErrIllegalTransition, id, record.State)
+	}
 	message := "delivery failed"
 	if cause != nil {
-		message = cause.Error()
+		message = sanitizeDurableError(cause.Error())
 	}
 	return s.setStateWithOutcome(id, StateFailed, OutcomeRejected, zeroTime(now), message)
 }
@@ -624,10 +627,22 @@ func sanitizeFailureClass(class string) string {
 			return "redacted"
 		}
 	}
+	for _, prefix := range credentialValuePrefixes {
+		if strings.Contains(lowered, prefix) {
+			return "redacted"
+		}
+	}
 	if len(class) > maxUncertaintyClassLen {
 		class = class[:maxUncertaintyClassLen]
 	}
 	return class
+}
+
+func sanitizeDurableError(message string) string {
+	if strings.TrimSpace(message) == "" {
+		return ""
+	}
+	return sanitizeFailureClass(message)
 }
 
 // Cancel terminally cancels a request. It never deletes the causal record.
@@ -635,8 +650,12 @@ func (s *Service) Cancel(ctx context.Context, id string, now time.Time) error {
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	if _, err := s.Get(ctx, id); err != nil {
+	record, err := s.Get(ctx, id)
+	if err != nil {
 		return err
+	}
+	if IsTerminal(record.State) {
+		return fmt.Errorf("%w: %s is already terminal at %s", ErrIllegalTransition, id, record.State)
 	}
 	status := "closed"
 	return s.store.Update(id, beads.UpdateOpts{Status: &status, Metadata: map[string]string{
@@ -662,7 +681,7 @@ func (s *Service) setStateWithOutcome(id string, state DeliveryState, outcome Ou
 	}
 	metadata := map[string]string{
 		metadataState:     string(state),
-		metadataError:     message,
+		metadataError:     sanitizeDurableError(message),
 		metadataDelivered: zeroTime(now).UTC().Format(time.RFC3339Nano),
 	}
 	if outcome != OutcomeNone {
