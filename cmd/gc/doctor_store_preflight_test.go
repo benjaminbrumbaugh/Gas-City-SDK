@@ -134,6 +134,7 @@ func TestBuildDoctorChecks_SkipsStoreChecksWhenStoreUnreachable(t *testing.T) {
 		"rig:alpha:path", "rig:beta:path",
 		"rig:alpha:git", "rig:beta:git",
 		"rig:alpha:root-branch", "rig:beta:root-branch",
+		"rig:alpha:gh-default-repo", "rig:beta:gh-default-repo",
 		"rig:alpha:bd-split-store", "rig:beta:bd-split-store",
 		"bd-split-store",
 	} {
