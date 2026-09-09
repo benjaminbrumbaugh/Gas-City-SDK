@@ -1451,7 +1451,7 @@ func ContainsProviderRateLimitScreen(content string) bool {
 	if containsClaudeSpendLimitModal(content) {
 		return true
 	}
-	if containsClaudeUsageLimitChoiceModal(content) {
+	if ContainsUsageLimitChoiceModal(content) {
 		return true
 	}
 	return strings.Contains(strings.ToLower(content), "rate limit") &&
@@ -1488,13 +1488,23 @@ func containsClaudeSpendLimitModal(content string) bool {
 }
 
 // usageLimitChoiceModalWindowLines bounds how many consecutive lines the
-// usage-limit choice modal's anchors may span. The modal renders its question
-// and both options inside one bordered box on adjacent lines; a small window
-// tolerates a border or blank line between them while still rejecting the same
-// tokens scattered across unrelated scrollback.
-const usageLimitChoiceModalWindowLines = 6
+// usage-limit choice modal's anchors may span. The modal renders its question,
+// both option rows and its confirm footer inside one bordered box; a small
+// window tolerates the border and a blank line between them while still
+// rejecting the same tokens scattered across unrelated scrollback.
+const usageLimitChoiceModalWindowLines = 8
 
-// containsClaudeUsageLimitChoiceModal reports whether pane content shows the
+// Anchor text of the usage-limit choice modal. The second option requests more
+// usage from the account owner, which is paid spend — these constants exist to
+// RECOGNIZE the modal, never to answer it.
+const (
+	usageLimitQuestionText    = "What do you want to do?"
+	usageLimitStopOptionText  = "Stop and wait for limit to reset"
+	usageLimitAdminOptionText = "Ask your admin for more usage"
+	dialogConfirmFooterText   = "Enter to confirm"
+)
+
+// ContainsUsageLimitChoiceModal reports whether pane content shows the
 // account usage-limit modal that asks the operator to choose between waiting
 // for the limit to reset and requesting more usage.
 //
@@ -1512,24 +1522,99 @@ const usageLimitChoiceModalWindowLines = 6
 // "Adjust monthly spend limit") are absent because this is a different modal
 // (gc-gqk).
 //
-// Anchors must co-occur inside one on-screen block. Consumers peek via
-// CapturePane, which reads scrollback, and a whole-buffer match on these
-// strings would classify any pane that merely PRINTED them — an agent reading
-// gc-gqk itself, for instance — as rate-limited. That direction is not the
-// harmless one: the rate-limit quarantine re-detects the same scrollback every
-// reconcile cycle, so a false positive masks a real crash indefinitely with no
-// self-heal, exactly as the spend-limit matcher's comment records.
+// Anchors must co-occur inside one on-screen block, laid out the way the modal
+// renders: the question, the two options on DIFFERENT rows, the confirm footer,
+// and a selection glyph. Consumers peek via CapturePane, which reads scrollback,
+// and a whole-buffer match on these strings would classify any pane that merely
+// PRINTED them — an agent reading gc-gqk itself, for instance — as rate-limited.
+// That direction is not the harmless one: the rate-limit quarantine re-detects
+// the same scrollback every reconcile cycle, so a false positive masks a real
+// crash indefinitely with no self-heal, exactly as the spend-limit matcher's
+// comment records. Co-occurrence alone is not enough for that job, because a
+// single line satisfies it: sweeping every pane for these phrases echoes all of
+// them onto the observing pane's own command line, which is the false positive
+// the witness who found this modal actually hit.
+//
+// Text stays necessary but not sufficient — a pane rendering a bug report about
+// the modal reproduces every anchor — so callers that act on a match corroborate
+// it with an independent signal that the pane is genuinely frozen.
 //
 // Deliberately NOT wired into ContainsRateLimitDialog, whose consumers send
 // keystrokes to dismiss a dialog. Option 2 here ("Ask your admin for more
 // usage") is a paid-spend action and must never be selected by an agent, so
 // this modal is classified for health purposes only and left for a human to
 // answer.
-func containsClaudeUsageLimitChoiceModal(content string) bool {
-	return linesContainAllWithin(content, usageLimitChoiceModalWindowLines,
-		"What do you want to do?",
-		"Stop and wait for limit to reset",
-		"Ask your admin for more usage")
+//
+// Exported because the health decision belongs to the controller, not to a
+// watching agent: any agent watching for this modal is itself a provider session
+// and wedges on the identical dialog.
+func ContainsUsageLimitChoiceModal(content string) bool {
+	lines := strings.Split(content, "\n")
+	for start := range lines {
+		if usageLimitChoiceModalInWindow(lines[start:min(start+usageLimitChoiceModalWindowLines, len(lines))]) {
+			return true
+		}
+	}
+	return false
+}
+
+// usageLimitChoiceModalInWindow reports whether one window of consecutive lines
+// carries every anchor of the usage-limit choice modal, laid out the way the
+// modal actually renders: a question, then two option ROWS, then the footer.
+//
+// Requiring the two options on DIFFERENT lines is what separates the rendered
+// modal from a single line that merely quotes it. Co-occurrence inside the
+// window is not enough on its own, because one line satisfies it — which is the
+// shape a sweep for this modal produces, echoing every anchor phrase onto the
+// observing pane's own command line. That pane is healthy; quarantining it
+// masks a real crash for as long as the scrollback survives.
+func usageLimitChoiceModalInWindow(window []string) bool {
+	var stopRows, adminRows []int
+	question := false
+	footer := false
+	glyph := false
+	for i, line := range window {
+		if strings.Contains(line, usageLimitQuestionText) {
+			question = true
+		}
+		if strings.Contains(line, usageLimitStopOptionText) {
+			stopRows = append(stopRows, i)
+		}
+		if strings.Contains(line, usageLimitAdminOptionText) {
+			adminRows = append(adminRows, i)
+		}
+		if strings.Contains(line, dialogConfirmFooterText) {
+			footer = true
+		}
+		if isSelectionGlyphRow(line) {
+			glyph = true
+		}
+	}
+	if !question || !footer || !glyph {
+		return false
+	}
+	for _, stop := range stopRows {
+		for _, admin := range adminRows {
+			if stop != admin {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isSelectionGlyphRow reports whether a line is a menu's selected option row: a
+// selection glyph followed by option text. A leading box border is stripped
+// first so a glyph rendered inside a bordered modal still counts.
+func isSelectionGlyphRow(line string) bool {
+	trimmed := strings.TrimRight(strings.ReplaceAll(line, "\u00a0", " "), " \t")
+	trimmed = stripLeadingBoxBorder(trimmed)
+	for _, glyph := range []string{"❯", "›", ">"} {
+		if rest, ok := strings.CutPrefix(trimmed, glyph+" "); ok && strings.TrimSpace(rest) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // ProviderTerminalErrorReason classifies high-confidence provider errors that

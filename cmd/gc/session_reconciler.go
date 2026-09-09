@@ -2616,6 +2616,81 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					fmt.Fprintf(stderr, "session reconciler: %s claim-holder-stalled (holds a claim but no progress for >%s, provider healthy, last activity %s); requesting fresh restart\n", name, claimHolderThreshold, lastActivity.UTC().Format(time.RFC3339)) //nolint:errcheck
 				}
 			}
+
+			// Usage-limit modal wedge: an alive session parked on the provider's
+			// usage-limit choice dialog is dead behind a healthy-looking runtime.
+			// The dialog blocks on a keypress no managed session sends and never
+			// clears itself — not even once the limit window closes — so the tmux
+			// session, the provider process and the bead's own heartbeat all keep
+			// reporting green while the agent makes no further progress, ever.
+			// Score it unhealthy, quarantine the slot so a still-limited account
+			// is not walked straight back into the same wall, and request the
+			// fresh restart that is the only repair. `gc runtime drain` cannot
+			// help here: a modal-frozen agent never polls drain-check, so it can
+			// never drain-ack. The dialog is also never answered — its second arm
+			// buys more usage, which is not a spend the reconciler may commit on
+			// an operator's behalf.
+			//
+			// This runs in the controller rather than in a monitoring agent by
+			// design. Any agent watching for this modal is itself a provider
+			// session and wedges on the identical dialog, which is exactly how
+			// the failure stayed invisible: the watchdog and the session it
+			// watched froze three seconds apart. The controller shares no failure
+			// mode with what it observes, and it inspects each session's own
+			// pane, so it cannot mistake its own output for a wedge either.
+			//
+			// It rides this gate's activity read rather than probing on its own:
+			// the desired-session fast path is allowed only the cached
+			// running/alive bits, and an unconditional activity read here would
+			// put one tmux subprocess per alive session on every tick — the cost
+			// #2442 removed and TestReconcileSessionBeads_DesiredFastPathSkips-
+			// AttachmentActivityObservation pins out. So the check is active for
+			// cities that opt into activity-based liveness with [session]
+			// progress_stall_timeout / claim_holder_stall_timeout, and it uses its
+			// own, shorter frozen-pane window inside that gate: a pane parked on
+			// this dialog is unambiguous, so it needs no stall threshold to be
+			// reached and fires well before one. A city with neither timeout set
+			// still catches the modal on the exit path, where the pane is already
+			// captured (ContainsProviderRateLimitScreen).
+			//
+			// It runs last inside the gate so the recycler's probes keep their
+			// existing order: this check captures a pane and can probe attachment,
+			// and both routes read through the store, so running it first would
+			// consume a store failure the recycler is written to fail safe on.
+			// Both paths land on the same restart marker the block below consumes,
+			// so running last costs nothing.
+			if wedged := detectUsageLimitModalWedge(
+				alive,
+				usageLimitModalWedgeRecorded(infoByID[id], clk.Now()),
+				clk.Now(),
+				lastActivity,
+				lastActivityErr,
+				func() (string, error) { return peek(rateLimitPeekLines) },
+				func() (bool, error) { return sessionAttachedForConfigDrift(id, sp, cityPath, store, cfg, name) },
+				func(stage string, err error) {
+					fmt.Fprintf(stderr, "session reconciler: reading %s before usage-limit modal check for %s: %v\n", stage, name, err) //nolint:errcheck
+				},
+			); wedged {
+				// The health/quarantine record is durable — it is what stops the
+				// supervisor reporting this session healthy, and what paces the
+				// respawn. The restart request is decision-state for the block
+				// below, so it stays on the snapshot, mirroring the progress-stall
+				// recycler.
+				tick.applyStore(id, sessFront, usageLimitModalWedgePatch(clk.Now()))
+				tick.apply(id, sessionpkg.MetadataPatch{"restart_requested": "true"})
+				rec.Record(events.Event{
+					Type:    events.SessionQuarantined,
+					Actor:   "gc",
+					Subject: tp.DisplayName(),
+					Message: "parked on the provider usage-limit dialog; scored unhealthy and restarting on a fresh session",
+				})
+				fmt.Fprintf(stderr, "session reconciler: %s is parked on the provider usage-limit dialog (no output for >%s); scoring it unhealthy and requesting a fresh restart\n", name, usageLimitModalFrozenPane) //nolint:errcheck
+				if trace != nil {
+					trace.RecordDecision(TraceSiteReconcilerUsageLimitModal, TraceReasonUsageLimitModal, TraceOutcomeUnhealthy, tp.TemplateName, name, traceRecordPayload{
+						"session_bead_id": id,
+					})
+				}
+			}
 		}
 
 		// Restart-requested: agent asked for a fresh session
