@@ -181,6 +181,8 @@ func TestContainsUsageLimitChoiceModal(t *testing.T) {
 		},
 		{name: "observer pane echoing its own grep sweep", content: usageLimitObserverGrepEcho, want: false},
 		{name: "anchors scattered across unrelated scrollback", content: usageLimitPhrasesScatteredScrollback, want: false},
+		{name: "modal fixture followed by source", content: usageLimitChoiceModalPane + "`\nfunc TestSomething", want: false},
+		{name: "old modal followed by another confirm dialog", content: usageLimitChoiceModalPane + "\n\nUnrelated choice\nEnter to confirm · Esc to cancel", want: false},
 		{
 			name:    "both options on one line cannot be a two-row menu",
 			content: "❯ compare Stop and wait for limit to reset with Ask your admin for more usage\nEnter to confirm · Esc to cancel",

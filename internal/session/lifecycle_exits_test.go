@@ -307,6 +307,20 @@ func TestRateLimitQuarantinePatch(t *testing.T) {
 	})
 }
 
+func TestProviderFencePatch(t *testing.T) {
+	until := time.Date(2026, 3, 8, 13, 0, 0, 0, time.UTC)
+	assertPatch(t, ProviderFencePatch(until, "usage_limit_modal"), MetadataPatch{
+		"state":                     string(StateAsleep),
+		"quarantined_until":         "2026-03-08T13:00:00Z",
+		"sleep_reason":              "rate_limit",
+		"last_woke_at":              "",
+		"pending_create_claim":      "",
+		"pending_create_started_at": "",
+		"session_health":            "unhealthy",
+		"session_health_reason":     "usage_limit_modal",
+	})
+}
+
 func assertPatch(t *testing.T, got, want MetadataPatch) {
 	t.Helper()
 	if len(got) != len(want) {

@@ -57,6 +57,15 @@ func TestResolveTemplateInjectsUpstreamServingEnv(t *testing.T) {
 	if got := tp.Env["ANTHROPIC_API_KEY"]; got != "sk-ant-secret" {
 		t.Errorf("ANTHROPIC_API_KEY = %q, want the $VAR-resolved secret", got)
 	}
+	if got := tp.ProviderFenceEnv["ANTHROPIC_BASE_URL"]; got != "https://bedrock.example/anthropic" {
+		t.Errorf("ProviderFenceEnv ANTHROPIC_BASE_URL = %q, want the effective account endpoint", got)
+	}
+	if got := tp.ProviderFenceEnv["ANTHROPIC_API_KEY"]; got != "sk-ant-secret" {
+		t.Errorf("ProviderFenceEnv ANTHROPIC_API_KEY = %q, want the effective account credential", got)
+	}
+	if _, leaked := tp.ProviderFenceEnv["GC_SESSION_ID"]; leaked {
+		t.Error("ProviderFenceEnv contains per-session Gas City identity")
+	}
 
 	cfg := templateParamsToConfig(tp)
 	if cfg.Upstream != "bedrock" {

@@ -229,6 +229,23 @@ type Provider interface {
 	Capabilities() ProviderCapabilities
 }
 
+// AttachmentObserver is an optional provider capability for destructive
+// controller decisions that must distinguish a detached session from an
+// unreadable attachment state.
+type AttachmentObserver interface {
+	ObserveAttachment(name string) (bool, error)
+}
+
+// ObserveAttachment preserves observation failures when the provider supports
+// them. Providers without the optional capability retain the legacy boolean
+// contract.
+func ObserveAttachment(provider Provider, name string) (bool, error) {
+	if observer, ok := provider.(AttachmentObserver); ok {
+		return observer.ObserveAttachment(name)
+	}
+	return provider.IsAttached(name), nil
+}
+
 // PendingInteraction describes a blocking interaction raised by a session.
 // This is an optional capability exposed by providers that support
 // structured approvals, questions, or other turn-blocking prompts.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"strings"
 	"sync"
 	"time"
@@ -76,6 +77,13 @@ type drainTracker struct {
 	resetStalls      map[string]bool            // session bead ID -> reset stall event emitted
 	suspendDeferrals map[string]int             // session bead ID -> consecutive ticks a named session has been suspend-drain-eligible with its spec absent (#3630)
 	idleProbeCursor  int
+	usageFenceCursor int
+	usageFencePanes  map[string]usageFencePaneObservation
+}
+
+type usageFencePaneObservation struct {
+	digest    [sha256.Size]byte
+	firstSeen time.Time
 }
 
 func newDrainTracker() *drainTracker {
@@ -84,7 +92,57 @@ func newDrainTracker() *drainTracker {
 		idleProbes:       make(map[string]*idleProbeState),
 		resetStalls:      make(map[string]bool),
 		suspendDeferrals: make(map[string]int),
+		usageFencePanes:  make(map[string]usageFencePaneObservation),
 	}
+}
+
+// usageFencePaneStable requires the same candidate pane to survive a full
+// frozen-pane window. One old activity timestamp plus one matching capture is
+// not enough to destroy a potentially healthy conversation that merely quoted
+// provider-limit text.
+func (dt *drainTracker) usageFencePaneStable(id, pane string, now time.Time) bool {
+	if dt == nil || strings.TrimSpace(id) == "" {
+		return false
+	}
+	digest := sha256.Sum256([]byte(pane))
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+	prior, ok := dt.usageFencePanes[id]
+	if !ok || prior.digest != digest || now.Before(prior.firstSeen) {
+		dt.usageFencePanes[id] = usageFencePaneObservation{digest: digest, firstSeen: now}
+		return false
+	}
+	return now.Sub(prior.firstSeen) >= usageLimitModalFrozenPane
+}
+
+func (dt *drainTracker) clearUsageFencePane(id string) {
+	if dt == nil {
+		return
+	}
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+	delete(dt.usageFencePanes, id)
+}
+
+func selectUsageFenceProbeTargets(orderedIDs []string, dt *drainTracker) map[string]bool {
+	targets := make(map[string]bool)
+	if len(orderedIDs) == 0 {
+		return targets
+	}
+
+	limit := min(maxUsageFenceProbesPerTick, len(orderedIDs))
+	start := 0
+	if dt != nil {
+		dt.mu.Lock()
+		start = dt.usageFenceCursor % len(orderedIDs)
+		dt.usageFenceCursor = (start + limit) % len(orderedIDs)
+		dt.mu.Unlock()
+	}
+
+	for i := 0; i < limit; i++ {
+		targets[orderedIDs[(start+i)%len(orderedIDs)]] = true
+	}
+	return targets
 }
 
 func (dt *drainTracker) get(beadID string) *drainState {

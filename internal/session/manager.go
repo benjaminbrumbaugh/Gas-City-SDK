@@ -199,6 +199,7 @@ type Info struct {
 	ProviderTerminalError string // provider_terminal_error (raw)
 	HealthState           string // session_health (raw)
 	HealthReason          string // session_health_reason (raw)
+	ProviderFenceIdentity string // provider_fence_identity (raw provider preset identity)
 	Drainable             bool   // session_drainable == "true"
 
 	// --- trigger / brain-parent cluster (controller read surface) ---

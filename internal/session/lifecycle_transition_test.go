@@ -135,7 +135,10 @@ func TestLifecycleTransitionPatchesSetCompleteMetadata(t *testing.T) {
 				"awake_started_at":          now.UTC().Format(time.RFC3339),
 				"pending_create_claim":      "",
 				"pending_create_started_at": "",
+				"quarantined_until":         "",
 				"sleep_reason":              "",
+				"session_health":            "healthy",
+				"session_health_reason":     "",
 			},
 		},
 		{
@@ -534,6 +537,25 @@ func TestCommitStartedPatchStampsFreshAwakeEpochOnlyForNewInterval(t *testing.T)
 	recovered := CommitStartedPatch(CommitStartedPatchInput{ConfirmState: true, StartsAwakeInterval: false, Now: t0.Add(time.Hour)})
 	if v, ok := recovered["awake_started_at"]; ok {
 		t.Fatalf("recovery re-confirm must not stamp awake_started_at, got %q", v)
+	}
+}
+
+func TestCommitStartedPatchClearsProviderFenceOnFreshStart(t *testing.T) {
+	patch := CommitStartedPatch(CommitStartedPatchInput{
+		StartsAwakeInterval: true,
+		Now:                 time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC),
+	})
+
+	want := MetadataPatch{
+		"quarantined_until":       "",
+		"session_health":          "healthy",
+		"session_health_reason":   "",
+		"provider_fence_identity": "",
+	}
+	for key, value := range want {
+		if patch[key] != value {
+			t.Errorf("patch[%q] = %q, want %q", key, patch[key], value)
+		}
 	}
 }
 

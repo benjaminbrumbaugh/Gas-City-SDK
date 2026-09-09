@@ -205,10 +205,14 @@ func (a *tmuxAttachment) ClearScrollback(_ context.Context) error {
 // Observe folds the three liveness reads — tmux observes all three locally
 // (ProcessAlive via the process tree, attachment + activity via tmux).
 func (a *tmuxAttachment) Observe(_ context.Context, processNames []string) (runtime.LiveObservation, error) {
+	attached, err := a.p.tm.sessionAttached(a.name)
+	if err != nil {
+		return runtime.LiveObservation{}, err
+	}
 	lastActivity, _ := a.p.GetLastActivity(a.name)
 	return runtime.LiveObservation{
 		ProcessAlive: a.p.ProcessAlive(a.name, processNames),
-		Attached:     a.p.IsAttached(a.name),
+		Attached:     attached,
 		LastActivity: lastActivity,
 	}, nil
 }

@@ -867,7 +867,7 @@ func TestReconcileSessionBeads_DrainAckConsumesRestartRequested(t *testing.T) {
 	}
 }
 
-func TestReconcileSessionBeads_DesiredFastPathSkipsAttachmentActivityObservation(t *testing.T) {
+func TestReconcileSessionBeads_DesiredFastPathBoundsProviderFenceObservation(t *testing.T) {
 	env := newReconcilerTestEnv()
 	env.cfg = &config.City{
 		Agents: []config.Agent{{Name: "worker", SleepAfterIdle: config.SessionSleepOff}},
@@ -899,8 +899,8 @@ func TestReconcileSessionBeads_DesiredFastPathSkipsAttachmentActivityObservation
 	if got := env.sp.CountCalls("IsAttached", "worker"); got != 0 {
 		t.Fatalf("IsAttached calls = %d, want 0 on desired fast path", got)
 	}
-	if got := env.sp.CountCalls("GetLastActivity", "worker"); got != 0 {
-		t.Fatalf("GetLastActivity calls = %d, want 0 on desired fast path", got)
+	if got := env.sp.CountCalls("GetLastActivity", "worker"); got != 1 {
+		t.Fatalf("GetLastActivity calls = %d, want 1 bounded provider-fence probe", got)
 	}
 }
 

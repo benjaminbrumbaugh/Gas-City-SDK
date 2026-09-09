@@ -1692,6 +1692,7 @@ func TestContainsProviderRateLimitScreen(t *testing.T) {
 		{name: "claude hit limit", content: "You've hit your limit, Pro plan", want: true},
 		{name: "claude rate limit options", content: "/rate-limit-options", want: true},
 		{name: "provider menu shape", content: "Rate limit reached\n1. Keep trying\n2. Stop", want: true},
+		{name: "claude usage limit incident wording", content: "You've hit your usage limit · try again at 7:25 PM", want: true},
 		{name: "claude spend limit modal", content: "What do you want to do?\nUsage credit balance: $573.37\n❯ Adjust monthly spend limit: $1503.19\n  Wait for limit to reset      Resets Jul 12 at 11pm (America/Los_Angeles)\nEnter to confirm · Esc to cancel", want: true},
 		{name: "spend limit words without reset option", content: "notes mention Adjust monthly spend limit and Usage credit balance while documenting billing", want: false},
 		{name: "spend limit tokens scattered across unrelated scrollback", content: spendLimitTokensScatteredScrollback, want: false},
@@ -1703,6 +1704,64 @@ func TestContainsProviderRateLimitScreen(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ContainsProviderRateLimitScreen(tt.content); got != tt.want {
 				t.Errorf("ContainsProviderRateLimitScreen(%q) = %v, want %v", tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProviderRateLimitResetAt(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 17, 13, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name    string
+		content string
+		want    time.Time
+		ok      bool
+	}{
+		{name: "time today", content: "resets 3:10pm (UTC)", want: time.Date(2026, 8, 17, 15, 10, 0, 0, time.UTC), ok: true},
+		{name: "incident try again wording", content: "You've hit your usage limit; try again at 7:25 PM", want: time.Date(2026, 8, 17, 19, 25, 0, 0, time.UTC), ok: true},
+		{name: "past time rolls tomorrow", content: "resets 12:10pm (UTC)", want: time.Date(2026, 8, 18, 12, 10, 0, 0, time.UTC), ok: true},
+		{name: "dated reset", content: "Resets Sep 2 at 11pm (UTC)", want: time.Date(2026, 9, 2, 23, 0, 0, 0, time.UTC), ok: true},
+		{name: "past date rolls next year", content: "Resets Jul 12 at 11pm (UTC)", want: time.Date(2027, 7, 12, 23, 0, 0, 0, time.UTC), ok: true},
+		{name: "invalid timezone", content: "resets 3:10pm (Mars/Olympus)", ok: false},
+		{name: "invalid date", content: "resets Feb 31 at 3:10pm (UTC)", ok: false},
+		{name: "unrelated", content: "working normally", ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ProviderRateLimitResetAt(tt.content, now)
+			if ok != tt.ok {
+				t.Fatalf("ProviderRateLimitResetAt() ok = %v, want %v", ok, tt.ok)
+			}
+			if tt.ok && !got.Equal(tt.want) {
+				t.Fatalf("ProviderRateLimitResetAt() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProviderUsageLimitResetAt(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 17, 13, 0, 0, 0, time.UTC)
+	want := time.Date(2026, 8, 17, 19, 25, 0, 0, time.UTC)
+	tests := []struct {
+		name    string
+		content string
+		wantOK  bool
+	}{
+		{name: "provider screen is final visible line", content: "old output\nYou've hit your usage limit; try again at 7:25 PM\n", wantOK: true},
+		{name: "reset elsewhere in scrollback", content: "cache resets 7:25 PM\nYou've hit your usage limit", wantOK: false},
+		{name: "source displaying provider fixture", content: `pane := "You've hit your usage limit; try again at 7:25 PM"`, wantOK: false},
+		{name: "provider screen followed by prompt", content: "You've hit your usage limit; try again at 7:25 PM\n$", wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ProviderUsageLimitResetAt(tt.content, now)
+			if ok != tt.wantOK {
+				t.Fatalf("ProviderUsageLimitResetAt() ok = %v, want %v", ok, tt.wantOK)
+			}
+			if ok && !got.Equal(want) {
+				t.Fatalf("ProviderUsageLimitResetAt() = %s, want %s", got, want)
 			}
 		})
 	}

@@ -207,6 +207,11 @@ func (p *Provider) IsAttached(name string) bool {
 	return p.route(name).IsAttached(name)
 }
 
+// ObserveAttachment delegates attachment observation to the routed backend.
+func (p *Provider) ObserveAttachment(name string) (bool, error) {
+	return runtime.ObserveAttachment(p.route(name), name)
+}
+
 // Attach delegates to the routed backend. ACP sessions return an error.
 func (p *Provider) Attach(name string) error {
 	p.mu.RLock()

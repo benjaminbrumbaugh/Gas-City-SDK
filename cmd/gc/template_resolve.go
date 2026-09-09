@@ -59,6 +59,12 @@ type TemplateParams struct {
 	Prompt string
 	// Env is the merged environment (passthrough + provider + agent + passthrough vars).
 	Env map[string]string
+	// ProviderFenceEnv is the provider/account environment used to correlate
+	// usage-limit observations across roles. It includes provider config,
+	// account-selecting agent overrides, and rendered upstream overrides while
+	// excluding unrelated role/session settings. Consumers must hash it before
+	// persistence or logging.
+	ProviderFenceEnv map[string]string
 	// Upstream is the selected model-serving endpoint name (a key in [upstreams],
 	// Phase C). Carried to runtime.Config.Upstream (launch-half fingerprint) so a
 	// switch relaunches the warm box; the resolved serving env is already merged
@@ -145,6 +151,28 @@ func (tp TemplateParams) DisplayName() string {
 		return tp.InstanceName
 	}
 	return tp.TemplateName
+}
+
+// providerFenceAgentEnv retains only agent overrides that can select provider
+// credentials or their storage roots. Including every agent variable would
+// split one exhausted account into separate fences merely because roles have
+// different operational settings.
+func providerFenceAgentEnv(env map[string]string) map[string]string {
+	filtered := make(map[string]string)
+	for key, value := range expandEnvMap(env) {
+		if processenv.IsProviderCredentialEnv(key) || providerAccountSelectorEnv[key] {
+			filtered[key] = value
+		}
+	}
+	return filtered
+}
+
+var providerAccountSelectorEnv = map[string]bool{
+	"CLAUDE_CODE_OAUTH_TOKEN": true,
+	"CLAUDE_CONFIG_DIR":       true,
+	"CODEX_HOME":              true,
+	"HOME":                    true,
+	"XDG_CONFIG_HOME":         true,
 }
 
 // resolveTemplate computes all session parameters from a config.Agent.
@@ -457,7 +485,20 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	if p.workspace != nil {
 		workspaceEnv = p.workspace.Env
 	}
-	env := mergeEnv(passthroughEnv(), expandEnvMap(workspaceEnv), expandEnvMap(resolved.Env), expandEnvMap(cfgAgent.Env), agentEnv)
+	// Resolve the provider layer without Agent.Env so unrelated role settings
+	// merged into ResolvedProvider.Env do not accidentally become account
+	// identity. Account-selecting agent overrides are added back explicitly.
+	providerLayerAgent := *cfgAgent
+	providerLayerAgent.Env = nil
+	providerLayer, err := config.ResolveProvider(&providerLayerAgent, p.workspace, p.providers, p.lookPath)
+	if err != nil {
+		return TemplateParams{}, fmt.Errorf("agent %q provider account environment: %w", qualifiedName, err)
+	}
+	providerFenceEnv := mergeEnv(expandEnvMap(providerLayer.Env), providerFenceAgentEnv(cfgAgent.Env))
+	if providerFenceEnv == nil {
+		providerFenceEnv = make(map[string]string)
+	}
+	env := mergeEnv(passthroughEnv(), expandEnvMap(workspaceEnv), expandEnvMap(resolved.Env), agentEnv)
 	processenv.PrependGCBinDirToPATH(env, env["GC_BIN"])
 	env = convergence.ScrubTokenEnv(env)
 
@@ -506,13 +547,16 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 				if envName == "" {
 					return TemplateParams{}, fmt.Errorf("agent %q upstream %q sets %s, but its harness %q declares no upstream_env.%s binding (set %s_env on the upstream, or upstream_env.%s on the harness)", qualifiedName, upstreamName, r.field, resolvedProviderName(resolved), r.field, r.field, r.field)
 				}
-				env[envName] = processenv.ExpandSessionEnvValue(r.value)
+				value := processenv.ExpandSessionEnvValue(r.value)
+				env[envName] = value
+				providerFenceEnv[envName] = value
 			}
 		}
 		// Raw env is the harness-specific escape hatch, merged LAST (wins over the
 		// abstract render and ambient/agent env for the keys it sets).
 		for k, v := range expandEnvMap(spec.Env) {
 			env[k] = v
+			providerFenceEnv[k] = v
 		}
 	}
 	// Managed agents are Gas City-owned recursive execution environments. Set
@@ -705,6 +749,7 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		Command:          command,
 		Prompt:           prompt,
 		Env:              env,
+		ProviderFenceEnv: providerFenceEnv,
 		Upstream:         cfgAgent.Upstream,
 		Hints:            hints,
 		WorkDir:          workDir,

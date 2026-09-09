@@ -56,6 +56,7 @@ func TestResolveTemplateAgentEnvWinsOverWorkspaceEnv(t *testing.T) {
 			Provider: "test",
 			Env: map[string]string{
 				"GC_TARGET_BRANCH": "boylec/develop",
+				"FROM_WORKSPACE":   "shared",
 			},
 		},
 		providers:  map[string]config.ProviderSpec{"test": {Command: "echo", PromptMode: "none"}},
@@ -67,7 +68,10 @@ func TestResolveTemplateAgentEnvWinsOverWorkspaceEnv(t *testing.T) {
 	}
 	agent := &config.Agent{
 		Name: "mayor",
-		Env:  map[string]string{"GC_TARGET_BRANCH": "boylec/special"},
+		Env: map[string]string{
+			"GC_TARGET_BRANCH":  "boylec/special",
+			"CLAUDE_CONFIG_DIR": "/accounts/mayor",
+		},
 	}
 
 	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
@@ -76,6 +80,15 @@ func TestResolveTemplateAgentEnvWinsOverWorkspaceEnv(t *testing.T) {
 	}
 	if got := tp.Env["GC_TARGET_BRANCH"]; got != "boylec/special" {
 		t.Errorf("GC_TARGET_BRANCH = %q, want %q (agent env must override workspace env)", got, "boylec/special")
+	}
+	if got := tp.ProviderFenceEnv["CLAUDE_CONFIG_DIR"]; got != "/accounts/mayor" {
+		t.Errorf("ProviderFenceEnv CLAUDE_CONFIG_DIR = %q, want account selector", got)
+	}
+	if _, included := tp.ProviderFenceEnv["GC_TARGET_BRANCH"]; included {
+		t.Error("ProviderFenceEnv contains unrelated role environment")
+	}
+	if _, inherited := tp.ProviderFenceEnv["FROM_WORKSPACE"]; inherited {
+		t.Error("ProviderFenceEnv contains workspace-wide environment")
 	}
 }
 
