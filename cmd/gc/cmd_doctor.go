@@ -256,6 +256,11 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 	register(doctor.NewBinaryCheck("jq", "", exec.LookPath))
 	register(doctor.NewBinaryCheck("pgrep", "", exec.LookPath))
 	register(doctor.NewBinaryCheck("lsof", "", exec.LookPath))
+	// Not a BinaryCheck: timeout(1) is absent on a stock macOS host and
+	// that is not a fault — bounded.sh falls back to python3 and then to
+	// a shell watchdog. This reports which bound is actually in force so
+	// the absence stops being invisible.
+	register(doctor.NewBoundedExecCheck(exec.LookPath))
 	// beads.role must be set before any bd command runs; check it here so
 	// the missing-role error appears before the downstream data/Dolt checks
 	// that will all fail for the same root cause.

@@ -1458,13 +1458,12 @@ func TestSyncSQLPushReplayDoesNotLeakPassword(t *testing.T) {
 	}
 }
 
-// TestSyncSQLPushTimeoutReplaysNoMechanismMarker verifies the exit-124 branch
-// replays a non-empty captured stderr, surfacing the run_bounded "cannot run
-// bounded command" no-mechanism marker that is otherwise reported under the
-// (deliberately overloaded) TIMEOUT headline. Exercises the S3-on-124 mitigation
-// that disambiguates a real wall-clock timeout from the no-mechanism
-// fall-through.
-func TestSyncSQLPushTimeoutReplaysNoMechanismMarker(t *testing.T) {
+// runSyncWithFailingPush drives the sync script against a fake dolt whose
+// SQL push exits with the given code and stderr, returning the combined
+// output. Shared by the exit-code classification tests below.
+func runSyncWithFailingPush(t *testing.T, pushRC int, pushStderr string) string {
+	t.Helper()
+
 	root := repoRoot(t)
 	script := filepath.Join(root, syncScript)
 
@@ -1478,8 +1477,7 @@ func TestSyncSQLPushTimeoutReplaysNoMechanismMarker(t *testing.T) {
 	}
 
 	binDir := t.TempDir()
-	const marker = "dolt runtime: timeout/gtimeout/python3 not found; cannot run bounded command"
-	writeSyncFakeDoltPushFails(t, binDir, 124, marker)
+	writeSyncFakeDoltPushFails(t, binDir, pushRC, pushStderr)
 	_ = writeSyncFakeBeadsBD(t, cityPath)
 
 	cmd := exec.Command("sh", script, "--db", "app")
@@ -1496,11 +1494,42 @@ func TestSyncSQLPushTimeoutReplaysNoMechanismMarker(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected push failure, output:\n%s", out)
 	}
-	if !strings.Contains(string(out), "TIMEOUT after 1800s") {
+	return string(out)
+}
+
+// TestSyncSQLPushTimeoutReplaysCapturedStderr verifies the exit-124 branch
+// replays a non-empty captured stderr alongside the TIMEOUT headline, so a
+// dolt client that managed to say something before being reaped is not
+// silently swallowed.
+func TestSyncSQLPushTimeoutReplaysCapturedStderr(t *testing.T) {
+	const detail = "fatal: connection reset while streaming chunks"
+	out := runSyncWithFailingPush(t, 124, detail)
+
+	if !strings.Contains(out, "TIMEOUT after 1800s") {
 		t.Fatalf("expected the TIMEOUT headline on exit 124, got:\n%s", out)
 	}
-	if !strings.Contains(string(out), "app: "+marker) {
-		t.Fatalf("expected the captured no-mechanism marker to be replayed (db-prefixed) on the 124 branch, got:\n%s", out)
+	if !strings.Contains(out, "app: "+detail) {
+		t.Fatalf("expected the captured dolt stderr to be replayed (db-prefixed) on the 124 branch, got:\n%s", out)
+	}
+}
+
+// TestSyncSQLPushUnavailableIsNotReportedAsTimeout is the sync-side half of
+// sdk-4is. "The bound could not be applied, so dolt never ran" once shared
+// exit 124 with "dolt ran and outlived its bound", leaving the stderr replay
+// as the only way to tell them apart. They now have separate exit codes and
+// must have separate headlines: an operator told a push TIMED OUT will go
+// hunting for a slow remote that was never contacted.
+func TestSyncSQLPushUnavailableIsNotReportedAsTimeout(t *testing.T) {
+	out := runSyncWithFailingPush(t, runBoundedUnavailableRC(t), "")
+
+	if strings.Contains(out, "TIMEOUT") {
+		t.Fatalf("a push that never ran was reported as a timeout:\n%s", out)
+	}
+	if !strings.Contains(out, "diagnostic unavailable") {
+		t.Fatalf("expected the unavailable headline, got:\n%s", out)
+	}
+	if !strings.Contains(out, "did NOT run") {
+		t.Fatalf("expected the message to state the push never ran, got:\n%s", out)
 	}
 }
 

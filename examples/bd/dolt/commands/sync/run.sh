@@ -418,6 +418,11 @@ sync_database_sql() {
       echo "  $name: fetch timed out after ${fetch_timeout}s — skipped (NOT pushed)" >&2
       last_fail_reason="fetch timed out after ${fetch_timeout}s"
       return 1
+    elif [ "$fetch_rc" -eq "$RUN_BOUNDED_UNAVAILABLE_RC" ]; then
+      rm -f "$fetch_err_tmp"
+      echo "  $name: fetch diagnostic unavailable — the bound ${fetch_timeout} could not be applied, so fetch did NOT run; skipped (NOT pushed)" >&2
+      last_fail_reason="fetch did NOT run — the bound ${fetch_timeout} could not be applied"
+      return 1
     elif [ "$fetch_rc" -ne 0 ]; then
       echo "  $name: fetch failed (exit $fetch_rc) — skipped (NOT pushed)" >&2
       if [ -s "$fetch_err_tmp" ]; then
@@ -510,14 +515,15 @@ sync_database_sql() {
   fi
 
   if [ "$push_rc" -eq 124 ]; then
-    # Exit 124 is overloaded: a real wall-clock timeout (run_bounded via
-    # timeout/gtimeout, runtime.sh) AND the no-mechanism fall-through where
-    # neither timeout/gtimeout nor python3 exists and dolt never ran. A
-    # SIGKILLed client leaves no stderr; the no-mechanism path leaves the
-    # "cannot run bounded command" marker, so the stderr replay below
-    # disambiguates the two at zero extra mechanism.
+    # 124 now means exactly one thing: dolt ran and outlived its bound.
+    # The "no mechanism, so it never ran" case has its own exit code, so
+    # this headline no longer needs the stderr replay below to
+    # disambiguate it from a probe that never started (sdk-4is).
     echo "  $name: TIMEOUT after ${push_timeout}s — push manually or increase timeout (GC_DOLT_SYNC_PUSH_TIMEOUT_SECS)" >&2
     last_fail_reason="TIMEOUT after ${push_timeout}s"
+  elif [ "$push_rc" -eq "$RUN_BOUNDED_UNAVAILABLE_RC" ]; then
+    echo "  $name: diagnostic unavailable — the bound ${push_timeout} could not be applied, so the push did NOT run (nothing was sent)" >&2
+    last_fail_reason="push did NOT run — the bound ${push_timeout} could not be applied"
   else
     echo "  $name: ERROR: push failed (exit $push_rc)" >&2
     last_fail_reason="push failed (exit $push_rc)"
