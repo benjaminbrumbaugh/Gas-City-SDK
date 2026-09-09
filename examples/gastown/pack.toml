@@ -6,6 +6,13 @@
 # Rig-level: [defaults.rig.imports.gastown] ensures every new rig
 # automatically imports rig-scoped agents (witness, refinery, polecat)
 # without hand-editing city.toml.
+#
+# Candidate-review repair is an opt-in pack loop. A producer may add the
+# explicit gc.candidate_review_* contract to a source bead: hold_class must be
+# "mechanical", and correction, owner, repair_route, repair_workflow,
+# review_route, target, source, residue, and landed path lists must be present.
+# The local candidate-review-repair order validates and routes that contract. A
+# human, external, foreign, uncertain, or incomplete hold remains fail-closed.
 
 [pack]
 name = "gastown"
