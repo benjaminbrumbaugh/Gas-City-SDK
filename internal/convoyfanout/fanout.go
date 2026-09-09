@@ -526,6 +526,7 @@ func normalizeAdmitInput(input AdmitInput) (AdmitInput, error) {
 	// caller's configuration happened to hold. Otherwise the same configured
 	// target would fail closed as a stale fence purely on surrounding space.
 	input.Target.TargetID = targetID
+	input.Event.RouteIdentity = cloneRouteIdentity(input.Event.RouteIdentity)
 	return input, nil
 }
 

@@ -213,6 +213,19 @@ func TestAdmitRejectsAConflictingEventIdentityOnReplay(t *testing.T) {
 	}
 }
 
+func TestAdmitRejectsAConflictingEventRouteIdentityOnReplay(t *testing.T) {
+	now := testTime()
+	service, _ := testAdmissionService()
+	if _, err := service.Admit(context.Background(), testAdmitInput(now)); err != nil {
+		t.Fatal(err)
+	}
+	forged := testAdmitInput(now)
+	forged.Event.RouteIdentity["route"] = "different-opaque-route"
+	if _, err := service.Admit(context.Background(), forged); !errors.Is(err, ErrEventIdentityConflict) {
+		t.Fatalf("err = %v, want ErrEventIdentityConflict for changed route identity", err)
+	}
+}
+
 func TestAdmitCopiesOpaqueRouteDataByValue(t *testing.T) {
 	now := testTime()
 	service, _ := testAdmissionService()
@@ -378,6 +391,16 @@ func TestAdmitHonoursContextCancellation(t *testing.T) {
 	}
 	if items := listDeliveryBeads(t, store); len(items) != 0 {
 		t.Fatalf("durable beads = %d, want none", len(items))
+	}
+}
+
+func TestAdmissionRejectsNilContexts(t *testing.T) {
+	service, _ := testAdmissionService()
+	if _, err := service.Admit(nil, testAdmitInput(testTime())); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("Admit error = %v, want ErrInvalidInput", err)
+	}
+	if _, err := service.Deliveries(nil, "event-1"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("Deliveries error = %v, want ErrInvalidInput", err)
 	}
 }
 

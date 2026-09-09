@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -88,6 +89,9 @@ func NewAdmissionService(store beads.Store) *AdmissionService {
 // recipient is authorized, Admit returns the populated rejections together with
 // ErrNoAuthorizedRecipient and writes nothing.
 func (s *AdmissionService) Admit(ctx context.Context, input AdmitInput) (Admission, error) {
+	if ctx == nil {
+		return Admission{}, invalidInput("nil context")
+	}
 	if err := ctx.Err(); err != nil {
 		return Admission{}, err
 	}
@@ -155,6 +159,9 @@ func (s *AdmissionService) Admit(ctx context.Context, input AdmitInput) (Admissi
 // store's (created_at, id) order is canonical and every duplicate is closed and
 // marked superseded, so a recipient can never be submitted to twice.
 func (s *AdmissionService) Deliveries(ctx context.Context, eventID string) ([]DeliveryRecord, error) {
+	if ctx == nil {
+		return nil, invalidInput("nil context")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -296,7 +303,8 @@ func checkReplay(prior DeliveryRecord, input AdmitInput) error {
 		prior.DeploymentID != input.Event.DeploymentID,
 		prior.LaunchOrigin != input.Event.LaunchOrigin,
 		!prior.OccurredAt.Equal(input.Event.OccurredAt),
-		prior.City != input.City:
+		prior.City != input.City,
+		!reflect.DeepEqual(prior.EventRouteIdentity, input.Event.RouteIdentity):
 		return fmt.Errorf("%w: event %s already has durable deliveries with different immutable fields",
 			ErrEventIdentityConflict, prior.EventID)
 	}
