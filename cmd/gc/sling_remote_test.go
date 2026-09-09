@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/api"
+	"github.com/gastownhall/gascity/internal/launchorigin"
 )
 
 func remoteTestClient(t *testing.T, url string) *api.Client {
@@ -91,6 +92,8 @@ func TestCmdSlingRemote_RefusesUnsupportedModes(t *testing.T) {
 
 // Happy path: a 2-arg bead sling forwards to the server and renders the result.
 func TestCmdSlingRemote_RoutesBead(t *testing.T) {
+	clearActorRoutes(t)
+	t.Setenv(launchorigin.RouteKeys()[0], "remote-actor")
 	var gotPath, gotReq, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -111,7 +114,7 @@ func TestCmdSlingRemote_RoutesBead(t *testing.T) {
 	if gotPath != "/v0/city/mc/sling" || gotReq == "" {
 		t.Errorf("path=%q req=%q", gotPath, gotReq)
 	}
-	if !strings.Contains(gotBody, `"target":"mayor"`) || !strings.Contains(gotBody, `"bead":"BL-42"`) || !strings.Contains(gotBody, `"force":true`) {
+	if !strings.Contains(gotBody, `"target":"mayor"`) || !strings.Contains(gotBody, `"bead":"BL-42"`) || !strings.Contains(gotBody, `"force":true`) || !strings.Contains(gotBody, `"launch_origin":"remote-actor"`) {
 		t.Errorf("body=%q", gotBody)
 	}
 	if !strings.Contains(out.String(), "routed") || !strings.Contains(out.String(), "mayor") {

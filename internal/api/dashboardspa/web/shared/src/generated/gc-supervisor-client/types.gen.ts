@@ -4950,6 +4950,10 @@ export type SlingInputBody = {
      */
     formula?: string;
     /**
+     * Opaque actor identity captured by the launching client.
+     */
+    launch_origin?: string;
+    /**
      * Merge strategy: direct, mr, or local.
      */
     merge?: string;

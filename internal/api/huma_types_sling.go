@@ -19,6 +19,7 @@ type SlingInput struct {
 		Bead           string            `json:"bead,omitempty" doc:"Bead ID to sling."`
 		Formula        string            `json:"formula,omitempty" doc:"Formula name for workflow launch."`
 		AttachedBeadID string            `json:"attached_bead_id,omitempty" doc:"Bead ID to attach a formula to."`
+		LaunchOrigin   string            `json:"launch_origin,omitempty" doc:"Opaque actor identity captured by the launching client."`
 		Title          string            `json:"title,omitempty" doc:"Workflow title."`
 		Vars           map[string]string `json:"vars,omitempty" doc:"Formula variables."`
 		ScopeKind      string            `json:"scope_kind,omitempty" doc:"Scope kind (city or rig)."`

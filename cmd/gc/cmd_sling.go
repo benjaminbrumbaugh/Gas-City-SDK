@@ -689,13 +689,22 @@ func canInferSlingDefaultTargetFromBead(cfg *config.City, beadOrFormula string) 
 	return looksLikeBeadID(beadOrFormula) || looksLikeConfiguredBeadID(cfg, beadOrFormula)
 }
 
-// populateSlingDepsCallbacks fills in the interface fields on SlingDeps.
+// populateSlingDepsCallbacks fills in the interface fields on SlingDeps and
+// captures the launching actor's opaque identity.
+//
+// Origin capture lives here because this is the single seam every local sling
+// entry point passes through, so an ordinary `gc sling` is attributed without
+// a flag, a registration step, or an instruction to the agent. See
+// resolveLaunchOrigin for how an explicit origin and a captured one are
+// reconciled; a launch with no trustworthy actor route captures nothing and
+// keeps its legacy behavior.
 func populateSlingDepsCallbacks(deps *slingDeps) {
 	deps.Resolver = cliAgentResolver{}
 	deps.Branches = cliBranchResolver{}
 	deps.Notify = &cliNotifier{}
 	deps.DirectSessionResolver = cliDirectSessionResolver
 	deps.Router = cliBeadRouter{deps: deps}
+	deps.LaunchOrigin = resolveLaunchOrigin(deps.LaunchOrigin)
 }
 
 func cliDirectSessionResolver(store beads.Store, cityName, cityPath string, cfg *config.City, target, rigContext string) (string, bool, error) {
