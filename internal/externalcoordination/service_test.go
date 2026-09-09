@@ -578,6 +578,35 @@ func TestHTTPAdapterPreservesRequestIdentityAndRejectsPrematureCompletion(t *tes
 	}
 }
 
+func TestHTTPAdapterTreatsUnacceptedReceiptAsDefinitiveRejection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request Request
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(DeliveryReceipt{
+			RequestID:     request.RequestID,
+			Attempt:       request.Attempt,
+			CorrelationID: request.CorrelationID,
+			State:         StateQueued,
+			Accepted:      false,
+		})
+	}))
+	defer server.Close()
+
+	receipt, err := NewHTTPAdapter("rejecting", server.URL, Capability{}).Deliver(context.Background(), Request{
+		RequestID:     "request-rejected",
+		Attempt:       1,
+		CorrelationID: "correlation-rejected",
+	})
+	if err != nil {
+		t.Fatalf("Deliver returned error for a definitive rejection: %v", err)
+	}
+	if receipt.State != StateFailed || receipt.Accepted {
+		t.Fatalf("receipt = %+v, want failed and unaccepted", receipt)
+	}
+}
+
 func TestHTTPAdapterRejectsOmittedOrMismatchedReceiptFence(t *testing.T) {
 	request := Request{RequestID: "request-1", Attempt: 7, CorrelationID: "corr-1"}
 	var responseBody string

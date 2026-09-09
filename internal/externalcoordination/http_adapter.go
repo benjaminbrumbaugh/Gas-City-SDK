@@ -184,6 +184,18 @@ func (a *HTTPAdapter) Deliver(ctx context.Context, request Request) (DeliveryRec
 	if receipt.State == "" {
 		receipt.State = StateQueued
 	}
+	if !receipt.Accepted {
+		if receipt.State == StateUncertain {
+			return receipt, nil
+		}
+		receipt.State = StateFailed
+		if receipt.Error == "" {
+			receipt.Error = "configured target rejected request"
+		}
+	}
+	if receipt.State != StateQueued && receipt.State != StateRunning && receipt.State != StateFailed && receipt.State != StateUncertain {
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateUncertain}, fmt.Errorf("external coordination receipt state %q is not a delivery receipt", receipt.State)
+	}
 	return receipt, nil
 }
 
@@ -221,7 +233,9 @@ func (d *Dispatcher) DeliverNext(ctx context.Context, now time.Time) (*RequestRe
 	// Capability mismatch is a definitive pre-submission rejection: nothing was
 	// ever sent, so failing cannot duplicate a delivery.
 	if err := validateCapabilities(d.Adapter.Capabilities(), queued[0].Request); err != nil {
-		_ = d.Queue.Fail(ctx, queued[0].ID, err, now)
+		if transitionErr := d.Queue.Fail(ctx, queued[0].ID, err, now); transitionErr != nil {
+			return nil, nil, errors.Join(err, fmt.Errorf("record capability rejection: %w", transitionErr))
+		}
 		return nil, nil, err
 	}
 	if d.Fence != nil {
@@ -240,22 +254,44 @@ func (d *Dispatcher) DeliverNext(ctx context.Context, now time.Time) (*RequestRe
 		// observed by the coordinator and must be reconciled before a retry or
 		// fallback, or the recipient sees the same request twice.
 		if errors.Is(deliverErr, ErrDeliveryNotAttempted) {
-			_ = d.Queue.Fail(ctx, record.ID, deliverErr, now)
+			if transitionErr := d.Queue.Fail(ctx, record.ID, deliverErr, now); transitionErr != nil {
+				return &record, &receipt, errors.Join(deliverErr, fmt.Errorf("record definitive delivery failure: %w", transitionErr))
+			}
 		} else {
-			_ = d.Queue.MarkUncertain(ctx, record.ID, deliveryFailureClass(deliverErr), now)
+			if transitionErr := d.Queue.MarkUncertain(ctx, record.ID, deliveryFailureClass(deliverErr), now); transitionErr != nil {
+				return &record, &receipt, errors.Join(deliverErr, fmt.Errorf("record uncertain delivery: %w", transitionErr))
+			}
 		}
 		return &record, &receipt, deliverErr
 	}
 	if receipt.State == StateUncertain {
-		_ = d.Queue.MarkUncertain(ctx, record.ID, deliveryFailureClass(nil), now)
+		if err := d.Queue.MarkUncertain(ctx, record.ID, deliveryFailureClass(nil), now); err != nil {
+			return &record, &receipt, fmt.Errorf("record uncertain receipt: %w", err)
+		}
 		return &record, &receipt, nil
 	}
 	if receipt.State == StateFailed {
 		if receipt.Error == "" {
 			receipt.Error = "adapter rejected request"
 		}
-		_ = d.Queue.Fail(ctx, record.ID, fmt.Errorf("%s", receipt.Error), now)
+		if err := d.Queue.Fail(ctx, record.ID, fmt.Errorf("%s", receipt.Error), now); err != nil {
+			return &record, &receipt, fmt.Errorf("record rejected receipt: %w", err)
+		}
 		return &record, &receipt, nil
+	}
+	if receipt.State != StateQueued && receipt.State != StateRunning {
+		err := fmt.Errorf("%w: adapter returned untrustworthy delivery state %q", ErrInvalidInput, receipt.State)
+		if transitionErr := d.Queue.MarkUncertain(ctx, record.ID, deliveryFailureClass(err), now); transitionErr != nil {
+			return &record, &receipt, errors.Join(err, fmt.Errorf("record untrustworthy receipt: %w", transitionErr))
+		}
+		return &record, &receipt, err
+	}
+	if !receipt.Accepted {
+		err := fmt.Errorf("%w: adapter returned an unaccepted delivery receipt", ErrInvalidInput)
+		if transitionErr := d.Queue.MarkUncertain(ctx, record.ID, deliveryFailureClass(err), now); transitionErr != nil {
+			return &record, &receipt, errors.Join(err, fmt.Errorf("record unaccepted receipt: %w", transitionErr))
+		}
+		return &record, &receipt, err
 	}
 	if err := d.Queue.Complete(ctx, record.ID, receipt, now); err != nil {
 		return &record, &receipt, err

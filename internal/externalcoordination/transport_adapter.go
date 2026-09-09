@@ -46,11 +46,11 @@ func (a *TransportAdapter) Capabilities() Capability {
 // Deliver publishes the request to the configured coordinator conversation.
 func (a *TransportAdapter) Deliver(ctx context.Context, request Request) (DeliveryReceipt, error) {
 	if a == nil || a.transport == nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: "transport adapter is not registered"}, ErrUnavailable
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: "transport adapter is not registered"}, fmt.Errorf("%w: %w: transport adapter is not registered", ErrDeliveryNotAttempted, ErrUnavailable)
 	}
 	conversationID := request.Target.ConversationID
 	if conversationID == "" {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: "target conversation_id is not configured"}, fmt.Errorf("%w: conversation_id is required", ErrInvalidInput)
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: "target conversation_id is not configured"}, fmt.Errorf("%w: %w: conversation_id is required", ErrDeliveryNotAttempted, ErrInvalidInput)
 	}
 	metadata, err := bridgeMetadata(request)
 	if err != nil {

@@ -124,6 +124,13 @@ func (s *Service) Enqueue(ctx context.Context, input RequestInput) (RequestRecor
 
 // Get loads one request and projects an expired queued request to expired.
 func (s *Service) Get(ctx context.Context, id string) (RequestRecord, error) {
+	return s.getAt(ctx, id, time.Time{})
+}
+
+// getAt loads one request and projects expiry against the supplied instant.
+// A caller that already has an authoritative timestamp should use this helper
+// so a stale wall clock cannot change a transition's meaning.
+func (s *Service) getAt(ctx context.Context, id string, now time.Time) (RequestRecord, error) {
 	if err := checkContext(ctx); err != nil {
 		return RequestRecord{}, err
 	}
@@ -141,9 +148,20 @@ func (s *Service) Get(ctx context.Context, id string) (RequestRecord, error) {
 	if err != nil {
 		return RequestRecord{}, err
 	}
-	if record.State == StateQueued && !record.Request.ExpiresAt.After(time.Now()) {
-		_ = s.setState(record.ID, StateExpired, time.Now(), "request expired")
+	at := zeroTime(now)
+	if record.State == StateQueued && !record.Request.ExpiresAt.After(at) {
+		if err := s.setStateWithOutcomeForRecord(record, StateExpired, OutcomeExpired, at, "request expired"); err != nil {
+			if !beads.IsPreconditionFailed(err) {
+				return RequestRecord{}, fmt.Errorf("expire external coordination request %s: %w", id, err)
+			}
+			// A concurrent delivery won the revision fence. Re-read so callers
+			// observe its state instead of returning a stale expiry projection.
+			return s.getAt(ctx, id, at)
+		}
 		record.State = StateExpired
+		record.outcome = OutcomeExpired
+		record.Error = "request expired"
+		record.DeliveredAt = at
 	}
 	return record, nil
 }
@@ -191,17 +209,19 @@ func (s *Service) Claim(ctx context.Context, id, worker string, now time.Time) (
 	s.claimMu.Lock()
 	defer s.claimMu.Unlock()
 
-	record, err := s.Get(ctx, id)
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
 	if err != nil {
 		return RequestRecord{}, err
 	}
+	// getAt durably marks a queued request expired before returning its
+	// projection. Preserve the distinct ErrExpired contract for callers that
+	// need to distinguish expiry from a competing claim.
+	if record.State == StateExpired && !record.Request.ExpiresAt.After(now) {
+		return RequestRecord{}, ErrExpired
+	}
 	if record.State != StateQueued {
 		return RequestRecord{}, fmt.Errorf("%w: %s is %s", ErrNotQueued, record.ID, record.State)
-	}
-	now = zeroTime(now)
-	if !record.Request.ExpiresAt.After(now) {
-		_ = s.setState(record.ID, StateExpired, now, "request expired")
-		return RequestRecord{}, ErrExpired
 	}
 	record.Attempt++
 	record.Request.Attempt = record.Attempt
@@ -212,7 +232,11 @@ func (s *Service) Claim(ctx context.Context, id, worker string, now time.Time) (
 	if err != nil {
 		return RequestRecord{}, fmt.Errorf("encode claimed external coordination request %s: %w", record.ID, err)
 	}
-	if err := s.store.Update(record.ID, beads.UpdateOpts{
+	writer, ok := beads.ConditionalWriterFor(s.store)
+	if !ok {
+		return RequestRecord{}, fmt.Errorf("%w: conditional claim transition unavailable", ErrUnavailable)
+	}
+	if err := writer.UpdateIfMatch(record.ID, record.revision, beads.UpdateOpts{
 		Status: strPtr("in_progress"),
 		Metadata: map[string]string{
 			metadataRequest:   string(payload),
@@ -222,6 +246,9 @@ func (s *Service) Claim(ctx context.Context, id, worker string, now time.Time) (
 			metadataClaimedAt: now.UTC().Format(time.RFC3339Nano),
 		},
 	}); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			return RequestRecord{}, fmt.Errorf("%w: %s was claimed concurrently", ErrNotQueued, record.ID)
+		}
 		return RequestRecord{}, fmt.Errorf("claim external coordination request %s: %w", record.ID, err)
 	}
 	return record, nil
@@ -237,7 +264,8 @@ func (s *Service) Complete(ctx context.Context, id string, receipt DeliveryRecei
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("%w: request id mismatch", ErrInvalidInput)
 	}
-	record, err := s.Get(ctx, id)
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
 	if err != nil {
 		return err
 	}
@@ -253,7 +281,9 @@ func (s *Service) Complete(ctx context.Context, id string, receipt DeliveryRecei
 	if receipt.CorrelationID == "" || receipt.CorrelationID != record.Request.CorrelationID {
 		return fmt.Errorf("%w: receipt correlation_id does not match request", ErrInvalidInput)
 	}
-	now = zeroTime(now)
+	if !receipt.Accepted {
+		return fmt.Errorf("%w: delivery receipt does not confirm target acceptance", ErrInvalidInput)
+	}
 	state := receipt.State
 	if state == "" {
 		state = StateQueued
@@ -276,7 +306,14 @@ func (s *Service) Complete(ctx context.Context, id string, receipt DeliveryRecei
 	if receipt.Error != "" {
 		meta[metadataError] = sanitizeDurableError(receipt.Error)
 	}
-	if err := s.store.Update(id, beads.UpdateOpts{Status: &status, Metadata: meta}); err != nil {
+	if err := s.updateRecordIfMatch(record, status, meta, "delivery"); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			current, readErr := s.getAt(ctx, id, now)
+			if readErr != nil {
+				return fmt.Errorf("re-read external coordination delivery %s after conflict: %w", id, readErr)
+			}
+			return fmt.Errorf("%w: cannot record delivery for state %s", ErrNotQueued, current.State)
+		}
 		return fmt.Errorf("record external coordination delivery %s: %w", id, err)
 	}
 	if record.Request.ContentRetention == RetentionEphemeral {
@@ -455,7 +492,8 @@ func (s *Service) Fail(ctx context.Context, id string, cause error, now time.Tim
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	record, err := s.Get(ctx, id)
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
 	if err != nil {
 		return err
 	}
@@ -469,7 +507,13 @@ func (s *Service) Fail(ctx context.Context, id string, cause error, now time.Tim
 	if cause != nil {
 		message = sanitizeDurableError(cause.Error())
 	}
-	return s.setStateWithOutcome(id, StateFailed, OutcomeRejected, zeroTime(now), message)
+	if err := s.setStateWithOutcomeForRecord(record, StateFailed, OutcomeRejected, zeroTime(now), message); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			return fmt.Errorf("%w: failure for %s changed concurrently", ErrIllegalTransition, id)
+		}
+		return fmt.Errorf("fail external coordination request %s: %w", id, err)
+	}
+	return nil
 }
 
 // MarkUncertain records that a submission may have been observed by the
@@ -480,7 +524,8 @@ func (s *Service) MarkUncertain(ctx context.Context, id, failureClass string, no
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	record, err := s.Get(ctx, id)
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
 	if err != nil {
 		return err
 	}
@@ -490,12 +535,24 @@ func (s *Service) MarkUncertain(ctx context.Context, id, failureClass string, no
 	if !CanTransition(record.State, StateUncertain) {
 		return fmt.Errorf("%w: %s cannot become uncertain from %s", ErrIllegalTransition, id, record.State)
 	}
-	now = zeroTime(now)
-	return s.store.Update(id, beads.UpdateOpts{Status: strPtr("in_progress"), Metadata: map[string]string{
+	if err := s.updateRecordIfMatch(record, "in_progress", map[string]string{
 		metadataState:            string(StateUncertain),
 		metadataUncertainAt:      now.UTC().Format(time.RFC3339Nano),
 		metadataUncertaintyClass: sanitizeFailureClass(failureClass),
-	}})
+	}, "uncertainty"); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			current, readErr := s.getAt(ctx, id, now)
+			if readErr == nil && current.State == StateUncertain {
+				return nil
+			}
+			if readErr != nil {
+				return fmt.Errorf("re-read external coordination uncertainty %s after conflict: %w", id, readErr)
+			}
+			return fmt.Errorf("%w: cannot mark uncertainty for state %s", ErrNotQueued, current.State)
+		}
+		return fmt.Errorf("mark external coordination request %s uncertain: %w", id, err)
+	}
+	return nil
 }
 
 // Reconcile resolves an uncertain submission by checking the same target and
@@ -509,14 +566,14 @@ func (s *Service) Reconcile(ctx context.Context, id string, result ReconcileResu
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	record, err := s.Get(ctx, id)
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
 	if err != nil {
 		return err
 	}
 	if !CanTransition(record.State, StateReconciled) {
 		return fmt.Errorf("%w: %s is %s, only an uncertain submission can be reconciled", ErrIllegalTransition, id, record.State)
 	}
-	now = zeroTime(now)
 	metadata := map[string]string{metadataReconciledAt: now.UTC().Format(time.RFC3339Nano)}
 	status := "in_progress"
 	var resolved DeliveryState
@@ -540,7 +597,13 @@ func (s *Service) Reconcile(ctx context.Context, id string, result ReconcileResu
 		return fmt.Errorf("%w: reconciled cannot resolve to %s", ErrIllegalTransition, resolved)
 	}
 	metadata[metadataState] = string(resolved)
-	return s.store.Update(id, beads.UpdateOpts{Status: &status, Metadata: metadata})
+	if err := s.updateRecordIfMatch(record, status, metadata, "reconciliation"); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			return fmt.Errorf("%w: reconciliation changed concurrently", ErrNotQueued)
+		}
+		return fmt.Errorf("record external coordination reconciliation %s: %w", id, err)
+	}
+	return nil
 }
 
 // RecordNotificationDelivered records the terminal outcome for a lifecycle
@@ -551,7 +614,8 @@ func (s *Service) RecordNotificationDelivered(ctx context.Context, id string, no
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	record, err := s.Get(ctx, id)
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
 	if err != nil {
 		return err
 	}
@@ -561,7 +625,7 @@ func (s *Service) RecordNotificationDelivered(ctx context.Context, id string, no
 	if !CanTransition(record.State, StateOutcomeRecorded) {
 		return fmt.Errorf("%w: %s cannot record a delivered notification from %s", ErrIllegalTransition, id, record.State)
 	}
-	return s.setStateWithOutcome(id, StateOutcomeRecorded, OutcomeNotificationDelivered, zeroTime(now), "")
+	return s.setStateWithOutcomeForRecord(record, StateOutcomeRecorded, OutcomeNotificationDelivered, now, "")
 }
 
 // VerifyTargetFence fails closed when the configured target changed after this
@@ -573,7 +637,8 @@ func (s *Service) VerifyTargetFence(ctx context.Context, id string, current Targ
 	if err := checkContext(ctx); err != nil {
 		return RequestRecord{}, err
 	}
-	record, err := s.Get(ctx, id)
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
 	if err != nil {
 		return RequestRecord{}, err
 	}
@@ -584,7 +649,10 @@ func (s *Service) VerifyTargetFence(ctx context.Context, id string, current Targ
 	if IsTerminal(record.State) {
 		return RequestRecord{}, staleErr
 	}
-	if err := s.setStateWithOutcome(id, StateFailed, OutcomeStaleTarget, zeroTime(now), "configured external coordination target changed after admission"); err != nil {
+	if err := s.setStateWithOutcomeForRecord(record, StateFailed, OutcomeStaleTarget, now, "configured external coordination target changed after admission"); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			return RequestRecord{}, staleErr
+		}
 		return RequestRecord{}, fmt.Errorf("record stale target fence for %s: %w", id, err)
 	}
 	return RequestRecord{}, staleErr
@@ -650,31 +718,33 @@ func (s *Service) Cancel(ctx context.Context, id string, now time.Time) error {
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	record, err := s.Get(ctx, id)
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
 	if err != nil {
 		return err
 	}
 	if IsTerminal(record.State) {
 		return fmt.Errorf("%w: %s is already terminal at %s", ErrIllegalTransition, id, record.State)
 	}
+	if !CanTransition(record.State, StateCancelled) {
+		return fmt.Errorf("%w: %s cannot be canceled from %s", ErrIllegalTransition, id, record.State)
+	}
 	status := "closed"
-	return s.store.Update(id, beads.UpdateOpts{Status: &status, Metadata: map[string]string{
+	if err := s.updateRecordIfMatch(record, status, map[string]string{
 		metadataState:     string(StateCancelled),
 		metadataOutcome:   string(OutcomeCancelled),
 		metadataError:     "cancelled by operator", //nolint:misspell // public wire spelling
-		metadataDelivered: zeroTime(now).UTC().Format(time.RFC3339Nano),
-	}})
-}
-
-func (s *Service) setState(id string, state DeliveryState, now time.Time, message string) error {
-	outcome := OutcomeNone
-	if state == StateExpired {
-		outcome = OutcomeExpired
+		metadataDelivered: now.UTC().Format(time.RFC3339Nano),
+	}, "cancellation"); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			return fmt.Errorf("%w: cancellation changed concurrently", ErrIllegalTransition)
+		}
+		return fmt.Errorf("cancel external coordination request %s: %w", id, err)
 	}
-	return s.setStateWithOutcome(id, state, outcome, now, message)
+	return nil
 }
 
-func (s *Service) setStateWithOutcome(id string, state DeliveryState, outcome Outcome, now time.Time, message string) error {
+func (s *Service) setStateWithOutcomeForRecord(record RequestRecord, state DeliveryState, outcome Outcome, now time.Time, message string) error {
 	status := "open"
 	if state == StateExpired || state == StateCancelled || state == StateCompleted || state == StateOutcomeRecorded {
 		status = "closed"
@@ -687,7 +757,18 @@ func (s *Service) setStateWithOutcome(id string, state DeliveryState, outcome Ou
 	if outcome != OutcomeNone {
 		metadata[metadataOutcome] = string(outcome)
 	}
-	return s.store.Update(id, beads.UpdateOpts{Status: &status, Metadata: metadata})
+	return s.updateRecordIfMatch(record, status, metadata, "state")
+}
+
+func (s *Service) updateRecordIfMatch(record RequestRecord, status string, metadata map[string]string, operation string) error {
+	writer, ok := beads.ConditionalWriterFor(s.store)
+	if !ok {
+		return fmt.Errorf("%w: conditional %s transition unavailable", ErrUnavailable, operation)
+	}
+	return writer.UpdateIfMatch(record.ID, record.revision, beads.UpdateOpts{
+		Status:   &status,
+		Metadata: metadata,
+	})
 }
 
 func normalizeRequest(input RequestInput) (Request, error) {

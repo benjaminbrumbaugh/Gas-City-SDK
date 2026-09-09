@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -195,6 +196,188 @@ func TestCompleteRecordsSubmittedWithPersistedTimestamp(t *testing.T) {
 	}
 	if stored.Outcome() != OutcomeNone {
 		t.Fatalf("outcome = %q, want none: submission is not an outcome", stored.Outcome())
+	}
+}
+
+func TestClaimUsesItsClockToPersistExpiry(t *testing.T) {
+	now := time.Date(2026, 9, 9, 10, 0, 0, 0, time.UTC)
+	service := NewService(beads.NewMemStore())
+	input := testRequestInput(now)
+	input.ExpiresAt = now.Add(time.Second)
+	record, err := service.Enqueue(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.Claim(context.Background(), record.ID, "dispatcher-a", now.Add(2*time.Second)); !errors.Is(err, ErrExpired) {
+		t.Fatalf("Claim after injected expiry error = %v, want ErrExpired", err)
+	}
+	stored, err := service.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateExpired || stored.Outcome() != OutcomeExpired {
+		t.Fatalf("expired record = state %q, outcome %q; want expired/expired", stored.State, stored.Outcome())
+	}
+	if got := stored.DeliveredAt; !got.Equal(now.Add(2 * time.Second)) {
+		t.Fatalf("expiry timestamp = %s, want %s", got, now.Add(2*time.Second))
+	}
+}
+
+func TestCompleteRejectsUnacceptedReceipt(t *testing.T) {
+	now := time.Now().UTC()
+	service := NewService(beads.NewMemStore())
+	claimed := claimedTestRecord(t, service, now)
+
+	err := service.Complete(context.Background(), claimed.ID, DeliveryReceipt{
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       claimed.Attempt,
+		CorrelationID: claimed.Request.CorrelationID,
+		State:         StateQueued,
+		Accepted:      false,
+	}, now.Add(time.Second))
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("Complete unaccepted receipt error = %v, want ErrInvalidInput", err)
+	}
+	stored, err := service.Get(context.Background(), claimed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateRunning {
+		t.Fatalf("state after unaccepted receipt = %q, want running", stored.State)
+	}
+}
+
+// gatedGetStore forces two independent Service instances to make their
+// claim decision from the same queued snapshot. Only a revision-fenced write
+// can then produce one winner.
+type gatedGetStore struct {
+	beads.Store
+	writer  beads.ConditionalWriter
+	arrived chan struct{}
+	release <-chan struct{}
+}
+
+func (s *gatedGetStore) Get(id string) (beads.Bead, error) {
+	bead, err := s.Store.Get(id)
+	s.arrived <- struct{}{}
+	<-s.release
+	return bead, err
+}
+
+func (s *gatedGetStore) ConditionalWriterHandle() (beads.ConditionalWriter, bool) {
+	return s.writer, s.writer != nil
+}
+
+func TestClaimUsesDurableFenceAcrossServiceInstances(t *testing.T) {
+	now := time.Now().UTC()
+	store := beads.NewMemStore()
+	seed := NewService(store)
+	record := queuedTestRecord(t, seed, now)
+	writer, ok := beads.ConditionalWriterFor(store)
+	if !ok {
+		t.Fatal("MemStore lost conditional writer")
+	}
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	first := NewService(&gatedGetStore{Store: store, writer: writer, arrived: arrived, release: release})
+	second := NewService(&gatedGetStore{Store: store, writer: writer, arrived: arrived, release: release})
+	results := make(chan error, 2)
+	go func() {
+		_, err := first.Claim(context.Background(), record.ID, "dispatcher-a", now.Add(time.Second))
+		results <- err
+	}()
+	go func() {
+		_, err := second.Claim(context.Background(), record.ID, "dispatcher-b", now.Add(time.Second))
+		results <- err
+	}()
+	<-arrived
+	<-arrived
+	close(release)
+
+	var succeeded, rejected int
+	for range 2 {
+		switch err := <-results; {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, ErrNotQueued):
+			rejected++
+		default:
+			t.Fatalf("Claim race error = %v, want one success and one rejection", err)
+		}
+	}
+	if succeeded != 1 || rejected != 1 {
+		t.Fatalf("Claim race results = %d success, %d rejection; want one each", succeeded, rejected)
+	}
+}
+
+// blockedGetStore pauses one caller after it has read the running record. A
+// separate service can commit a response, making the paused caller's
+// revision stale before it writes its delivery receipt.
+type blockedGetStore struct {
+	beads.Store
+	writer  beads.ConditionalWriter
+	ready   chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (s *blockedGetStore) Get(id string) (beads.Bead, error) {
+	bead, err := s.Store.Get(id)
+	s.once.Do(func() {
+		s.ready <- struct{}{}
+		<-s.release
+	})
+	return bead, err
+}
+
+func (s *blockedGetStore) ConditionalWriterHandle() (beads.ConditionalWriter, bool) {
+	return s.writer, s.writer != nil
+}
+
+func TestLateSubmissionCannotOverwriteRecordedOutcome(t *testing.T) {
+	now := time.Now().UTC()
+	store := beads.NewMemStore()
+	seed := NewService(store)
+	claimed := claimedTestRecord(t, seed, now)
+	writer, ok := beads.ConditionalWriterFor(store)
+	if !ok {
+		t.Fatal("MemStore lost conditional writer")
+	}
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	staleService := NewService(&blockedGetStore{Store: store, writer: writer, ready: ready, release: release})
+	completeResult := make(chan error, 1)
+	go func() {
+		completeResult <- staleService.Complete(context.Background(), claimed.ID, DeliveryReceipt{
+			RequestID:     claimed.Request.RequestID,
+			Attempt:       claimed.Attempt,
+			CorrelationID: claimed.Request.CorrelationID,
+			State:         StateQueued,
+			Accepted:      true,
+		}, now.Add(2*time.Second))
+	}()
+	<-ready
+	if err := seed.RecordResponse(context.Background(), Response{
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       claimed.Attempt,
+		CorrelationID: claimed.Request.CorrelationID,
+		ResponseID:    "response-wins",
+		State:         "answered",
+		ReceivedAt:    now.Add(3 * time.Second),
+	}); err != nil {
+		t.Fatalf("RecordResponse before stale submission: %v", err)
+	}
+	close(release)
+	if err := <-completeResult; !errors.Is(err, ErrNotQueued) {
+		t.Fatalf("stale Complete error = %v, want ErrNotQueued", err)
+	}
+	stored, err := seed.Get(context.Background(), claimed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateOutcomeRecorded || stored.Outcome() != OutcomeResponseRecorded {
+		t.Fatalf("stale submission overwrote outcome: state=%q outcome=%q", stored.State, stored.Outcome())
 	}
 }
 
@@ -521,6 +704,27 @@ func TestDispatcherFailsDeliveryThatWasNeverAttempted(t *testing.T) {
 	}
 	if stored.State != StateFailed {
 		t.Fatalf("state = %q, want failed: nothing was ever sent", stored.State)
+	}
+}
+
+func TestDispatcherQuarantinesUntrustworthyReceiptAfterSend(t *testing.T) {
+	now := time.Now().UTC()
+	service := NewService(beads.NewMemStore())
+	record := queuedTestRecord(t, service, now)
+	dispatcher := &Dispatcher{
+		Queue:   service,
+		Adapter: &stubAdapter{receipt: DeliveryReceipt{State: StateOutcomeRecorded, Accepted: true}},
+		Worker:  "dispatcher-a",
+	}
+	if _, _, err := dispatcher.DeliverNext(context.Background(), now.Add(time.Second)); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("DeliverNext error = %v, want ErrInvalidInput for an untrustworthy receipt", err)
+	}
+	stored, err := service.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateUncertain {
+		t.Fatalf("state = %q, want uncertain after an untrustworthy receipt", stored.State)
 	}
 }
 
