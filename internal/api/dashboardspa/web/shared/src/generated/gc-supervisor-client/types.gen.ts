@@ -598,6 +598,19 @@ export type CityUnregisterSucceededPayload = {
     request_id: string;
 };
 
+export type ClaimLeaseObservation = {
+    last_attempt_at?: string;
+    last_successful_at?: string;
+    stores: Array<ClaimLeaseStoreObservation> | null;
+};
+
+export type ClaimLeaseStoreObservation = {
+    errors: number;
+    reclaimed: number;
+    renewed: number;
+    store: string;
+};
+
 export type Completeness = {
     continuation_claim_query_partial: boolean;
     named_scale_check_partial_templates?: Array<string> | null;
@@ -2249,6 +2262,7 @@ export type OkWithIdResponseBody = {
 
 export type Observation = {
     city: string;
+    claim_leases: ClaimLeaseObservation;
     completeness: Completeness;
     cycle: Cycle;
     generation: Generation;

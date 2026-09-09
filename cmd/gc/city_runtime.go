@@ -143,6 +143,13 @@ type CityRuntime struct {
 	// whenever tracing is off, and this must not be. See reconcile_observation.go.
 	reconcileObs reconcileObservationState
 
+	// claimLeaseMu guards the last native lease reconciliation result. Lease
+	// state is node-local to bd, so this controller-owned observation is kept
+	// separate from bead metadata and published with the cycle facts.
+	claimLeaseMu          sync.RWMutex
+	claimLeaseLastAttempt time.Time
+	claimLeaseResult      claimLeaseReconcileResult
+
 	// routeRecovery is the route-repair lane: an event-fed delta pass in the
 	// tick and a cadenced authoritative scan behind it. Created on first use so
 	// a directly-constructed runtime needs no wiring.
@@ -2484,6 +2491,7 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 		recordPhase(TraceSiteSessionSnapshot, "bead_reconcile.load_session_snapshot", phaseStart, traceSessionSnapshotFields(sessionBeads))
 		result.SessionQueryPartial = result.SessionQueryPartial || sessionQueryPartial
 	}
+	cr.reconcileClaimLeasesIfDue(ctx, sessionBeads, time.Now())
 	// Emit any due compute usage facts by reusing the open-session snapshot this
 	// tick already loaded, rather than issuing a second redundant store scan. The
 	// boot pass covers the whole fleet at once on the readiness path, so it takes

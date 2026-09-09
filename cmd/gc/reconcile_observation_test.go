@@ -103,6 +103,29 @@ func TestReconcileObservationPublishedWithoutTrace(t *testing.T) {
 	}
 }
 
+func TestReconcileObservationPublishesClaimLeaseDiagnostics(t *testing.T) {
+	cr := newObservationRuntime(t)
+	attempt := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
+	success := attempt.Add(time.Second)
+	cr.claimLeaseMu.Lock()
+	cr.claimLeaseResult = claimLeaseReconcileResult{
+		LastAttemptAt:    attempt,
+		LastSuccessfulAt: success,
+		Stores:           []claimLeaseStoreReport{{Name: "city", Renewed: 2, Reclaimed: 1, Errors: 0}},
+	}
+	cr.claimLeaseMu.Unlock()
+
+	runCycle(cr, "patrol", TraceCompletionCompleted, nil)
+	got := cr.ReconciliationObservation()
+	if !got.ClaimLeases.LastAttemptAt.Equal(attempt) || !got.ClaimLeases.LastSuccessfulAt.Equal(success) {
+		t.Fatalf("claim lease timestamps = %#v, want controller result", got.ClaimLeases)
+	}
+	if len(got.ClaimLeases.Stores) != 1 || got.ClaimLeases.Stores[0].Store != "city" ||
+		got.ClaimLeases.Stores[0].Renewed != 2 || got.ClaimLeases.Stores[0].Reclaimed != 1 {
+		t.Fatalf("claim lease store diagnostics = %#v, want typed counters", got.ClaimLeases.Stores)
+	}
+}
+
 // --- 3. a failed query is never serialized as a zero ------------------------
 func TestReconcileObservationPartialIsNotZero(t *testing.T) {
 	cr := newObservationRuntime(t)
