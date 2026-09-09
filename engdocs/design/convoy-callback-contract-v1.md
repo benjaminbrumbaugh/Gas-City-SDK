@@ -1,7 +1,6 @@
 # Convoy lifecycle callback contract v1
 
-Status: Accepted. The implementing package `internal/convoycallback` is not
-on `main` yet; it lands with the harness-callbacks delivery candidate.
+Status: implemented at `internal/convoycallback`.
 
 This is the Gas City-owned, harness-neutral record exchanged for lifecycle
 notifications about a launched convoy. It is a schema contract, not a
