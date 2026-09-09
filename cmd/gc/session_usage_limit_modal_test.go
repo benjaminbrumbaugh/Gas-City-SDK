@@ -807,7 +807,9 @@ func TestReconcileSessionBeads_UsageLimitFenceBlocksProviderSiblingsOnly(t *test
 	}
 
 	providerFence := map[string]string(usageLimitModalWedgePatch(env.clk.Now(), time.Time{}))
-	providerFence["provider_fence_identity"] = "provider-preset-a"
+	providerFence["provider_fence_identity"] = providerUsageFenceIdentity(TemplateParams{
+		ResolvedProvider: &config.ResolvedProvider{Name: "provider-preset-a"},
+	})
 	limitedSource, limitedSourceName := makeNamed("limited-source", "provider-preset-a", providerFence)
 	limitedSibling, limitedName := makeNamed("limited-sibling", "provider-preset-a", nil)
 	healthySibling, healthyName := makeNamed("healthy-sibling", "provider-preset-b", nil)
@@ -823,5 +825,54 @@ func TestReconcileSessionBeads_UsageLimitFenceBlocksProviderSiblingsOnly(t *test
 	}
 	if !env.sp.IsRunning(healthyName) {
 		t.Fatal("different-provider sibling did not start; the usage fence escaped its provider boundary")
+	}
+}
+
+func TestProviderUsageFenceIdentityUsesEffectiveAccountBoundary(t *testing.T) {
+	t.Parallel()
+
+	base := TemplateParams{
+		ProviderFenceEnv: map[string]string{"CLAUDE_CONFIG_DIR": "/accounts/personal"},
+		ResolvedProvider: &config.ResolvedProvider{
+			Name:            "claude-personal-max",
+			BuiltinAncestor: "claude",
+		},
+	}
+
+	alias := base
+	alias.ResolvedProvider = &config.ResolvedProvider{
+		Name:            "claude-personal-sonnet",
+		BuiltinAncestor: "claude",
+	}
+	if got, want := providerUsageFenceIdentity(alias), providerUsageFenceIdentity(base); got != want {
+		t.Fatalf("same account through provider aliases produced different identities: got %q, want %q", got, want)
+	}
+
+	differentAccount := base
+	differentAccount.ResolvedProvider = &config.ResolvedProvider{
+		Name:            base.ResolvedProvider.Name,
+		BuiltinAncestor: "claude",
+	}
+	differentAccount.ProviderFenceEnv = map[string]string{"CLAUDE_CONFIG_DIR": "/accounts/enterprise"}
+	if got, notWant := providerUsageFenceIdentity(differentAccount), providerUsageFenceIdentity(base); got == notWant {
+		t.Fatalf("same provider preset with different account environment shared identity %q", got)
+	}
+
+	upstreamAlias := base
+	upstreamAlias.Upstream = "alias-for-the-same-account"
+	if got, want := providerUsageFenceIdentity(upstreamAlias), providerUsageFenceIdentity(base); got != want {
+		t.Fatalf("upstream aliases with the same effective account environment produced different identities: got %q, want %q", got, want)
+	}
+}
+
+func TestRecordedProviderUsageFenceIdentitySurvivesConfigChange(t *testing.T) {
+	t.Parallel()
+
+	info := sessionpkg.Info{ProviderFenceIdentity: "account:old"}
+	if got := recordedProviderUsageFenceIdentity(info, "account:new"); got != "account:old" {
+		t.Fatalf("recorded identity = %q, want account:old", got)
+	}
+	if got := recordedProviderUsageFenceIdentity(sessionpkg.Info{}, "account:current"); got != "account:current" {
+		t.Fatalf("legacy fallback identity = %q, want account:current", got)
 	}
 }

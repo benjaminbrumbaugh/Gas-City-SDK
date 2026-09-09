@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -8,6 +11,51 @@ import (
 	"github.com/gastownhall/gascity/internal/runtime"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
 )
+
+// providerUsageFenceIdentity identifies the effective account boundary used by
+// one provider session without persisting credential-bearing environment
+// values. Provider preset names are not account identities: aliases can share
+// an account, while one preset can be paired with different agent environment
+// or upstream credentials. The provider family plus effective account
+// environment distinguish those cases; only their digest reaches metadata.
+func providerUsageFenceIdentity(tp TemplateParams) string {
+	resolved := tp.ResolvedProvider
+	if resolved == nil {
+		return ""
+	}
+	family := strings.TrimSpace(resolved.BuiltinAncestor)
+	if family == "" {
+		family = strings.TrimSpace(resolved.Command)
+	}
+	if family == "" {
+		family = strings.TrimSpace(resolved.Name)
+	}
+	if family == "" {
+		return ""
+	}
+	payload, err := json.Marshal(struct {
+		Family string            `json:"family"`
+		Env    map[string]string `json:"env,omitempty"`
+	}{
+		Family: family,
+		Env:    tp.ProviderFenceEnv,
+	})
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(payload)
+	return "account:" + hex.EncodeToString(sum[:])
+}
+
+// recordedProviderUsageFenceIdentity keeps an existing fence attached to the
+// account that produced it even if configuration changes while quarantined.
+// The fallback supports records created before account identities were stored.
+func recordedProviderUsageFenceIdentity(info sessionpkg.Info, current string) string {
+	if identity := strings.TrimSpace(info.ProviderFenceIdentity); identity != "" {
+		return identity
+	}
+	return current
+}
 
 const (
 	// sessionHealthReasonUsageLimitModal is the health reason recorded for a

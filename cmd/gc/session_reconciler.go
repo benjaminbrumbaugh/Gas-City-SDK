@@ -2748,12 +2748,10 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		// consumes, so running last costs nothing.
 		recordedUntil, usageFenceRecorded := usageLimitModalFenceUntil(infoByID[id], clk.Now())
 		usageFenceRestartValidated := false
-		providerName := ""
-		if tp.ResolvedProvider != nil {
-			providerName = strings.TrimSpace(tp.ResolvedProvider.Name)
-		}
-		if usageFenceRecorded && providerName != "" && recordedUntil.After(providerUsageFences[providerName]) {
-			providerUsageFences[providerName] = recordedUntil
+		providerFenceIdentity := providerUsageFenceIdentity(tp)
+		recordedFenceIdentity := recordedProviderUsageFenceIdentity(infoByID[id], providerFenceIdentity)
+		if usageFenceRecorded && recordedFenceIdentity != "" && recordedUntil.After(providerUsageFences[recordedFenceIdentity]) {
+			providerUsageFences[recordedFenceIdentity] = recordedUntil
 		}
 		if alive && usageFenceRecorded && usageFenceProbeTargets[id] {
 			// A prior kill can fail after the durable fence was written. Retry only
@@ -2814,7 +2812,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				// metadata write must not leave a dead session eligible to wake with
 				// its stale conversation identity.
 				wedgePatch := usageLimitModalWedgePatch(clk.Now(), resetAt)
-				wedgePatch["provider_fence_identity"] = providerName
+				wedgePatch["provider_fence_identity"] = providerFenceIdentity
 				pinned := pinnedConfiguredNamedSessionKillProtected(infoByID[id])
 				if !pinned {
 					newSessionKey, hasCapability := freshRestartSessionKeyInfo(tp, infoByID[id])
@@ -2834,8 +2832,8 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				} else {
 					usageFenceRestartValidated = !pinned
 					tick.set(id, next)
-					if until, ok := usageLimitModalFenceUntil(next, clk.Now()); ok && providerName != "" && until.After(providerUsageFences[providerName]) {
-						providerUsageFences[providerName] = until
+					if until, ok := usageLimitModalFenceUntil(next, clk.Now()); ok && providerFenceIdentity != "" && until.After(providerUsageFences[providerFenceIdentity]) {
+						providerUsageFences[providerFenceIdentity] = until
 					}
 					eventMessage := "parked on the provider usage-limit dialog; scored unhealthy and restarting on a fresh session"
 					if pinned {
@@ -2904,17 +2902,20 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					continue
 				}
 				if runtimeRunning && strings.TrimSpace(infoByID[id].HealthReason) == sessionHealthReasonUsageLimitModal {
+					if err := usageLimitModalRuntimeMatchesInstance(sp, name, infoByID[id]); err != nil {
+						fmt.Fprintf(stderr, "session reconciler: usage-limit restart for %s no longer matches the observed runtime: %v; disarming restart\n", name, err) //nolint:errcheck
+						tick.applyStore(id, sessFront, sessionpkg.MetadataPatch{"restart_requested": ""})
+						continue
+					}
+					// Keep identity and metadata reads ahead of this final safety
+					// observation so they cannot widen the interval in which a newly
+					// attached human is unobserved before the destructive call.
 					attached, err := runtime.ObserveAttachment(sp, name)
 					if err != nil {
 						fmt.Fprintf(stderr, "session reconciler: checking attachment immediately before usage-limit restart for %s: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
 						continue
 					}
 					if attached {
-						continue
-					}
-					if err := usageLimitModalRuntimeMatchesInstance(sp, name, infoByID[id]); err != nil {
-						fmt.Fprintf(stderr, "session reconciler: usage-limit restart for %s no longer matches the observed runtime: %v; disarming restart\n", name, err) //nolint:errcheck
-						tick.applyStore(id, sessFront, sessionpkg.MetadataPatch{"restart_requested": ""})
 						continue
 					}
 				}
@@ -3962,14 +3963,14 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				}
 			}
 			// A durable usage-limit observation fences every session sharing the
-			// resolved provider identity, independently of the optional external
-			// provider-health gate. Provider identities are account-scoped in city
-			// configuration, so this prevents sibling roles from immediately
-			// respawning into the same exhausted account.
-			if target.tp.ResolvedProvider != nil {
-				phProvider := target.tp.ResolvedProvider.Name
-				if until, fenced := providerUsageFences[phProvider]; fenced && clk.Now().Before(until) {
-					fmt.Fprintf(stderr, "session reconciler: provider %q fenced by usage-limit observation until %s; skipping respawn for %s\n", phProvider, until.UTC().Format(time.RFC3339), name) //nolint:errcheck
+			// effective provider account identity, independently of the optional
+			// external provider-health gate. The identity includes the provider
+			// family and effective account environment, so aliases can share a
+			// fence without crossing account boundaries.
+			if fenceIdentity := providerUsageFenceIdentity(target.tp); fenceIdentity != "" {
+				if until, fenced := providerUsageFences[fenceIdentity]; fenced && clk.Now().Before(until) {
+					phProvider := target.tp.ResolvedProvider.Name
+					fmt.Fprintf(stderr, "session reconciler: provider %q account fenced by usage-limit observation until %s; skipping respawn for %s\n", phProvider, until.UTC().Format(time.RFC3339), name) //nolint:errcheck
 					if trace != nil {
 						trace.RecordDecision(TraceSiteReconcilerProviderHealthGate, TraceReasonUsageLimitModal, TraceOutcomeRespawnSkipped, target.tp.TemplateName, name, traceRecordPayload{
 							"provider": phProvider,
