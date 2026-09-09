@@ -169,6 +169,36 @@ func TestRigGHDefaultRepoCheck_DistinctRemotesSameRepository_OK(t *testing.T) {
 	}
 }
 
+func TestRigGHDefaultRepoCheck_PushURLOverridesFetchURL_Warns(t *testing.T) {
+	rigPath := initGitRepoWithRemotes(t, []ghRemote{
+		{"origin", "https://github.com/acme/canonical.git"},
+		{"upstream", "https://github.com/acme/canonical.git"},
+	})
+	runGitForGHDefaultRepoTest(t, rigPath, "config", "remote.origin.pushurl", "https://github.com/acme/fork.git")
+
+	r := NewRigGHDefaultRepoCheck(config.Rig{Name: "testrig", Path: rigPath}).Run(&CheckContext{})
+
+	if r.Status != StatusWarning {
+		t.Fatalf("status = %d (%s), want StatusWarning when pushurl differs from fetch URL", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "acme/fork") {
+		t.Errorf("message = %q, want the effective push repository", r.Message)
+	}
+}
+
+func TestRigGHDefaultRepoCheck_GitHubRepositoryCaseInsensitive_OK(t *testing.T) {
+	rigPath := initGitRepoWithRemotes(t, []ghRemote{
+		{"origin", "https://github.com/Acme/Fork.git"},
+		{"upstream", "https://github.com/acme/fork.git"},
+	})
+
+	r := NewRigGHDefaultRepoCheck(config.Rig{Name: "testrig", Path: rigPath}).Run(&CheckContext{})
+
+	if r.Status != StatusOK {
+		t.Fatalf("status = %d (%s), want StatusOK for case-only GitHub repository differences", r.Status, r.Message)
+	}
+}
+
 func TestRigGHDefaultRepoCheck_PushDefaultOverridesOrigin_Warns(t *testing.T) {
 	rigPath := initGitRepoWithRemotes(t, []ghRemote{
 		{"github", "https://github.com/acme/mirror.git"},

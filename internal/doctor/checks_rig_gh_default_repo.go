@@ -70,10 +70,13 @@ func (c *RigGHDefaultRepoCheck) Run(_ *CheckContext) *CheckResult {
 	if err != nil {
 		return c.unableToDetermine(r)
 	}
-	urls, resolved, pushDefault := parseRemoteConfig(lines)
+	urls, pushURLs, resolved, pushDefault := parseRemoteConfig(lines)
 
 	repos := make(map[string]string, len(urls))
 	for name, raw := range urls {
+		if pushURL := pushURLs[name]; pushURL != "" {
+			raw = pushURL
+		}
 		if repo, ok := gitHubRepoFromRemoteURL(raw); ok {
 			repos[name] = repo
 		}
@@ -115,7 +118,7 @@ func (c *RigGHDefaultRepoCheck) Run(_ *CheckContext) *CheckResult {
 	// different remote.
 	ghRemote := ordered[0]
 	ghRepo := repos[ghRemote]
-	if ghRepo == pushRepo {
+	if strings.EqualFold(ghRepo, pushRepo) {
 		r.Status = StatusOK
 		if ghRemote == pushRemote {
 			r.Message = fmt.Sprintf("rig %q: gh and git push both target %s (remote %q)", c.rig.Name, ghRepo, pushRemote)
@@ -163,15 +166,16 @@ func gitConfigLines(gitBin, dir, pattern string) ([]string, error) {
 	return lines, nil
 }
 
-// parseRemoteConfig splits `remote.*` config lines into remote URLs, the
-// gh-resolved markers `gh repo set-default` writes, and remote.pushDefault.
+// parseRemoteConfig splits `remote.*` config lines into remote URLs, push URLs,
+// the gh-resolved markers `gh repo set-default` writes, and remote.pushDefault.
 //
 // git lowercases section and variable names but preserves subsection names, so
 // a remote's own name keeps its case while `remote.pushDefault` comes back as
 // `remote.pushdefault`. Remote names may themselves contain dots, so the
 // variable is taken from the last dot-separated segment.
-func parseRemoteConfig(lines []string) (urls, resolved map[string]string, pushDefault string) {
+func parseRemoteConfig(lines []string) (urls, pushURLs, resolved map[string]string, pushDefault string) {
 	urls = make(map[string]string)
+	pushURLs = make(map[string]string)
 	resolved = make(map[string]string)
 	for _, line := range lines {
 		// A valueless key (set with no value) is printed alone, with no
@@ -192,11 +196,13 @@ func parseRemoteConfig(lines []string) (urls, resolved map[string]string, pushDe
 		switch strings.ToLower(variable) {
 		case "url":
 			urls[name] = value
+		case "pushurl":
+			pushURLs[name] = value
 		case "gh-resolved":
 			resolved[name] = value
 		}
 	}
-	return urls, resolved, pushDefault
+	return urls, pushURLs, resolved, pushDefault
 }
 
 // ghRemoteOrder returns the remote names in the order gh considers them when
