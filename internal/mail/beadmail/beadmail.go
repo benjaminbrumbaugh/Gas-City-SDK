@@ -152,7 +152,11 @@ func (c *sessionInfoCache) isFresh(now time.Time) bool {
 // Returns an error if to is empty: blank recipients produce messages that never
 // appear in any inbox but still inflate global counts.
 func (p *Provider) Send(from, to, subject, body string) (mail.Message, error) {
-	if to == "" {
+	// Blank-after-trim, not just empty: the mail namespace is the addressed
+	// subset of type=message (see isUnaddressedMessageBead), so a whitespace-only
+	// recipient would mint a bead that every mail view then hides. Reject it at
+	// the door instead of silently swallowing the message.
+	if strings.TrimSpace(to) == "" {
 		return mail.Message{}, fmt.Errorf("beadmail send: recipient is required")
 	}
 	from, metadata, err := p.resolveSenderRoute(from)
@@ -183,7 +187,8 @@ func (p *Provider) Send(from, to, subject, body string) (mail.Message, error) {
 // implementation. Sender-route metadata is resolved exactly as [Provider.Send]
 // does, so handoff mail replies route correctly.
 func (p *Provider) SendHandoff(intent mail.HandoffIntent) (mail.Message, error) {
-	if intent.To == "" {
+	// Blank-after-trim, for the same reason as Send.
+	if strings.TrimSpace(intent.To) == "" {
 		return mail.Message{}, fmt.Errorf("beadmail handoff: recipient is required")
 	}
 	from, metadata, err := p.resolveSenderRoute(intent.From)
@@ -276,7 +281,7 @@ func (p *Provider) Get(id string) (mail.Message, error) {
 	if b.Type != messageBeadType {
 		return mail.Message{}, fmt.Errorf("beadmail get: bead %s is type %q, not message", id, b.Type)
 	}
-	if isRemovedMessageBead(b) {
+	if isHiddenFromMail(b) {
 		return mail.Message{}, beadmailError("get", beads.ErrNotFound)
 	}
 	return beadToMessage(b), nil
@@ -289,7 +294,7 @@ func (p *Provider) Read(id string) (mail.Message, error) {
 	if err != nil {
 		return mail.Message{}, beadmailError("read", err)
 	}
-	if isRemovedMessageBead(b) {
+	if isHiddenFromMail(b) {
 		return mail.Message{}, beadmailError("read", beads.ErrNotFound)
 	}
 	if !hasLabel(b.Labels, "read") {
@@ -311,7 +316,7 @@ func (p *Provider) MarkRead(id string) error {
 	if err != nil {
 		return beadmailError("mark-read", err)
 	}
-	if isRemovedMessageBead(b) {
+	if isHiddenFromMail(b) {
 		return beadmailError("mark-read", beads.ErrNotFound)
 	}
 	return p.store.Update(id, beads.UpdateOpts{
@@ -326,7 +331,7 @@ func (p *Provider) MarkUnread(id string) error {
 	if err != nil {
 		return beadmailError("mark-unread", err)
 	}
-	if isRemovedMessageBead(b) {
+	if isHiddenFromMail(b) {
 		return beadmailError("mark-unread", beads.ErrNotFound)
 	}
 	return p.store.Update(id, beads.UpdateOpts{
@@ -361,6 +366,11 @@ func (p *Provider) Archive(id string) error {
 	}
 	if b.Type != messageBeadType {
 		return fmt.Errorf("beadmail archive: bead %s is not a message", id)
+	}
+	// Not mail: outside the namespace this provider may close. Unlike a
+	// user-removed message bead, which Archive may still act on explicitly.
+	if isUnaddressedMessageBead(b) {
+		return beadmailError("archive", beads.ErrNotFound)
 	}
 	if b.Status == "closed" {
 		return mail.ErrAlreadyArchived
@@ -606,7 +616,7 @@ func (p *Provider) Reply(id, from, subject, body string) (mail.Message, error) {
 	if err != nil {
 		return mail.Message{}, beadmailError("reply", err)
 	}
-	if isRemovedMessageBead(original) {
+	if isHiddenFromMail(original) {
 		return mail.Message{}, beadmailError("reply", beads.ErrNotFound)
 	}
 	toSessionID := strings.TrimSpace(original.Metadata[fromSessionIDMetadataKey])
@@ -698,6 +708,45 @@ func isRemovedMessageBead(b beads.Bead) bool {
 	return b.Metadata["close_reason"] != RetentionSweepCloseReason
 }
 
+// isUnaddressedMessageBead reports whether b is a Type=="message" bead that
+// carries no recipient and therefore does not belong to the mail namespace.
+//
+// Type=="message" is overloaded. To beads.readyExcludeTypes it means "not
+// actionable work"; to this package it has historically meant "is mail". A
+// durable record that wants only the former inherits the latter, and every
+// all-routes mail view — Inbox/Check/All/ArchiveCandidates called with empty
+// recipients, which those callers document as "all routes" — then renders it as
+// a message and offers it as an archive candidate. Archiving one closes it, and
+// a record whose own lifecycle is Status-backed is corrupted by that
+// out-of-band close.
+//
+// Neither producer-side fix works, which is why the guard lives here. A
+// distinct bead type is absent from the bd CLI's own GetReadyWork exclusion
+// list that readyExcludeTypes mirrors, so `bd ready` would surface such records
+// as claimable work to every agent. Creating the record closed at birth hides
+// it from both, but spends the Status the record needs for its own state
+// machine.
+//
+// Addressing is the discriminator because mail already guarantees it:
+// createMessageBead is the single edge where a mail message becomes a bead, and
+// its only callers (Send, SendHandoff, Reply) each reject an empty recipient
+// before reaching it. Every mail bead therefore carries an Assignee by
+// construction. The rule this leaves for producers is correspondingly small: a
+// record that adopts Type=="message" for the Ready() exclusion must not set a
+// recipient.
+func isUnaddressedMessageBead(b beads.Bead) bool {
+	return b.Type == messageBeadType && strings.TrimSpace(b.Assignee) == ""
+}
+
+// isHiddenFromMail reports whether direct-ID mail operations must treat b as
+// not found — either a legacy user-removed message bead or a record outside the
+// mail namespace altogether. It is the direct-ID counterpart of the filter
+// messageCandidatesAll applies to every list view, so a record that no listing
+// shows is also one no caller can read, mark, reply to, or archive by ID.
+func isHiddenFromMail(b beads.Bead) bool {
+	return isRemovedMessageBead(b) || isUnaddressedMessageBead(b)
+}
+
 // deriveReplyTitle returns a non-empty title for a reply message. Callers
 // that go through bd create fail validation ("title is required") if the
 // reply's title is empty, so this fallback chain always returns a usable
@@ -738,6 +787,13 @@ func (p *Provider) Thread(id string) ([]mail.Message, error) {
 		if msgBead.Type != messageBeadType {
 			return nil, fmt.Errorf("beadmail thread: bead %q is type %q, want message", id, msgBead.Type)
 		}
+		// Namespace only: a removed message bead must still resolve its thread
+		// label here so the surviving replies stay reachable by its ID (the
+		// removal-visibility contract in mailtest). An unaddressed record is
+		// not mail at all, so it anchors no thread.
+		if isUnaddressedMessageBead(msgBead) {
+			return nil, beadmailError("thread", beads.ErrNotFound)
+		}
 		if t := extractLabel(msgBead.Labels, "thread:"); t != "" {
 			threadID = t
 		}
@@ -764,6 +820,9 @@ func (p *Provider) Thread(id string) ([]mail.Message, error) {
 			// retention-swept read message — stays out of thread views. (A
 			// retention-swept message is still resolvable by direct-ID Get, but,
 			// like the list views, it is retired from these aggregate views.)
+			continue
+		}
+		if isUnaddressedMessageBead(b) {
 			continue
 		}
 		msgs = append(msgs, beadToMessage(b))
@@ -1206,11 +1265,20 @@ func (p *Provider) messageCandidatesAll(routes []string) ([]beads.Bead, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scanning message beads: %w", err)
 	}
-	if len(routes) == 0 {
-		return all, nil
-	}
 	out := make([]beads.Bead, 0, len(all))
 	for _, b := range all {
+		// The mail namespace is the ADDRESSED subset of Type=="message". Only
+		// the all-routes arm can carry an unaddressed record this far — the
+		// route filter below already drops one — but the check runs on both so
+		// the invariant is total at the single candidate choke point every list
+		// view funnels through.
+		if isUnaddressedMessageBead(b) {
+			continue
+		}
+		if len(routes) == 0 {
+			out = append(out, b)
+			continue
+		}
 		// matchesRecipientRoute is defense-in-depth: HQStore returns exact
 		// matches from the index; BdStore multi-route fallback may return excess.
 		if matchesRecipientRoute(routes, b.Assignee) {

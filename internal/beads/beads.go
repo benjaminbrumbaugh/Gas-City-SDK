@@ -558,11 +558,17 @@ var readyExcludeTypes = map[string]bool{
 	"molecule":      true, // workflow containers
 	"step":          true, // non-root formula steps; parent molecule is the actionable unit (#1039)
 	"convoy":        true, // sling-minted container; groups child beads, never actionable Ready work (#3591)
-	"message":       true, // mail/communication items
-	"session":       true, // runtime/session continuity beads, never actionable work
-	"agent":         true, // identity/state tracking beads
-	"role":          true, // agent role definitions
-	"rig":           true, // rig identity beads
+	// mail/communication items. A durable record may adopt this type purely
+	// for the exclusion — a distinct type would not be excluded by the bd CLI's
+	// own GetReadyWork query — but must then leave its recipient empty: the
+	// mail namespace is the ADDRESSED subset of type=message, and an addressed
+	// record is rendered and archived as mail. See isUnaddressedMessageBead in
+	// internal/mail/beadmail.
+	"message": true,
+	"session": true, // runtime/session continuity beads, never actionable work
+	"agent":   true, // identity/state tracking beads
+	"role":    true, // agent role definitions
+	"rig":     true, // rig identity beads
 }
 
 var readyBlockingDependencyTypes = map[string]bool{
