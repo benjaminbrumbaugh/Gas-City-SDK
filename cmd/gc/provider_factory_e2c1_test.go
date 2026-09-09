@@ -153,7 +153,10 @@ func runE2c1ProviderFailureHelper(t *testing.T, cityPath, markerPath string) {
 	}
 	defer func() { shutdownBeadsProviderForStop = oldShutdown }()
 
-	startStderr := "gc start: warmup: 1 check(s) failed (Warning); see mail to mayor and `gc doctor` for details\n" +
+	// The active rig also runs the advisory GH default-repository check. This
+	// fixture deliberately has no git repository at the rig path, so warm-up
+	// reports that check alongside the provider-independent warning.
+	startStderr := "gc start: warmup: 2 check(s) failed (Warning); see mail to mayor and `gc doctor` for details\n" +
 		"gc start: " + e2c1ProviderConstructionFailure + "\n" + startSummaryLine(startSummary{
 		PID:      currentSupervisorPID(),
 		Binary:   startSummaryBinaryPath(),
