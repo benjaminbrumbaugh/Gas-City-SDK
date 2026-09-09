@@ -29,23 +29,29 @@ const defaultManagedDoltHost = "127.0.0.1"
 // Env is rebuilt on each call so GC_DOLT_PORT reflects the current managed
 // dolt port (which can change across city restarts).
 func bdCommandRunnerForCity(cityPath string) beads.CommandRunner {
+	return bdCommandRunnerForCityWithLeaseHolder(cityPath, "", false)
+}
+
+func bdCommandRunnerForCityWithLeaseHolder(cityPath, holder string, leaseCommand bool) beads.CommandRunner {
 	completeBinding, err := scopeHasCompleteStorageBinding(scopeMetadataJSONPath(cityPath))
 	if err != nil {
 		return func(_, _ string, _ ...string) ([]byte, error) { return nil, err }
 	}
 	if completeBinding {
-		return bdContextCommandRunnerForCity(cityPath)
+		return bdContextCommandRunnerForCityWithLeaseHolder(cityPath, holder, leaseCommand)
 	}
 	return bdCommandRunnerWithManagedRetryErr(cityPath, func(dir string) (map[string]string, error) {
 		env, err := bdRuntimeEnvWithError(cityPath)
 		env["BEADS_DIR"] = filepath.Join(dir, ".beads")
+		applyBdLeaseHolder(env, holder, leaseCommand)
 		return env, err
 	})
 }
 
-// bdContextCommandRunnerForCity delegates complete external bindings to the
-// workspace-pinned bd without projecting or recovering a managed backend.
-func bdContextCommandRunnerForCity(cityPath string) beads.CommandRunner {
+// bdContextCommandRunnerForCityWithLeaseHolder delegates complete external
+// bindings to the workspace-pinned bd without projecting or recovering a
+// managed backend.
+func bdContextCommandRunnerForCityWithLeaseHolder(cityPath, holder string, leaseCommand bool) beads.CommandRunner {
 	return func(dir, name string, args ...string) ([]byte, error) {
 		env := cityRuntimeEnvMapForCity(cityPath)
 		bdBin, err := workspacePinnedBdBinary(cityPath)
@@ -58,6 +64,7 @@ func bdContextCommandRunnerForCity(cityPath string) beads.CommandRunner {
 		env["GC_RIG_ROOT"] = ""
 		env["BEADS_DOLT_AUTO_START"] = "0"
 		env["BD_EXPORT_AUTO"] = "false"
+		applyBdLeaseHolder(env, holder, leaseCommand)
 		hosted, err := citySelectsHostedBeadsCredentialProvider(cityPath)
 		if err != nil {
 			return nil, err
@@ -182,11 +189,13 @@ func bdStoreForCity(dir, cityPath string) *beads.BdStore {
 		cfg = nil
 	}
 	reapStaleBdExportJSONL(dir)
+	opts := bdStoreOptionsForConfig(cfg)
+	opts = append(opts, beads.WithBdStoreLeaseRunner(bdLeaseCommandRunnerForCity(cityPath)))
 	return beads.NewBdStoreWithPrefix(
 		dir,
 		bdCommandRunnerForCity(cityPath),
 		issuePrefixForScope(dir, cityPath, cfg),
-		bdStoreOptionsForConfig(cfg)...,
+		opts...,
 	)
 }
 
@@ -204,11 +213,13 @@ func bdStoreForRig(rigDir, cityPath string, cfg *config.City, knownPrefix ...str
 		}
 	}
 	reapStaleBdExportJSONL(rigDir)
+	opts := bdStoreOptionsForConfig(cfg)
+	opts = append(opts, beads.WithBdStoreLeaseRunner(bdLeaseCommandRunnerForRig(cityPath, cfg, rigDir)))
 	return beads.NewBdStoreWithPrefix(
 		rigDir,
 		bdCommandRunnerForRig(cityPath, cfg, rigDir),
 		prefix,
-		bdStoreOptionsForConfig(cfg)...,
+		opts...,
 	)
 }
 
@@ -392,9 +403,40 @@ func readScopeIssuePrefix(scopeRoot string) string {
 }
 
 func bdCommandRunnerForRig(cityPath string, cfg *config.City, rigDir string) beads.CommandRunner {
+	return bdCommandRunnerForRigWithLeaseHolder(cityPath, cfg, rigDir, "", false)
+}
+
+func bdCommandRunnerForRigWithLeaseHolder(cityPath string, cfg *config.City, rigDir, holder string, leaseCommand bool) beads.CommandRunner {
 	return bdCommandRunnerWithManagedRetryErr(cityPath, func(_ string) (map[string]string, error) {
-		return bdRuntimeEnvForRigWithError(cityPath, cfg, rigDir)
+		env, err := bdRuntimeEnvForRigWithError(cityPath, cfg, rigDir)
+		applyBdLeaseHolder(env, holder, leaseCommand)
+		return env, err
 	})
+}
+
+func bdLeaseCommandRunnerForCity(cityPath string) beads.LeaseCommandRunner {
+	return func(dir, holder string, args ...string) ([]byte, error) {
+		runner := bdCommandRunnerForCityWithLeaseHolder(cityPath, holder, true)
+		return runner(dir, "bd", args...)
+	}
+}
+
+func bdLeaseCommandRunnerForRig(cityPath string, cfg *config.City, rigDir string) beads.LeaseCommandRunner {
+	return func(dir, holder string, args ...string) ([]byte, error) {
+		runner := bdCommandRunnerForRigWithLeaseHolder(cityPath, cfg, rigDir, holder, true)
+		return runner(dir, "bd", args...)
+	}
+}
+
+func applyBdLeaseHolder(env map[string]string, holder string, leaseCommand bool) {
+	if strings.TrimSpace(holder) != "" {
+		env["BEADS_ACTOR"] = strings.TrimSpace(holder)
+	} else if leaseCommand {
+		// Reclaim is controller-owned and must not inherit the actor of the
+		// process that happened to launch gc. A native reclaim's holder is the
+		// local replica, while its audit actor is still explicit and stable.
+		env["BEADS_ACTOR"] = "controller"
+	}
 }
 
 func canonicalScopeDoltTarget(cityPath, scopeRoot string) (contract.DoltConnectionTarget, bool, error) {
