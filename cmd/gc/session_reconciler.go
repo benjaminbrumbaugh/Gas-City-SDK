@@ -2901,6 +2901,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					fmt.Fprintf(stderr, "session reconciler: skipping abrupt restart-requested kill for pinned named session %s (bead %s)\n", name, id) //nolint:errcheck
 					continue
 				}
+				usageLimitRuntimeStopped := false
 				if runtimeRunning && strings.TrimSpace(infoByID[id].HealthReason) == sessionHealthReasonUsageLimitModal {
 					if err := usageLimitModalRuntimeMatchesInstance(sp, name, infoByID[id]); err != nil {
 						fmt.Fprintf(stderr, "session reconciler: usage-limit restart for %s no longer matches the observed runtime: %v; disarming restart\n", name, err) //nolint:errcheck
@@ -2918,8 +2919,19 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					if attached {
 						continue
 					}
+					// Stop through the already-resolved provider immediately after
+					// the final attachment observation. Reconstructing a worker
+					// handle here performs additional store and runtime reads, which
+					// creates a window for a human to attach before the destructive
+					// call. The durable fence and restart handoff were persisted
+					// above, so no further resolution is needed.
+					if err := sp.Stop(name); err != nil {
+						fmt.Fprintf(stderr, "session reconciler: stopping restart-requested %s: %v\n", name, err) //nolint:errcheck
+						continue
+					}
+					usageLimitRuntimeStopped = true
 				}
-				if runtimeRunning {
+				if runtimeRunning && !usageLimitRuntimeStopped {
 					if err := workerKillSessionTargetWithConfig("", store, sp, cfg, name); err != nil {
 						fmt.Fprintf(stderr, "session reconciler: stopping restart-requested %s: %v\n", name, err) //nolint:errcheck
 						continue

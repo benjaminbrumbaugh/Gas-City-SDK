@@ -534,6 +534,17 @@ func TestReconcileSessionBeads_UsageLimitModalRestartsWedgedSession(t *testing.T
 	if got.Metadata["started_config_hash"] != "" {
 		t.Errorf("started_config_hash = %q, want cleared so the next wake starts a fresh conversation", got.Metadata["started_config_hash"])
 	}
+	for i := len(env.sp.Calls) - 1; i >= 0; i-- {
+		call := env.sp.Calls[i]
+		if call.Method != "ObserveAttachment" || call.Name != sessionName {
+			continue
+		}
+		if i+1 >= len(env.sp.Calls) || env.sp.Calls[i+1].Method != "Stop" || env.sp.Calls[i+1].Name != sessionName {
+			t.Fatalf("final attachment observation was not immediately followed by stopping the same runtime: calls[%d:] = %+v", i, env.sp.Calls[i:])
+		}
+		return
+	}
+	t.Fatal("missing final attachment observation before usage-limit restart")
 }
 
 // TestReconcileSessionBeads_UsageLimitModalLeavesWorkingSessionAlone is the
