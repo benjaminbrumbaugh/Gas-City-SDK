@@ -427,7 +427,7 @@ func applyDefaultPolicy(input AdmitInput, admitted []RecipientSnapshot, rejectio
 	if input.DefaultPolicy == DefaultWhenNoExplicitRecipient && explicit > 0 {
 		return admitted, rejections
 	}
-	logicalID := defaultPrefix + strings.TrimSpace(input.Target.TargetID)
+	logicalID := defaultPrefix + input.Target.TargetID
 	if !input.Target.Configured() {
 		return admitted, append(rejections, RecipientRejection{
 			Kind:      KindConfiguredDefault,
@@ -438,7 +438,7 @@ func applyDefaultPolicy(input AdmitInput, admitted []RecipientSnapshot, rejectio
 	return append(admitted, RecipientSnapshot{
 		LogicalID: logicalID,
 		Kind:      KindConfiguredDefault,
-		Principal: strings.TrimSpace(input.Target.TargetID),
+		Principal: input.Target.TargetID,
 		IsDefault: true,
 		Reason:    ReasonConfiguredDefaultTarget,
 	}), rejections
@@ -517,9 +517,15 @@ func normalizeAdmitInput(input AdmitInput) (AdmitInput, error) {
 	if !input.Target.Configured() && input.Target.ConfigRevision != 0 {
 		return AdmitInput{}, invalidInput("target configuration revision requires a target identity")
 	}
-	if _, err := validateIdentity("target id", input.Target.TargetID, false); err != nil {
+	targetID, err := validateIdentity("target id", input.Target.TargetID, false)
+	if err != nil {
 		return AdmitInput{}, err
 	}
+	// The fence is persisted and compared verbatim on every re-admission, so it
+	// carries the canonical target identity rather than whatever padding the
+	// caller's configuration happened to hold. Otherwise the same configured
+	// target would fail closed as a stale fence purely on surrounding space.
+	input.Target.TargetID = targetID
 	return input, nil
 }
 

@@ -528,3 +528,38 @@ func TestSnapshotRouteIdentityIsNeverATarget(t *testing.T) {
 		t.Fatal("route data must be carried through verbatim as opaque data")
 	}
 }
+
+// TestAdmissionCanonicalizesTheTargetFence proves the admitting boundary
+// normalizes the configured target identity before it is persisted and
+// compared. The fence is stored verbatim and re-checked on every re-admission,
+// so a padded configuration value that is not canonicalized here would make the
+// same configured target read as a stale fence and fail closed forever.
+func TestAdmissionCanonicalizesTheTargetFence(t *testing.T) {
+	now := testTime()
+	padded := testAdmitInput(now)
+	padded.Target = TargetFence{TargetID: "  target-1  ", ConfigRevision: 7}
+	padded.DefaultPolicy = DefaultAlwaysDistinct
+
+	canonical := testAdmitInput(now)
+	canonical.DefaultPolicy = DefaultAlwaysDistinct
+
+	paddedRecipients, _, err := SelectRecipients(padded)
+	if err != nil {
+		t.Fatalf("SelectRecipients(padded) error = %v", err)
+	}
+	canonicalRecipients, _, err := SelectRecipients(canonical)
+	if err != nil {
+		t.Fatalf("SelectRecipients(canonical) error = %v", err)
+	}
+	if !reflect.DeepEqual(paddedRecipients, canonicalRecipients) {
+		t.Fatalf("padded target admitted %+v, want the canonical admission %+v", paddedRecipients, canonicalRecipients)
+	}
+
+	normalized, err := normalizeAdmitInput(padded)
+	if err != nil {
+		t.Fatalf("normalizeAdmitInput error = %v", err)
+	}
+	if !normalized.Target.Equal(TargetFence{TargetID: "target-1", ConfigRevision: 7}) {
+		t.Fatalf("normalized fence = %+v, want the canonical target identity", normalized.Target)
+	}
+}
