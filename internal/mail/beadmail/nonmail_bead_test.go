@@ -163,3 +163,52 @@ func TestUnaddressedMessageBeadStaysReadyExcluded(t *testing.T) {
 		t.Fatalf("IsMessageBead(%s) = false; the messaging-class predicate must stay a bare type check", sub.ID)
 	}
 }
+
+// TestSendRejectsBlankRecipient pins the premise the namespace rule rests on:
+// every mail bead carries a non-blank Assignee by construction. Send and
+// SendHandoff previously rejected only the empty string, so a whitespace-only
+// recipient minted a bead that isUnaddressedMessageBead then classifies as
+// non-mail — silently swallowing the message from every view that would
+// otherwise show it. Reject it at the door instead.
+func TestSendRejectsBlankRecipient(t *testing.T) {
+	for _, to := range []string{"", " ", "\t", "\n", "   "} {
+		store := beads.NewMemStore()
+		p := New(store)
+
+		if _, err := p.Send("human", to, "subject", "body"); err == nil {
+			t.Errorf("Send(to=%q) succeeded; want a recipient-required error", to)
+		}
+		if _, err := p.SendHandoff(mail.HandoffIntent{From: "human", To: to, Subject: "s", Body: "b"}); err == nil {
+			t.Errorf("SendHandoff(To=%q) succeeded; want a recipient-required error", to)
+		}
+
+		// Nothing was persisted, so no hidden bead is left behind.
+		all, err := store.List(beads.ListQuery{Type: "message", AllowScan: true})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if len(all) != 0 {
+			t.Errorf("to=%q created %d message bead(s); want none", to, len(all))
+		}
+	}
+}
+
+// TestSendKeepsPaddedRecipientAddressed guards the other side of the trim: a
+// padded-but-real route is still mail, so trimming must reject only the blank
+// case, never narrow a legitimate recipient out of the namespace.
+func TestSendKeepsPaddedRecipientAddressed(t *testing.T) {
+	store := beads.NewMemStore()
+	p := New(store)
+
+	sent, err := p.Send("human", " mayor ", "subject", "body")
+	if err != nil {
+		t.Fatalf("Send with padded recipient: %v", err)
+	}
+	got, err := p.Get(sent.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", sent.ID, err)
+	}
+	if got.ID != sent.ID {
+		t.Fatalf("Get returned %s, want %s", got.ID, sent.ID)
+	}
+}

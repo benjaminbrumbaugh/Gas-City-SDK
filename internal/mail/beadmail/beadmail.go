@@ -152,7 +152,11 @@ func (c *sessionInfoCache) isFresh(now time.Time) bool {
 // Returns an error if to is empty: blank recipients produce messages that never
 // appear in any inbox but still inflate global counts.
 func (p *Provider) Send(from, to, subject, body string) (mail.Message, error) {
-	if to == "" {
+	// Blank-after-trim, not just empty: the mail namespace is the addressed
+	// subset of type=message (see isUnaddressedMessageBead), so a whitespace-only
+	// recipient would mint a bead that every mail view then hides. Reject it at
+	// the door instead of silently swallowing the message.
+	if strings.TrimSpace(to) == "" {
 		return mail.Message{}, fmt.Errorf("beadmail send: recipient is required")
 	}
 	from, metadata, err := p.resolveSenderRoute(from)
@@ -183,7 +187,8 @@ func (p *Provider) Send(from, to, subject, body string) (mail.Message, error) {
 // implementation. Sender-route metadata is resolved exactly as [Provider.Send]
 // does, so handoff mail replies route correctly.
 func (p *Provider) SendHandoff(intent mail.HandoffIntent) (mail.Message, error) {
-	if intent.To == "" {
+	// Blank-after-trim, for the same reason as Send.
+	if strings.TrimSpace(intent.To) == "" {
 		return mail.Message{}, fmt.Errorf("beadmail handoff: recipient is required")
 	}
 	from, metadata, err := p.resolveSenderRoute(intent.From)
