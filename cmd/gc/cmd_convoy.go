@@ -390,7 +390,11 @@ func renderConvoyListFromAPI(cr api.CachedRead[[]beads.Bead], progress []api.Con
 	fmt.Fprintln(tw, "ID\tTITLE\tPROGRESS") //nolint:errcheck // best-effort stdout
 	for i, convoy := range cr.Body {
 		p := progress[i]
-		fmt.Fprintf(tw, "%s\t%s\t%d/%d closed\n", convoy.ID, convoy.Title, p.Closed, p.Total) //nolint:errcheck // best-effort stdout
+		formatted := formatConvoyProgress(convoyProgressFromAPI(p))
+		if p.AcceptanceGated {
+			formatted += " [" + p.AcceptanceState + "]"
+		}
+		fmt.Fprintf(tw, "%s	%s	%s\n", convoy.ID, convoy.Title, formatted) //nolint:errcheck // best-effort stdout
 	}
 	tw.Flush() //nolint:errcheck // best-effort stdout
 	if cr.AgeSeconds > cacheAgeBannerThresholdSeconds {
@@ -717,26 +721,6 @@ func collectOpenConvoys(stores []convoyStoreView) ([]convoyWithStore, error) {
 	return convoys, nil
 }
 
-func convoyProgressFromChildren(children []beads.Bead) convoyProgressJSON {
-	progress := convoyProgressJSON{Total: len(children)}
-	for _, ch := range children {
-		if convoycore.IsTerminalStatus(ch.Status) {
-			progress.Closed++
-		}
-		if convoycore.IsUnresolvedTrackedItem(ch) {
-			progress.DanglingTracks++
-		}
-	}
-	progress.Complete = progress.Total > 0 && progress.Closed == progress.Total
-	progress.AcceptedComplete = progress.Complete
-	if progress.Complete {
-		progress.AcceptanceState = convoycore.AcceptanceStateComplete
-	} else {
-		progress.AcceptanceState = convoycore.AcceptanceStateInProgress
-	}
-	return progress
-}
-
 func convoyProgressFromCore(progress convoycore.ConvoyProgressResult) convoyProgressJSON {
 	return convoyProgressJSON{
 		Closed:           progress.Closed,
@@ -873,7 +857,6 @@ func convoySummaryFromBead(convoy beads.Bead, children []beads.Bead) convoySumma
 		ID:       convoy.ID,
 		Title:    convoy.Title,
 		Status:   convoy.Status,
-		Progress: convoyProgressFromChildren(children),
 		Owned:    hasLabel(convoy.Labels, "owned"),
 		Fields:   convoyFieldsFromBead(convoy),
 		ChildIDs: childIDs,
@@ -963,8 +946,14 @@ func renderConvoyStatusFromAPI(cr api.CachedRead[api.ConvoyStatusView], jsonOut 
 	progress := cr.Body.Progress
 	if jsonOut {
 		return writeConvoyStatusJSON(convoy, children, convoyProgressFromAPI(api.ConvoyCheckView{
-			Closed: progress.Closed,
-			Total:  progress.Total,
+			Closed:           progress.Closed,
+			Total:            progress.Total,
+			Complete:         progress.Complete,
+			AcceptanceGated:  progress.AcceptanceGated,
+			AcceptedComplete: progress.AcceptedComplete,
+			AcceptanceState:  progress.AcceptanceState,
+			AcceptanceIssues: progress.AcceptanceIssues,
+			RemediationIDs:   progress.RemediationIDs,
 		}), stdout, stderr)
 	}
 
@@ -972,7 +961,20 @@ func renderConvoyStatusFromAPI(cr api.CachedRead[api.ConvoyStatusView], jsonOut 
 	w(fmt.Sprintf("Convoy:   %s", convoy.ID))
 	w(fmt.Sprintf("Title:    %s", convoy.Title))
 	w(fmt.Sprintf("Status:   %s", convoy.Status))
-	w(fmt.Sprintf("Progress: %d/%d closed", progress.Closed, progress.Total))
+	formatted := formatConvoyProgress(convoyProgressFromAPI(api.ConvoyCheckView{
+		Closed:           progress.Closed,
+		Total:            progress.Total,
+		Complete:         progress.Complete,
+		AcceptanceGated:  progress.AcceptanceGated,
+		AcceptedComplete: progress.AcceptedComplete,
+		AcceptanceState:  progress.AcceptanceState,
+		AcceptanceIssues: progress.AcceptanceIssues,
+		RemediationIDs:   progress.RemediationIDs,
+	}))
+	if progress.AcceptanceGated {
+		formatted += " [" + progress.AcceptanceState + "]"
+	}
+	w("Progress: " + formatted)
 	fields := getConvoyFields(convoy)
 	if hasLabel(convoy.Labels, "owned") {
 		w("Lifecycle: owned")

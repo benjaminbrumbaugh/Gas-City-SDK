@@ -1933,6 +1933,68 @@ func TestConvoyStatusJSONSeparatesAdministrativeAndAcceptedCompletion(t *testing
 	}
 }
 
+func TestRenderConvoyStatusFromAPIPreservesAcceptanceState(t *testing.T) {
+	cr := api.CachedRead[api.ConvoyStatusView]{
+		Body: api.ConvoyStatusView{
+			Convoy: beads.Bead{ID: "gc-1", Title: "program", Type: "convoy", Status: "open"},
+			Progress: api.ConvoyProgressView{
+				Total:            4,
+				Closed:           4,
+				Complete:         true,
+				AcceptanceGated:  true,
+				AcceptedComplete: false,
+				AcceptanceState:  "blocked-remediation",
+				AcceptanceIssues: []string{"review gate blocked"},
+				RemediationIDs:   []string{"gc-9"},
+			},
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := renderConvoyStatusFromAPI(cr, true, &stdout, &stderr); code != 0 {
+		t.Fatalf("renderConvoyStatusFromAPI = %d; stderr=%q", code, stderr.String())
+	}
+	var got convoyStatusResultJSON
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decode status JSON %q: %v", stdout.String(), err)
+	}
+	if !got.Progress.AcceptanceGated || got.Progress.AcceptedComplete || got.Progress.AcceptanceState != "blocked-remediation" {
+		t.Fatalf("progress = %+v, want blocked-remediation acceptance", got.Progress)
+	}
+	if len(got.Progress.AcceptanceIssues) != 1 || len(got.Progress.RemediationIDs) != 1 || got.Progress.RemediationIDs[0] != "gc-9" {
+		t.Fatalf("progress = %+v, want acceptance issue and remediation gc-9", got.Progress)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := renderConvoyStatusFromAPI(cr, false, &stdout, &stderr); code != 0 {
+		t.Fatalf("renderConvoyStatusFromAPI text = %d; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Progress: 4/4 closed [blocked-remediation]") {
+		t.Fatalf("stdout = %q, want acceptance state", stdout.String())
+	}
+}
+
+func TestRenderConvoyListFromAPIShowsAcceptanceState(t *testing.T) {
+	cr := api.CachedRead[[]beads.Bead]{Body: []beads.Bead{{ID: "gc-1", Title: "program", Type: "convoy", Status: "open"}}}
+	progress := []api.ConvoyCheckView{{
+		ConvoyID:        "gc-1",
+		Total:           4,
+		Closed:          4,
+		Complete:        true,
+		AcceptanceGated: true,
+		AcceptanceState: "blocked-remediation",
+	}}
+
+	var stdout, stderr bytes.Buffer
+	if code := renderConvoyListFromAPI(cr, progress, false, &stdout, &stderr); code != 0 {
+		t.Fatalf("renderConvoyListFromAPI = %d; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "4/4 closed [blocked-remediation]") {
+		t.Fatalf("stdout = %q, want acceptance state", stdout.String())
+	}
+}
+
 func createAcceptanceConvoyFixture(t *testing.T, owned bool, verdict string, remediationOpen bool) (beads.Store, string, string, string) {
 	t.Helper()
 	store := beads.NewMemStore()
