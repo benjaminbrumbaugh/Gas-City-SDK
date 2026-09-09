@@ -37,4 +37,5 @@ lives in the [Architecture](../architecture/index.md) section.
 | `two-minute-ci-blacksmith` | Proposed | Planner-driven Blacksmith CI architecture targeting two-minute required PR feedback |
 | `runtime-provider-packs` | Proposed | Runtime providers as pack-shipped executables speaking a versioned protocol (RPP); agent-provider specs as pack TOML; cloudflare-first PoC |
 | `structured-stream-format` | Accepted / Phase 1 partially implemented | Third session-stream/transcript format emitting typed, full-fidelity structured blocks (tool inputs, structured tool results, thinking, usage) so any consumer renders a rich UI without client-side enrichment |
+| `convoy-callback-contract-v1` | Accepted | Harness-neutral record for launched-convoy lifecycle callbacks: versioned kinds, required identity, opaque launch origin and route identity, and the `legacy.convoy.v0` read adapter |
 | `packv2/` | Historical / rollout ledger | PackV2 engineering design notes moved out of public docs; use user-facing guides and generated reference for current authoring guidance |
