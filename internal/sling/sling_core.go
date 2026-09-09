@@ -16,6 +16,7 @@ import (
 	"github.com/gastownhall/gascity/internal/formula"
 	"github.com/gastownhall/gascity/internal/graphroute"
 	"github.com/gastownhall/gascity/internal/graphv2"
+	"github.com/gastownhall/gascity/internal/launchorigin"
 	"github.com/gastownhall/gascity/internal/molecule"
 	"github.com/gastownhall/gascity/internal/sourceworkflow"
 	"github.com/gastownhall/gascity/internal/telemetry"
@@ -751,11 +752,21 @@ func finalize(opts SlingOpts, deps SlingDeps, beadID, method string, result Slin
 			if opts.Owned {
 				convoyLabels = []string{"owned"}
 			}
-			convoy, err := deps.Store.Create(beads.Bead{
+			convoyBead := beads.Bead{
 				Title:  fmt.Sprintf("sling-%s", beadID),
 				Type:   "convoy",
 				Labels: convoyLabels,
+			}
+			// Stamp the launching actor's opaque identity into the create
+			// itself, so a convoy is never observable without the origin it
+			// was launched with. Normalize refuses an origin the callback
+			// contract would reject, and an absent origin adds no key at all —
+			// a launch with no trustworthy actor route mints exactly the
+			// pre-capture bead.
+			convoycore.ApplyConvoyFields(&convoyBead, convoycore.ConvoyFields{
+				LaunchOrigin: launchorigin.Normalize(deps.LaunchOrigin),
 			})
+			convoy, err := deps.Store.Create(convoyBead)
 			if err != nil {
 				result.MetadataErrors = append(result.MetadataErrors,
 					fmt.Sprintf("creating auto-convoy: %v", err))

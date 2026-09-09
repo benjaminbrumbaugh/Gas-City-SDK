@@ -18,6 +18,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/execenv"
 	gitpkg "github.com/gastownhall/gascity/internal/git"
+	"github.com/gastownhall/gascity/internal/launchorigin"
 	"github.com/gastownhall/gascity/internal/sling"
 	"github.com/gastownhall/gascity/internal/sourceworkflow"
 )
@@ -28,6 +29,7 @@ type slingBody struct {
 	Bead           string            `json:"bead"`
 	Formula        string            `json:"formula"`
 	AttachedBeadID string            `json:"attached_bead_id"`
+	LaunchOrigin   string            `json:"launch_origin"`
 	Title          string            `json:"title"`
 	Vars           map[string]string `json:"vars"`
 	ScopeKind      string            `json:"scope_kind"`
@@ -116,14 +118,15 @@ func (s *Server) execSling(ctx context.Context, body slingBody, _ string) (*slin
 	sourceWorkflowScanWarnings := make(map[string]struct{})
 	var sourceWorkflowScanMessages []string
 	deps := sling.SlingDeps{
-		CityName:   s.state.CityName(),
-		CityPath:   s.state.CityPath(),
-		Cfg:        s.state.Config(),
-		SP:         s.state.SessionProvider(),
-		Store:      store,
-		GraphStore: s.state.GraphBeadStore().Store,
-		Events:     s.state.EventProvider(),
-		StoreRef:   storeRef,
+		CityName:     s.state.CityName(),
+		CityPath:     s.state.CityPath(),
+		Cfg:          s.state.Config(),
+		SP:           s.state.SessionProvider(),
+		Store:        store,
+		GraphStore:   s.state.GraphBeadStore().Store,
+		Events:       s.state.EventProvider(),
+		LaunchOrigin: launchorigin.Normalize(body.LaunchOrigin),
+		StoreRef:     storeRef,
 		SourceWorkflowStores: func() ([]sling.SourceWorkflowStore, error) {
 			return s.sourceWorkflowStores(), nil
 		},
