@@ -1667,14 +1667,29 @@ type ConvoyAddInputBody struct {
 
 // ConvoyCheckResponse defines model for ConvoyCheckResponse.
 type ConvoyCheckResponse struct {
-	// Closed Closed child bead count.
+	// AcceptanceGated True when the convoy opts into verdict-aware acceptance.
+	AcceptanceGated bool `json:"acceptance_gated"`
+
+	// AcceptanceIssues Bounded reasons semantic acceptance is withheld.
+	AcceptanceIssues *[]string `json:"acceptance_issues,omitempty"`
+
+	// AcceptanceState Verdict-aware lifecycle state: in-progress, complete, blocked-remediation, or stranded.
+	AcceptanceState string `json:"acceptance_state"`
+
+	// AcceptedComplete True when administrative completion and every declared acceptance gate pass.
+	AcceptedComplete bool `json:"accepted_complete"`
+
+	// Closed Administratively terminal child bead count.
 	Closed int64 `json:"closed"`
 
-	// Complete True when all child beads are closed and total > 0.
+	// Complete Administrative completion: all child beads are terminal and total is non-zero.
 	Complete bool `json:"complete"`
 
 	// ConvoyId Convoy ID.
 	ConvoyId string `json:"convoy_id"`
+
+	// RemediationIds Explicit remediation beads referenced by typed review verdicts.
+	RemediationIds *[]string `json:"remediation_ids,omitempty"`
 
 	// Total Total child bead count.
 	Total int64 `json:"total"`
@@ -1702,8 +1717,26 @@ type ConvoyGetResponse struct {
 
 // ConvoyProgress defines model for ConvoyProgress.
 type ConvoyProgress struct {
-	// Closed Closed child bead count.
+	// AcceptanceGated True when the convoy opts into verdict-aware acceptance.
+	AcceptanceGated bool `json:"acceptance_gated"`
+
+	// AcceptanceIssues Bounded reasons semantic acceptance is withheld.
+	AcceptanceIssues *[]string `json:"acceptance_issues,omitempty"`
+
+	// AcceptanceState Verdict-aware lifecycle state: in-progress, complete, blocked-remediation, or stranded.
+	AcceptanceState string `json:"acceptance_state"`
+
+	// AcceptedComplete True when administrative completion and every declared acceptance gate pass.
+	AcceptedComplete bool `json:"accepted_complete"`
+
+	// Closed Administratively terminal child bead count.
 	Closed int64 `json:"closed"`
+
+	// Complete Administrative completion: all child beads are terminal and total is non-zero.
+	Complete bool `json:"complete"`
+
+	// RemediationIds Explicit remediation beads referenced by typed review verdicts.
+	RemediationIds *[]string `json:"remediation_ids,omitempty"`
 
 	// Total Total child bead count.
 	Total int64 `json:"total"`

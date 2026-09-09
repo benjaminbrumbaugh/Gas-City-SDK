@@ -16,8 +16,14 @@ import (
 // convoyProgress is the shared {total, closed} progress shape used by
 // simple convoy detail and check responses.
 type convoyProgress struct {
-	Total  int `json:"total" doc:"Total child bead count."`
-	Closed int `json:"closed" doc:"Closed child bead count."`
+	Total            int      `json:"total" doc:"Total child bead count."`
+	Closed           int      `json:"closed" doc:"Administratively terminal child bead count."`
+	Complete         bool     `json:"complete" doc:"Administrative completion: all child beads are terminal and total is non-zero."`
+	AcceptanceGated  bool     `json:"acceptance_gated" doc:"True when the convoy opts into verdict-aware acceptance."`
+	AcceptedComplete bool     `json:"accepted_complete" doc:"True when administrative completion and every declared acceptance gate pass."`
+	AcceptanceState  string   `json:"acceptance_state" doc:"Verdict-aware lifecycle state: in-progress, complete, blocked-remediation, or stranded."`
+	AcceptanceIssues []string `json:"acceptance_issues,omitempty" doc:"Bounded reasons semantic acceptance is withheld."`
+	RemediationIDs   []string `json:"remediation_ids,omitempty" doc:"Explicit remediation beads referenced by typed review verdicts."`
 }
 
 // convoyGetResponse is the response for GET /v0/convoy/{id}. It is a union
@@ -38,10 +44,15 @@ type convoyGetResponse struct {
 
 // convoyCheckResponse is the response for GET /v0/convoy/{id}/check.
 type convoyCheckResponse struct {
-	ConvoyID string `json:"convoy_id" doc:"Convoy ID."`
-	Total    int    `json:"total" doc:"Total child bead count."`
-	Closed   int    `json:"closed" doc:"Closed child bead count."`
-	Complete bool   `json:"complete" doc:"True when all child beads are closed and total > 0."`
+	ConvoyID         string   `json:"convoy_id" doc:"Convoy ID."`
+	Total            int      `json:"total" doc:"Total child bead count."`
+	Closed           int      `json:"closed" doc:"Administratively terminal child bead count."`
+	Complete         bool     `json:"complete" doc:"Administrative completion: all child beads are terminal and total is non-zero."`
+	AcceptanceGated  bool     `json:"acceptance_gated" doc:"True when the convoy opts into verdict-aware acceptance."`
+	AcceptedComplete bool     `json:"accepted_complete" doc:"True when administrative completion and every declared acceptance gate pass."`
+	AcceptanceState  string   `json:"acceptance_state" doc:"Verdict-aware lifecycle state: in-progress, complete, blocked-remediation, or stranded."`
+	AcceptanceIssues []string `json:"acceptance_issues,omitempty" doc:"Bounded reasons semantic acceptance is withheld."`
+	RemediationIDs   []string `json:"remediation_ids,omitempty" doc:"Explicit remediation beads referenced by typed review verdicts."`
 }
 
 // workflowDeleteResponse is the response for DELETE /v0/workflow/{workflow_id}.
@@ -181,12 +192,9 @@ func (s *Server) humaHandleConvoyGet(_ context.Context, input *ConvoyGetInput) (
 			children = []beads.Bead{}
 		}
 
-		total := len(children)
-		closed := 0
-		for _, c := range children {
-			if convoycore.IsTerminalStatus(c.Status) {
-				closed++
-			}
+		progress, err := convoycore.ConvoyProgress(convoycore.ConvoyDeps{}, convoycore.MemberClasses{Convoy: store}, id)
+		if err != nil {
+			return nil, apierr.Internal.Msg(err.Error())
 		}
 
 		return &IndexOutput[convoyGetResponse]{
@@ -195,7 +203,16 @@ func (s *Server) humaHandleConvoyGet(_ context.Context, input *ConvoyGetInput) (
 			Body: convoyGetResponse{
 				Convoy:   &b,
 				Children: children,
-				Progress: &convoyProgress{Total: total, Closed: closed},
+				Progress: &convoyProgress{
+					Total:            progress.Total,
+					Closed:           progress.Closed,
+					Complete:         progress.Complete,
+					AcceptanceGated:  progress.AcceptanceGated,
+					AcceptedComplete: progress.AcceptedComplete,
+					AcceptanceState:  progress.AcceptanceState,
+					AcceptanceIssues: progress.AcceptanceIssues,
+					RemediationIDs:   progress.RemediationIDs,
+				},
 			},
 		}, nil
 	}
@@ -420,28 +437,24 @@ func (s *Server) humaHandleConvoyCheck(_ context.Context, input *ConvoyCheckInpu
 			return nil, apierr.InvalidRequest.Msg("bead " + id + " is not a convoy")
 		}
 
-		children, err := convoycore.Members(store, id, true)
+		progress, err := convoycore.ConvoyProgress(convoycore.ConvoyDeps{}, convoycore.MemberClasses{Convoy: store}, id)
 		if err != nil {
 			return nil, apierr.Internal.Msg(err.Error())
 		}
 
-		total := len(children)
-		closed := 0
-		for _, c := range children {
-			if convoycore.IsTerminalStatus(c.Status) {
-				closed++
-			}
-		}
-
-		complete := total > 0 && closed == total
 		return &IndexOutput[convoyCheckResponse]{
 			Index:     s.latestIndex(),
 			CacheAgeS: cacheAgeSeconds(cityStore),
 			Body: convoyCheckResponse{
-				ConvoyID: id,
-				Total:    total,
-				Closed:   closed,
-				Complete: complete,
+				ConvoyID:         id,
+				Total:            progress.Total,
+				Closed:           progress.Closed,
+				Complete:         progress.Complete,
+				AcceptanceGated:  progress.AcceptanceGated,
+				AcceptedComplete: progress.AcceptedComplete,
+				AcceptanceState:  progress.AcceptanceState,
+				AcceptanceIssues: progress.AcceptanceIssues,
+				RemediationIDs:   progress.RemediationIDs,
 			},
 		}, nil
 	}
@@ -465,7 +478,14 @@ func (s *Server) humaHandleConvoyClose(_ context.Context, input *ConvoyCloseInpu
 		if b.Type != "convoy" {
 			return nil, apierr.InvalidRequest.Msg("bead " + id + " is not a convoy")
 		}
-		if err := store.Close(id); err != nil {
+		if _, err := convoycore.ValidateConvoyClose(store, id); err != nil {
+			var refusal *convoycore.AcceptanceRefusalError
+			if errors.As(err, &refusal) {
+				return nil, apierr.ConflictWrongState.Msg(err.Error())
+			}
+			return nil, apierr.Internal.Msg(err.Error())
+		}
+		if err := convoycore.ConvoyClose(convoycore.ConvoyDeps{}, store, id); err != nil {
 			return nil, apierr.Internal.Msg(err.Error())
 		}
 		resp := &OKResponse{}

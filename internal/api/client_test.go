@@ -1260,10 +1260,15 @@ func TestClientCheckConvoy(t *testing.T) {
 		w.Header().Set("X-GC-Cache-Age-S", "0")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-			"convoy_id": "gc-1",
-			"total":     2,
-			"closed":    2,
-			"complete":  true,
+			"convoy_id":         "gc-1",
+			"total":             2,
+			"closed":            2,
+			"complete":          true,
+			"acceptance_gated":  true,
+			"accepted_complete": false,
+			"acceptance_state":  "stranded",
+			"acceptance_issues": []string{"review gate blocked"},
+			"remediation_ids":   []string{"gc-fix"},
 		})
 	}))
 	defer ts.Close()
@@ -1275,6 +1280,9 @@ func TestClientCheckConvoy(t *testing.T) {
 	}
 	if got.Body.ConvoyID != "gc-1" || got.Body.Total != 2 || got.Body.Closed != 2 || !got.Body.Complete {
 		t.Errorf("Body = %+v", got.Body)
+	}
+	if !got.Body.AcceptanceGated || got.Body.AcceptedComplete || got.Body.AcceptanceState != "stranded" || len(got.Body.AcceptanceIssues) != 1 || len(got.Body.RemediationIDs) != 1 || got.Body.RemediationIDs[0] != "gc-fix" {
+		t.Errorf("acceptance Body = %+v", got.Body)
 	}
 }
 

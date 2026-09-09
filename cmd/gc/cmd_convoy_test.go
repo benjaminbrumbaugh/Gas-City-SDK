@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/api"
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
@@ -1865,6 +1866,186 @@ func TestConvoyLandWithNotify(t *testing.T) {
 	if !strings.Contains(stdout.String(), "notify: mayor") {
 		t.Errorf("stdout = %q, want notify message", stdout.String())
 	}
+}
+
+func TestConvoyAutocloseWithholdsAcceptanceOnReviewBlock(t *testing.T) {
+	store, convoyID, reviewID, remediationID := createAcceptanceConvoyFixture(t, false, "block", false)
+
+	var stdout bytes.Buffer
+	doConvoyAutocloseWith(store, events.Discard, reviewID, &stdout, &bytes.Buffer{})
+
+	convoy, err := store.Get(convoyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if convoy.Status != "open" {
+		t.Fatalf("convoy status = %q, want open because review BLOCK cannot be accepted (remediation %s is terminal)", convoy.Status, remediationID)
+	}
+	if strings.Contains(stdout.String(), "Auto-closed") {
+		t.Fatalf("autoclose output = %q, must not report acceptance-gated BLOCK as closed", stdout.String())
+	}
+}
+
+func TestConvoyLandForceCannotBypassAcceptanceGate(t *testing.T) {
+	store, convoyID, _, remediationID := createAcceptanceConvoyFixture(t, true, "block", true)
+
+	var stdout, stderr bytes.Buffer
+	code := doConvoyLand(store, events.Discard, []string{convoyID}, landOpts{Force: true}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("doConvoyLand --force = %d, want 1; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "blocked-remediation") || !strings.Contains(stderr.String(), remediationID) {
+		t.Fatalf("stderr = %q, want blocked-remediation state and discoverable remediation %s", stderr.String(), remediationID)
+	}
+	convoy, err := store.Get(convoyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if convoy.Status != "open" {
+		t.Fatalf("convoy status = %q, want open after refused forced land", convoy.Status)
+	}
+}
+
+func TestConvoyStatusJSONSeparatesAdministrativeAndAcceptedCompletion(t *testing.T) {
+	store, convoyID, _, remediationID := createAcceptanceConvoyFixture(t, true, "block", true)
+
+	var stdout, stderr bytes.Buffer
+	if code := doConvoyStatusWithJSON(store, []string{convoyID}, true, &stdout, &stderr); code != 0 {
+		t.Fatalf("doConvoyStatusWithJSON = %d; stderr=%q", code, stderr.String())
+	}
+	var got struct {
+		Progress struct {
+			Complete         bool     `json:"complete"`
+			AcceptanceGated  bool     `json:"acceptance_gated"`
+			AcceptedComplete bool     `json:"accepted_complete"`
+			AcceptanceState  string   `json:"acceptance_state"`
+			RemediationIDs   []string `json:"remediation_ids"`
+		} `json:"progress"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decode status JSON %q: %v", stdout.String(), err)
+	}
+	if got.Progress.Complete || !got.Progress.AcceptanceGated || got.Progress.AcceptedComplete || got.Progress.AcceptanceState != "blocked-remediation" {
+		t.Fatalf("progress = %+v, want administrative incomplete and blocked-remediation acceptance", got.Progress)
+	}
+	if len(got.Progress.RemediationIDs) != 1 || got.Progress.RemediationIDs[0] != remediationID {
+		t.Fatalf("remediation_ids = %v, want [%s]", got.Progress.RemediationIDs, remediationID)
+	}
+}
+
+func TestRenderConvoyStatusFromAPIPreservesAcceptanceState(t *testing.T) {
+	cr := api.CachedRead[api.ConvoyStatusView]{
+		Body: api.ConvoyStatusView{
+			Convoy: beads.Bead{ID: "gc-1", Title: "program", Type: "convoy", Status: "open"},
+			Progress: api.ConvoyProgressView{
+				Total:            4,
+				Closed:           4,
+				Complete:         true,
+				AcceptanceGated:  true,
+				AcceptedComplete: false,
+				AcceptanceState:  "blocked-remediation",
+				AcceptanceIssues: []string{"review gate blocked"},
+				RemediationIDs:   []string{"gc-9"},
+			},
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := renderConvoyStatusFromAPI(cr, true, &stdout, &stderr); code != 0 {
+		t.Fatalf("renderConvoyStatusFromAPI = %d; stderr=%q", code, stderr.String())
+	}
+	var got convoyStatusResultJSON
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decode status JSON %q: %v", stdout.String(), err)
+	}
+	if !got.Progress.AcceptanceGated || got.Progress.AcceptedComplete || got.Progress.AcceptanceState != "blocked-remediation" {
+		t.Fatalf("progress = %+v, want blocked-remediation acceptance", got.Progress)
+	}
+	if len(got.Progress.AcceptanceIssues) != 1 || len(got.Progress.RemediationIDs) != 1 || got.Progress.RemediationIDs[0] != "gc-9" {
+		t.Fatalf("progress = %+v, want acceptance issue and remediation gc-9", got.Progress)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := renderConvoyStatusFromAPI(cr, false, &stdout, &stderr); code != 0 {
+		t.Fatalf("renderConvoyStatusFromAPI text = %d; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Progress: 4/4 closed [blocked-remediation]") {
+		t.Fatalf("stdout = %q, want acceptance state", stdout.String())
+	}
+}
+
+func TestRenderConvoyListFromAPIShowsAcceptanceState(t *testing.T) {
+	cr := api.CachedRead[[]beads.Bead]{Body: []beads.Bead{{ID: "gc-1", Title: "program", Type: "convoy", Status: "open"}}}
+	progress := []api.ConvoyCheckView{{
+		ConvoyID:        "gc-1",
+		Total:           4,
+		Closed:          4,
+		Complete:        true,
+		AcceptanceGated: true,
+		AcceptanceState: "blocked-remediation",
+	}}
+
+	var stdout, stderr bytes.Buffer
+	if code := renderConvoyListFromAPI(cr, progress, false, &stdout, &stderr); code != 0 {
+		t.Fatalf("renderConvoyListFromAPI = %d; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "4/4 closed [blocked-remediation]") {
+		t.Fatalf("stdout = %q, want acceptance state", stdout.String())
+	}
+}
+
+func createAcceptanceConvoyFixture(t *testing.T, owned bool, verdict string, remediationOpen bool) (beads.Store, string, string, string) {
+	t.Helper()
+	store := beads.NewMemStore()
+	candidate, err := store.Create(beads.Bead{Title: "implementation", Metadata: map[string]string{beadmeta.WorkCommitMetadataKey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := store.Create(beads.Bead{Title: "gate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remediation, err := store.Create(beads.Bead{Title: "repair finding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := []string(nil)
+	if owned {
+		labels = []string{"owned"}
+	}
+	contract := fmt.Sprintf(`{"contract_version":1,"candidate_work_id":%q,"candidate_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","review_gate_ids":[%q]}`, candidate.ID, review.ID)
+	convoy, err := store.Create(beads.Bead{Title: "program", Type: "convoy", Labels: labels, Metadata: map[string]string{beadmeta.ConvoyAcceptanceMetadataKey: contract}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{candidate.ID, review.ID, remediation.ID} {
+		if err := store.DepAdd(convoy.ID, id, "tracks"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	envelope := fmt.Sprintf(`{"contract_version":1,"disposition":"deliverable","work_id":%q,"recorded_by":"gate-agent","reason":"review complete","producer":"gate-agent","passing_verdict":"review_verdict","candidate_work_id":%q,"candidate_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","remediation_ids":[%q]}`, review.ID, candidate.ID, remediation.ID)
+	for key, value := range map[string]string{
+		beadmeta.CoordinatorOutcomeProducerDispositionMetadataKey: envelope,
+		beadmeta.ReviewGateMetadataKey:                            "consumed",
+		beadmeta.CoordinatorPassingVerdictReview:                  verdict,
+	} {
+		if err := store.SetMetadata(review.ID, key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(candidate.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(review.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !remediationOpen {
+		if err := store.Close(remediation.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return store, convoy.ID, review.ID, remediation.ID
 }
 
 func requireConvoyTrack(t *testing.T, store beads.Store, convoyID, itemID string) {

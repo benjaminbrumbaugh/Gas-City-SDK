@@ -2197,18 +2197,50 @@
       "ConvoyCheckResponse": {
         "additionalProperties": false,
         "properties": {
+          "acceptance_gated": {
+            "description": "True when the convoy opts into verdict-aware acceptance.",
+            "type": "boolean"
+          },
+          "acceptance_issues": {
+            "description": "Bounded reasons semantic acceptance is withheld.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "acceptance_state": {
+            "description": "Verdict-aware lifecycle state: in-progress, complete, blocked-remediation, or stranded.",
+            "type": "string"
+          },
+          "accepted_complete": {
+            "description": "True when administrative completion and every declared acceptance gate pass.",
+            "type": "boolean"
+          },
           "closed": {
-            "description": "Closed child bead count.",
+            "description": "Administratively terminal child bead count.",
             "format": "int64",
             "type": "integer"
           },
           "complete": {
-            "description": "True when all child beads are closed and total \u003e 0.",
+            "description": "Administrative completion: all child beads are terminal and total is non-zero.",
             "type": "boolean"
           },
           "convoy_id": {
             "description": "Convoy ID.",
             "type": "string"
+          },
+          "remediation_ids": {
+            "description": "Explicit remediation beads referenced by typed review verdicts.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "total": {
             "description": "Total child bead count.",
@@ -2220,7 +2252,10 @@
           "convoy_id",
           "total",
           "closed",
-          "complete"
+          "complete",
+          "acceptance_gated",
+          "accepted_complete",
+          "acceptance_state"
         ],
         "type": "object"
       },
@@ -2279,10 +2314,46 @@
       "ConvoyProgress": {
         "additionalProperties": false,
         "properties": {
+          "acceptance_gated": {
+            "description": "True when the convoy opts into verdict-aware acceptance.",
+            "type": "boolean"
+          },
+          "acceptance_issues": {
+            "description": "Bounded reasons semantic acceptance is withheld.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "acceptance_state": {
+            "description": "Verdict-aware lifecycle state: in-progress, complete, blocked-remediation, or stranded.",
+            "type": "string"
+          },
+          "accepted_complete": {
+            "description": "True when administrative completion and every declared acceptance gate pass.",
+            "type": "boolean"
+          },
           "closed": {
-            "description": "Closed child bead count.",
+            "description": "Administratively terminal child bead count.",
             "format": "int64",
             "type": "integer"
+          },
+          "complete": {
+            "description": "Administrative completion: all child beads are terminal and total is non-zero.",
+            "type": "boolean"
+          },
+          "remediation_ids": {
+            "description": "Explicit remediation beads referenced by typed review verdicts.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "total": {
             "description": "Total child bead count.",
@@ -2292,7 +2363,11 @@
         },
         "required": [
           "total",
-          "closed"
+          "closed",
+          "complete",
+          "acceptance_gated",
+          "accepted_complete",
+          "acceptance_state"
         ],
         "type": "object"
       },

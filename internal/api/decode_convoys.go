@@ -17,17 +17,28 @@ type ConvoyStatusView struct {
 // ConvoyProgressView is the aggregate child count surface used by status and
 // list rendering.
 type ConvoyProgressView struct {
-	Total  int
-	Closed int
+	Total            int
+	Closed           int
+	Complete         bool
+	AcceptanceGated  bool
+	AcceptedComplete bool
+	AcceptanceState  string
+	AcceptanceIssues []string
+	RemediationIDs   []string
 }
 
 // ConvoyCheckView is the CLI-facing shape for `gc convoy check` per-convoy
 // completion evaluation.
 type ConvoyCheckView struct {
-	ConvoyID string
-	Total    int
-	Closed   int
-	Complete bool
+	ConvoyID         string
+	Total            int
+	Closed           int
+	Complete         bool
+	AcceptanceGated  bool
+	AcceptedComplete bool
+	AcceptanceState  string
+	AcceptanceIssues []string
+	RemediationIDs   []string
 }
 
 // beadFromGen translates one genclient.Bead into the internal beads.Bead used
@@ -128,9 +139,20 @@ func convoyStatusFromGen(g *genclient.ConvoyGetResponse) ConvoyStatusView {
 	}
 	if g.Progress != nil {
 		out.Progress = ConvoyProgressView{
-			Total:  int(g.Progress.Total),
-			Closed: int(g.Progress.Closed),
+			Total:            int(g.Progress.Total),
+			Closed:           int(g.Progress.Closed),
+			Complete:         g.Progress.Complete,
+			AcceptanceGated:  g.Progress.AcceptanceGated,
+			AcceptedComplete: g.Progress.AcceptedComplete,
+			AcceptanceState:  g.Progress.AcceptanceState,
 		}
+		if g.Progress.AcceptanceIssues != nil {
+			out.Progress.AcceptanceIssues = append([]string(nil), (*g.Progress.AcceptanceIssues)...)
+		}
+		if g.Progress.RemediationIds != nil {
+			out.Progress.RemediationIDs = append([]string(nil), (*g.Progress.RemediationIds)...)
+		}
+		normalizeLegacyConvoyProgress(&out.Progress)
 	}
 	return out
 }
@@ -141,10 +163,43 @@ func convoyCheckFromGen(g *genclient.ConvoyCheckResponse) ConvoyCheckView {
 	if g == nil {
 		return ConvoyCheckView{}
 	}
-	return ConvoyCheckView{
-		ConvoyID: g.ConvoyId,
-		Total:    int(g.Total),
-		Closed:   int(g.Closed),
-		Complete: g.Complete,
+	out := ConvoyCheckView{
+		ConvoyID:         g.ConvoyId,
+		Total:            int(g.Total),
+		Closed:           int(g.Closed),
+		Complete:         g.Complete,
+		AcceptanceGated:  g.AcceptanceGated,
+		AcceptedComplete: g.AcceptedComplete,
+		AcceptanceState:  g.AcceptanceState,
+		AcceptanceIssues: stringSliceFromPtr(g.AcceptanceIssues),
+		RemediationIDs:   stringSliceFromPtr(g.RemediationIds),
 	}
+	if !out.AcceptanceGated && out.AcceptanceState == "" {
+		out.AcceptedComplete = out.Complete
+		if out.Complete {
+			out.AcceptanceState = "complete"
+		} else {
+			out.AcceptanceState = "in-progress"
+		}
+	}
+	return out
+}
+
+func normalizeLegacyConvoyProgress(progress *ConvoyProgressView) {
+	if progress.AcceptanceGated || progress.AcceptanceState != "" {
+		return
+	}
+	progress.AcceptedComplete = progress.Complete
+	if progress.Complete {
+		progress.AcceptanceState = "complete"
+	} else {
+		progress.AcceptanceState = "in-progress"
+	}
+}
+
+func stringSliceFromPtr(values *[]string) []string {
+	if values == nil {
+		return nil
+	}
+	return append([]string(nil), (*values)...)
 }
