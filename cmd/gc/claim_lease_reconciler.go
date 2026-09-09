@@ -280,7 +280,7 @@ func (cr *CityRuntime) claimLeaseScopes() []claimLeaseScope {
 		return scopes
 	}
 	suspension := loadSuspensionStateBestEffort(cr.cityPath)
-	rigStores := cr.rigBeadStores()
+	rigStores := cr.rigBeadStores() // residency:allow lease reconciliation scopes only active configured rigs
 	for _, rig := range cr.cfg.Rigs {
 		if strings.TrimSpace(rig.Path) == "" || !rigStoreBackgroundRefresh(suspension, rig) {
 			continue
