@@ -3,12 +3,12 @@ package doctor
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/testutil"
 )
 
 // RED tests for RigGHDefaultRepoCheck (sdk-42t). A rig repo with several
@@ -327,9 +327,6 @@ func TestRigGHDefaultRepoCheck_Metadata(t *testing.T) {
 
 func initGitRepoWithRemotes(t *testing.T, remotes []ghRemote) string {
 	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skipf("git unavailable: %v", err)
-	}
 	// Isolate from ambient user/system git config: a machine-global
 	// remote.pushDefault would otherwise change what the check compares.
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
@@ -351,10 +348,5 @@ func initGitRepoWithRemotes(t *testing.T, remotes []ghRemote) string {
 
 func runGitForGHDefaultRepoTest(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-	}
+	testutil.RunGit(t, dir, args...)
 }
