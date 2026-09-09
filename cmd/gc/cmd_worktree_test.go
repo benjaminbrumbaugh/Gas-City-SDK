@@ -262,6 +262,12 @@ func TestCmdWorktreeCleanupJSONReportsPendingSafetyRefusal(t *testing.T) {
 // onto a bead would have stored 0001-01-01T00:00:00Z as a creation time.
 func TestCmdWorktreeEnsureDryRunJSONContract(t *testing.T) {
 	t.Setenv("GC_JSON_CONTRACT_STRICT", "1")
+	spaceCWD := filepath.Join(t.TempDir(), "checkout with spaces")
+	if err := os.Mkdir(spaceCWD, 0o755); err != nil {
+		t.Fatalf("MkdirAll space-containing CWD: %v", err)
+	}
+	t.Chdir(spaceCWD)
+
 	repo, base := worktreeTestRepo(t)
 	root := t.TempDir()
 	wt := filepath.Join(root, "wt")
