@@ -301,6 +301,16 @@ if [ "$1" = "bd" ] && [ "$2" = "show" ]; then
   cat "${FAKE_GC_BEAD:?}"
   exit 0
 fi
+if [ "$1" = "sling" ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      bead_id=*|convoy_id=*)
+        echo "reserved formula variable supplied by caller: $arg" >&2
+        exit 1
+        ;;
+    esac
+  done
+fi
 exit 0
 `
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {

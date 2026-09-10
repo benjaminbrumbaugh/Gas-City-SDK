@@ -138,7 +138,7 @@ route_repair() {
     fi
 
     if ! output="$(gc sling "$route" "$id" --on "$workflow" --no-convoy --reassign \
-        --var "bead_id=$id" --var "repair_script=$WORKER" 2>&1)"; then
+        --var "repair_script=$WORKER" 2>&1)"; then
         gc bd update "$id" \
             --set-metadata gc.candidate_review_state=repair_failed \
             --set-metadata gc.candidate_review_last_error="repair dispatch failed: $output" \
