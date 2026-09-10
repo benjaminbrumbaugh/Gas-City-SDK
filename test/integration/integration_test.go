@@ -1303,6 +1303,11 @@ func integrationEnvFor(gcHome, runtimeDir string, useDolt bool) []string {
 	// (resolveAutoStart priority bug), so the env var is the only
 	// reliable kill-switch. Mirrors bdRuntimeEnv in cmd/gc/bd_env.go.
 	env = append(env, "BEADS_DOLT_AUTO_START=0")
+	// Isolated integration supervisors are intentionally foreground/bare
+	// children. Never let gc register their isolated GC_HOME with the host's
+	// launchd or systemd; the explicit command contract keeps this harness
+	// independent of platform service-manager state.
+	env = append(env, "GC_SUPERVISOR_SERVICE_MANAGER=none")
 	return env
 }
 
@@ -1893,6 +1898,9 @@ func TestIntegrationEnvForUsesIsolatedHome(t *testing.T) {
 	}
 	if got["BEADS_DOLT_AUTO_START"] != "0" {
 		t.Fatalf("BEADS_DOLT_AUTO_START = %q, want %q; tests must match bdRuntimeEnv and suppress bd's rogue auto-start", got["BEADS_DOLT_AUTO_START"], "0")
+	}
+	if got["GC_SUPERVISOR_SERVICE_MANAGER"] != "none" {
+		t.Fatalf("GC_SUPERVISOR_SERVICE_MANAGER = %q, want %q; isolated supervisors must not touch the host service manager", got["GC_SUPERVISOR_SERVICE_MANAGER"], "none")
 	}
 	for _, key := range []string{
 		"BEADS_DIR",

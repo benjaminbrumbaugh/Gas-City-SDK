@@ -39,6 +39,8 @@ var (
 	reloadSupervisorHook                     = reloadSupervisor
 	supervisorAliveHook                      = supervisorAlive
 	supervisorInstallHook                    = doSupervisorInstall
+	doSupervisorStartHook                    = doSupervisorStart
+	supervisorExecutable                     = os.Executable
 	supervisorReadyTimeout                   = 15 * time.Second
 	supervisorReadyPollInterval              = 100 * time.Millisecond
 	supervisorSystemdWarmRefreshStopTimeout  = 5 * time.Second
@@ -551,7 +553,7 @@ func doSupervisorStartJSON(stdout, stderr io.Writer, jsonOut bool) int {
 		fmt.Fprintf(stderr, "gc supervisor start: supervisor already running (PID %d)\n", pid) //nolint:errcheck // best-effort stderr
 		return 1
 	}
-	if supervisorRuntimeGOOS == "darwin" {
+	if supervisorRuntimeGOOS == "darwin" && !supervisorServiceManagerBypassed() {
 		label := supervisorLaunchdLabel()
 		if !supervisorLaunchdRegistered(label) {
 			fmt.Fprintln(stderr, "gc supervisor start: launchd service is not registered; run 'gc supervisor install' so launchd owns supervisor availability") //nolint:errcheck // best-effort stderr
@@ -567,7 +569,7 @@ func doSupervisorStartJSON(stdout, stderr io.Writer, jsonOut bool) int {
 	}
 	lock.Close() //nolint:errcheck // release probe lock
 
-	gcPath, err := os.Executable()
+	gcPath, err := supervisorExecutable()
 	if err != nil {
 		fmt.Fprintf(stderr, "gc supervisor start: finding executable: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
@@ -727,6 +729,16 @@ func ensureSupervisorRunning(stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gc supervisor start: %s\n", msg) //nolint:errcheck // best-effort stderr
 		return 1
 	}
+	if supervisorServiceManagerBypassed() {
+		// An explicit opt-out is for hermetic environments that must not
+		// register a job in the host service manager. Keep the existing
+		// supervisor when one is already live; otherwise use the bare-child
+		// lifecycle path.
+		if supervisorAliveHook() != 0 {
+			return 0
+		}
+		return doSupervisorStartHook(stdout, stderr)
+	}
 	// Always regenerate the service file so upgrades pick up template
 	// changes (e.g. PATH captured from the user's shell).
 	if supervisorInstallHook(stdout, stderr) != 0 {
@@ -740,7 +752,7 @@ func ensureSupervisorRunning(stdout, stderr io.Writer) int {
 			return 0
 		}
 		// Fall back to bare start if install fails (e.g., unsupported OS).
-		return doSupervisorStart(stdout, stderr)
+		return doSupervisorStartHook(stdout, stderr)
 	}
 	if supervisorRuntimeGOOS == "darwin" {
 		label := supervisorLaunchdLabel()

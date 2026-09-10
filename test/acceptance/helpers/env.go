@@ -76,13 +76,15 @@ func NewEnv(gcBinary, gcHome, runtimeDir string) *Env {
 		e.vars["PATH"] = filepath.Dir(gcBinary) + ":" + e.vars["PATH"]
 	}
 
-	// Prepend shims for the platform service managers so `gc init` never
-	// hands the supervisor off to the real host launchd/systemd. The
-	// shims exit non-zero, which causes ensureSupervisorRunning to fall
-	// through to doSupervisorStart (bare fork). Without this on Mac,
-	// launchctl load succeeds and launchd starts a supervisor that
-	// doesn't inherit the test's isolation env vars, so the K8s session
-	// provider fires for hyperscale and fails on missing kubeconfig.
+	// Explicitly opt out of the platform service manager so `gc init` never
+	// hands the supervisor off to the real host launchd/systemd. Without this
+	// on macOS, launchd ownership is authoritative and a failed install cannot
+	// fall back to the bare child that the acceptance harness needs.
+	e.vars[supervisorServiceManagerEnv] = "none"
+
+	// Keep shims as a backstop for any path that still reaches for a platform
+	// service manager under an isolated GC_HOME. The shims exit non-zero so an
+	// accidental host-manager path fails loudly instead of registering a job.
 	//
 	// Panic on failure: silently dropping the shim would look like a
 	// random hyperscale infra regression on Mac with no breadcrumb.
@@ -117,11 +119,14 @@ func NewEnv(gcBinary, gcHome, runtimeDir string) *Env {
 	return e
 }
 
+// supervisorServiceManagerEnv mirrors cmd/gc's opt-out. gc is exercised as a
+// built binary here, so the constant cannot be imported across packages.
+const supervisorServiceManagerEnv = "GC_SUPERVISOR_SERVICE_MANAGER"
+
 // installServiceManagerShims writes no-op launchctl/systemctl stubs under
 // gcHome/bin and returns that directory so the acceptance env can prepend
-// it to PATH. The stubs exit 1 so gc's supervisor-install logic falls
-// back to an in-process supervisor start instead of delegating to the
-// host's real service manager (which would also inherit the wrong env).
+// it to PATH. The explicit opt-out is the lifecycle contract; the shims are
+// only a backstop against an accidental host service-manager call.
 func installServiceManagerShims(gcHome string) (string, error) {
 	shimDir := filepath.Join(gcHome, "bin")
 	if err := os.MkdirAll(shimDir, 0o755); err != nil {
