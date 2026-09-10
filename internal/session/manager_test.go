@@ -699,14 +699,10 @@ func TestStartRuntimeOnlyProceedsWhenOrphanConfirmedDead(t *testing.T) {
 	}
 }
 
-// TestStartUnwindsACPRouteWhenOrphanNotConfirmedDead pins the route-unwinding
-// half of the fix: when the resume path reserved an ACP route before the
-// pre-start orphan gate, a refusal must call unroute() so the reservation is
-// released rather than leaked. It seeds an ACP-transport session bead directly
-// (mirroring the legacy-ACP fixtures elsewhere in this file) so ensureRunning
-// reserves a route via RouteACP, then arms a not-confirmed-dead orphan and
-// asserts Unroute fires and no runtime Start is attempted.
-func TestStartUnwindsACPRouteWhenOrphanNotConfirmedDead(t *testing.T) {
+// TestStartRetainsACPRouteWhenOrphanNotConfirmedDead pins the durable routing
+// contract: a failed start must retain its explicit ACP route so later liveness
+// and cleanup operations continue to inspect the backend that owns the name.
+func TestStartRetainsACPRouteWhenOrphanNotConfirmedDead(t *testing.T) {
 	store := beads.NewMemStore()
 	sp := &acpOrphanScanProvider{orphanScanProvider: &orphanScanProvider{Fake: runtime.NewFake()}}
 	armUnconfirmedOrphan(sp.orphanScanProvider)
@@ -745,8 +741,8 @@ func TestStartUnwindsACPRouteWhenOrphanNotConfirmedDead(t *testing.T) {
 	if !hasEventPrefix(sp.events, "route:") {
 		t.Fatalf("expected an ACP route reservation before the gate; events = %v", sp.events)
 	}
-	if !hasEventPrefix(sp.events, "unroute:") {
-		t.Fatalf("ACP route reservation was not unwound on refusal; events = %v", sp.events)
+	if hasEventPrefix(sp.events, "unroute:") {
+		t.Fatalf("ACP route reservation was lost on refusal; events = %v", sp.events)
 	}
 }
 
@@ -1413,7 +1409,9 @@ func TestCreateSessionNamedWithTransport_ClearsACPRouteAfterDuplicateRuntimeFail
 	} else if !errors.Is(err, ErrSessionNameExists) {
 		t.Fatalf("expected ErrSessionNameExists, got %v", err)
 	}
-	if err := acpSP.Stop("sky"); err != nil {
+	// Successful cleanup must run through the composite so it removes the
+	// durable ACP route as well as the backend runtime.
+	if err := autoSP.Stop("sky"); err != nil {
 		t.Fatalf("seed acp stop: %v", err)
 	}
 

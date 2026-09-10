@@ -22,18 +22,6 @@ func clearedSessionAffinityMetadata() map[string]string {
 	return metadata
 }
 
-// clearSessionAffinityMetadataOnBead persists an empty value for every
-// session-affinity key on beadID. See clearedSessionAffinityMetadata for
-// why cmd/gc clears by empty value rather than key deletion.
-func clearSessionAffinityMetadataOnBead(store beads.Store, beadID string) error {
-	for _, key := range beadmeta.SessionAffinityMetadataKeys {
-		if err := store.SetMetadata(beadID, key, ""); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // clearSessionCurrentClaim clears the claim back-channel
 // (beadmeta.CurrentClaimBeadIDMetadataKey) that `gc hook --claim` stamped onto
 // sessionID's own bead.

@@ -779,7 +779,7 @@ func (t *Tmux) KillSession(name string) error {
 
 const (
 	conditionalStopRefusedMarker   = "gc:conditional-stop-refused"
-	conditionalStopSessionGuardEnv = "GC_INSTANCE_TOKEN_SESSION_GUARD"
+	conditionalStopSessionGuardEnv = "GASCITY_INSTANCE_TOKEN_SESSION_GUARD"
 	conditionalStopGlobalSentinel  = "gc:global-fallback-refused"
 )
 

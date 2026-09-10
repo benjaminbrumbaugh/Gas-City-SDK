@@ -2913,6 +2913,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					}
 					usageLimitRestartHandoffPersisted = true
 					if err := conditionalStop.StopIfDetached(name, strings.TrimSpace(infoByID[id].InstanceToken)); err != nil {
+						recordLegacyCompareWrites(id, "usageLimitRestartHandoffRollback", rollback)
 						if next, rollbackErr := sessFront.UpdateMetadataInfo(handoffInfo, rollback); rollbackErr != nil {
 							fmt.Fprintf(stderr, "session reconciler: restoring restart handoff after refused usage-limit stop for %s: %v\n", name, rollbackErr) //nolint:errcheck
 						} else {
@@ -2929,7 +2930,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						fmt.Fprintf(stderr, "session reconciler: clearing provider fence after stopped repoint for %s: %v\n", name, clearErr) //nolint:errcheck
 						continue
 					}
-					infoByID[id] = tick.set(id, next)
+					tick.set(id, next)
 				}
 				if runtimeRunning && !usageLimitRuntimeStopped {
 					if err := workerKillSessionTargetWithConfig("", store, sp, cfg, name); err != nil {
