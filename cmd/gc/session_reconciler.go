@@ -2914,7 +2914,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					recordLegacyCompareWrites(id, "usageLimitRestartHandoff", preStopHandoff)
 					usageLimitRestartHandoffPersisted = true
 					if err := conditionalStop.StopIfDetached(name, strings.TrimSpace(infoByID[id].InstanceToken)); err != nil {
-						if next, rollbackErr := sessFront.UpdateMetadataInfo(handoffInfo, rollback); rollbackErr != nil {
+						if next, rollbackErr := sessFront.RestoreMetadataInfoIfCurrent(handoffInfo, preStopHandoff, rollback); rollbackErr != nil {
 							fmt.Fprintf(stderr, "session reconciler: restoring restart handoff after refused usage-limit stop for %s: %v\n", name, rollbackErr) //nolint:errcheck
 						} else {
 							recordLegacyCompareWrites(id, "usageLimitRestartHandoffRollback", rollback)

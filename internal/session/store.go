@@ -1,8 +1,10 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -108,6 +110,50 @@ func (s *Store) UpdateMetadataInfo(info Info, patch MetadataPatch) (Info, error)
 		return info, err
 	}
 	return info.ApplyPatch(patch), nil
+}
+
+// RestoreMetadataInfoIfCurrent restores only handoff values that still match
+// the failed operation's write-ahead patch. Each field is value-CASed, so a
+// concurrent newer session mutation wins instead of being overwritten by a
+// stale compensating write. Stores without metadata CAS fail closed and leave
+// the handoff visible for reconciliation/operator recovery.
+func (s *Store) RestoreMetadataInfoIfCurrent(info Info, handoff, rollback MetadataPatch) (Info, error) {
+	if len(rollback) == 0 {
+		return info, nil
+	}
+	writer, ok := beads.MetadataCASWriterFor(s.store.Store)
+	if !ok {
+		return info, beads.ErrConditionalWriteUnsupported
+	}
+	keys := make([]string, 0, len(rollback))
+	for key := range rollback {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	applied := make(MetadataPatch)
+	var restoreErrs []error
+	for _, key := range keys {
+		expected, ok := handoff[key]
+		if !ok {
+			restoreErrs = append(restoreErrs, fmt.Errorf("rollback key %q has no handoff precondition", key))
+			continue
+		}
+		next := rollback[key]
+		if expected == next {
+			continue
+		}
+		swapped, err := writer.CompareAndSetMetadataKey(info.ID, key, expected, next)
+		if err != nil {
+			restoreErrs = append(restoreErrs, fmt.Errorf("conditionally restoring metadata %q: %w", key, err))
+			continue
+		}
+		if !swapped {
+			restoreErrs = append(restoreErrs, fmt.Errorf("conditionally restoring metadata %q lost value precondition", key))
+			continue
+		}
+		applied[key] = next
+	}
+	return info.ApplyPatch(applied), errors.Join(restoreErrs...)
 }
 
 // SetState heals a session to the given lifecycle state with a state_reason.

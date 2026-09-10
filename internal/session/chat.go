@@ -33,6 +33,11 @@ func waitForStaleKeyDetection(ctx context.Context, _ string) error {
 
 const waitIdleNudgeTimeout = 30 * time.Second
 
+const (
+	providerFenceLaunchClaimMetadataKey = "launch_provider_fence_claim"
+	providerFenceLaunchClaimTTL         = 15 * time.Minute
+)
+
 // ErrStateSync reports that the runtime reached the requested lifecycle
 // boundary but persisting the corresponding bead metadata failed.
 var ErrStateSync = errors.New("session state sync failed")
@@ -528,9 +533,11 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 	if resumeCommand == "" {
 		return fmt.Errorf("%w: %s", ErrResumeRequired, id)
 	}
-	if err := m.prepareProviderFenceStart(id, &b, hints.ProviderFenceIdentity); err != nil {
+	launchClaim, err := m.prepareProviderFenceStart(id, &b, hints.ProviderFenceIdentity)
+	if err != nil {
 		return err
 	}
+	defer m.releaseProviderFenceLaunchClaim(id, launchClaim)
 	failedStart := func(startErr error) error {
 		absent, clearErr := m.clearLaunchProviderFenceIdentityIfDefinitelyAbsent(id, sessName, b.Metadata["launch_provider_fence_identity"])
 		if clearErr == nil && absent && unroute != nil {
@@ -654,9 +661,11 @@ func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b bea
 	if resumeCommand == "" {
 		return fmt.Errorf("%w: %s", ErrResumeRequired, id)
 	}
-	if err := m.prepareProviderFenceStart(id, &b, hints.ProviderFenceIdentity); err != nil {
+	launchClaim, err := m.prepareProviderFenceStart(id, &b, hints.ProviderFenceIdentity)
+	if err != nil {
 		return err
 	}
+	defer m.releaseProviderFenceLaunchClaim(id, launchClaim)
 	failedStart := func(startErr error) error {
 		absent, clearErr := m.clearLaunchProviderFenceIdentityIfDefinitelyAbsent(id, sessName, b.Metadata["launch_provider_fence_identity"])
 		if clearErr == nil && absent && unroute != nil {
@@ -777,51 +786,113 @@ func (m *Manager) confirmLiveSessionState(id string, b *beads.Bead) error {
 	return nil
 }
 
-func (m *Manager) prepareProviderFenceStart(id string, b *beads.Bead, identity string) error {
+func (m *Manager) prepareProviderFenceStart(id string, b *beads.Bead, identity string) (string, error) {
 	identity = strings.TrimSpace(identity)
 	if identity == "" || b == nil {
-		return nil
+		return "", nil
 	}
 	current := strings.TrimSpace(b.Metadata["launch_provider_fence_identity"])
+	claim, err := m.acquireProviderFenceLaunchClaim(id, b)
+	if err != nil {
+		return "", err
+	}
+	releaseOnError := func(err error) (string, error) {
+		m.releaseProviderFenceLaunchClaim(id, claim)
+		return "", err
+	}
 	fences, err := NewStore(beads.SessionStore{Store: m.store}).ActiveProviderFences(time.Now().UTC())
 	if err != nil {
-		return fmt.Errorf("checking provider account fence before session start: %w", err)
+		return releaseOnError(fmt.Errorf("checking provider account fence before session start: %w", err))
 	}
 	for _, fence := range fences {
 		if fence.Identity == identity {
-			return fmt.Errorf("provider account is fenced until %s", fence.Until.UTC().Format(time.RFC3339))
+			return releaseOnError(fmt.Errorf("provider account is fenced until %s", fence.Until.UTC().Format(time.RFC3339)))
 		}
 	}
 	if current == identity {
-		return nil
+		return claim, nil
 	}
 	if current != "" {
 		absent, err := m.providerSessionDefinitelyAbsent(sessionName(id, *b))
 		if err != nil || !absent {
-			return errors.New("provider account attribution already staged for another identity")
+			return releaseOnError(errors.New("provider account attribution already staged for another identity"))
 		}
 		writer, ok := beads.MetadataCASWriterFor(m.store)
 		if !ok {
-			return fmt.Errorf("replacing stale provider account attribution: %w", beads.ErrConditionalWriteUnsupported)
+			return releaseOnError(fmt.Errorf("replacing stale provider account attribution: %w", beads.ErrConditionalWriteUnsupported))
 		}
 		swapped, err := writer.CompareAndSetMetadataKey(id, "launch_provider_fence_identity", current, identity)
 		if err != nil {
-			return fmt.Errorf("replacing stale provider account attribution: %w", err)
+			return releaseOnError(fmt.Errorf("replacing stale provider account attribution: %w", err))
 		}
 		if !swapped {
-			return errors.New("replacing stale provider account attribution lost metadata precondition")
+			return releaseOnError(errors.New("replacing stale provider account attribution lost metadata precondition"))
 		}
 		b.Metadata["launch_provider_fence_identity"] = identity
-		return nil
+		return claim, nil
 	}
-	if err := m.store.SetMetadata(id, "launch_provider_fence_identity", identity); err != nil {
-		return fmt.Errorf("recording launch provider account identity: %w", err)
+	writer, ok := beads.MetadataCASWriterFor(m.store)
+	if !ok {
+		return releaseOnError(fmt.Errorf("recording launch provider account identity: %w", beads.ErrConditionalWriteUnsupported))
+	}
+	swapped, err := writer.CompareAndSetMetadataKey(id, "launch_provider_fence_identity", "", identity)
+	if err != nil {
+		return releaseOnError(fmt.Errorf("recording launch provider account identity: %w", err))
+	}
+	if !swapped {
+		return releaseOnError(errors.New("recording launch provider account identity lost metadata precondition"))
 	}
 	if b.Metadata == nil {
 		b.Metadata = make(map[string]string)
 	}
 	b.Metadata["launch_provider_fence_identity"] = identity
-	return nil
+	return claim, nil
+}
+
+func (m *Manager) acquireProviderFenceLaunchClaim(id string, b *beads.Bead) (string, error) {
+	writer, ok := beads.MetadataCASWriterFor(m.store)
+	if !ok {
+		return "", fmt.Errorf("claiming provider account launch ownership: %w", beads.ErrConditionalWriteUnsupported)
+	}
+	now := m.now().UTC()
+	claim := now.Format(time.RFC3339Nano) + "/" + NewInstanceToken()
+	current := strings.TrimSpace(b.Metadata[providerFenceLaunchClaimMetadataKey])
+	if current != "" {
+		stamp, _, ok := strings.Cut(current, "/")
+		claimedAt, parseErr := time.Parse(time.RFC3339Nano, stamp)
+		if !ok || parseErr != nil {
+			return "", errors.New("provider account launch ownership metadata is corrupt")
+		}
+		if now.Sub(claimedAt) < providerFenceLaunchClaimTTL {
+			return "", errors.New("provider account launch is already owned by another caller")
+		}
+	}
+	swapped, err := writer.CompareAndSetMetadataKey(id, providerFenceLaunchClaimMetadataKey, current, claim)
+	if err != nil {
+		return "", fmt.Errorf("claiming provider account launch ownership: %w", err)
+	}
+	if !swapped {
+		return "", errors.New("provider account launch ownership lost metadata precondition")
+	}
+	if b.Metadata == nil {
+		b.Metadata = make(map[string]string)
+	}
+	b.Metadata[providerFenceLaunchClaimMetadataKey] = claim
+	return claim, nil
+}
+
+func (m *Manager) releaseProviderFenceLaunchClaim(id, claim string) {
+	claim = strings.TrimSpace(claim)
+	if claim == "" {
+		return
+	}
+	writer, ok := beads.MetadataCASWriterFor(m.store)
+	if !ok {
+		return
+	}
+	if _, err := writer.CompareAndSetMetadataKey(id, providerFenceLaunchClaimMetadataKey, claim, ""); err != nil {
+		log.Printf("session %s: releasing provider account launch ownership: %v", id, err)
+	}
 }
 
 func (m *Manager) providerSessionDefinitelyAbsent(name string) (bool, error) {

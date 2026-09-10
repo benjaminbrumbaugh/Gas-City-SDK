@@ -170,6 +170,11 @@ func loadOrCreateProviderFenceIdentityKeyWithStore(cityPath string, store beads.
 					return fmt.Errorf("writing provider fence identity continuity digest %q: %w", digestPath, err)
 				}
 			}
+			if store != nil {
+				if err := session.NewStore(beads.SessionStore{Store: store}).AttestProviderFenceIdentityKeyDigest(string(encodedDigest)); err != nil {
+					return fmt.Errorf("checking provider fence identity durable key digest: %w", err)
+				}
+			}
 			key = append([]byte(nil), data...)
 			return nil
 		}
@@ -208,6 +213,11 @@ func loadOrCreateProviderFenceIdentityKeyWithStore(cityPath string, store beads.
 		digest := sha256.Sum256(data)
 		if err := fsys.WriteFileAtomic(fsys.OSFS{}, digestPath, []byte(hex.EncodeToString(digest[:])), 0o600); err != nil {
 			return fmt.Errorf("writing provider fence identity continuity digest %q: %w", digestPath, err)
+		}
+		if store != nil {
+			if err := session.NewStore(beads.SessionStore{Store: store}).AttestProviderFenceIdentityKeyDigest(hex.EncodeToString(digest[:])); err != nil {
+				return fmt.Errorf("recording provider fence identity durable key digest: %w", err)
+			}
 		}
 		key = append([]byte(nil), data...)
 		return nil

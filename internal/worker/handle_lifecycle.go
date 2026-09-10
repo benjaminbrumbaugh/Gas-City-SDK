@@ -22,7 +22,11 @@ func (h *SessionHandle) Start(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	err = h.manager.Start(ctx, id, startCommand, h.runtimeHints())
+	startHints, err := h.launchRuntimeHints()
+	if err != nil {
+		return err
+	}
+	err = h.manager.Start(ctx, id, startCommand, startHints)
 	return err
 }
 
@@ -47,10 +51,17 @@ func (h *SessionHandle) StartResolved(ctx context.Context, startCommand string, 
 	}
 	startHints := hints
 	if strings.TrimSpace(startHints.Command) == "" {
-		startHints = h.runtimeHints()
+		startHints, err = h.launchRuntimeHints()
+		if err != nil {
+			return err
+		}
 	}
 	if strings.TrimSpace(startHints.ProviderFenceIdentity) == "" {
-		startHints.ProviderFenceIdentity = h.providerFenceIdentity()
+		resolvedHints, resolveErr := h.launchRuntimeHints()
+		if resolveErr != nil {
+			return resolveErr
+		}
+		startHints.ProviderFenceIdentity = resolvedHints.ProviderFenceIdentity
 	}
 	err = h.manager.StartRuntimeOnly(ctx, id, command, startHints)
 	return err
@@ -70,7 +81,11 @@ func (h *SessionHandle) Attach(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	err = h.manager.Attach(ctx, id, resumeCommand, h.runtimeHints())
+	startHints, err := h.launchRuntimeHints()
+	if err != nil {
+		return err
+	}
+	err = h.manager.Attach(ctx, id, resumeCommand, startHints)
 	return err
 }
 
@@ -277,7 +292,11 @@ func (h *SessionHandle) Message(ctx context.Context, req MessageRequest) (result
 	if err != nil {
 		return MessageResult{}, err
 	}
-	outcome, err := h.manager.Submit(ctx, id, req.Text, resumeCommand, h.runtimeHints(), submitIntent(req.Delivery))
+	startHints, err := h.launchRuntimeHints()
+	if err != nil {
+		return MessageResult{}, err
+	}
+	outcome, err := h.manager.Submit(ctx, id, req.Text, resumeCommand, startHints, submitIntent(req.Delivery))
 	if err != nil {
 		return MessageResult{}, err
 	}
@@ -331,7 +350,11 @@ func (h *SessionHandle) Nudge(ctx context.Context, req NudgeRequest) (result Nud
 			result = NudgeResult{Delivered: delivered}
 			return result, nil
 		}
-		if err := h.manager.Send(ctx, id, req.Text, resumeCommand, h.runtimeHints()); err != nil {
+		startHints, err := h.launchRuntimeHints()
+		if err != nil {
+			return NudgeResult{}, err
+		}
+		if err := h.manager.Send(ctx, id, req.Text, resumeCommand, startHints); err != nil {
 			return NudgeResult{}, err
 		}
 		result = NudgeResult{Delivered: true}
@@ -345,7 +368,11 @@ func (h *SessionHandle) Nudge(ctx context.Context, req NudgeRequest) (result Nud
 			result = NudgeResult{Delivered: delivered}
 			return result, nil
 		}
-		if err := h.manager.SendImmediate(ctx, id, req.Text, resumeCommand, h.runtimeHints()); err != nil {
+		startHints, err := h.launchRuntimeHints()
+		if err != nil {
+			return NudgeResult{}, err
+		}
+		if err := h.manager.SendImmediate(ctx, id, req.Text, resumeCommand, startHints); err != nil {
 			return NudgeResult{}, err
 		}
 		result = NudgeResult{Delivered: true}
@@ -359,7 +386,11 @@ func (h *SessionHandle) Nudge(ctx context.Context, req NudgeRequest) (result Nud
 			result = NudgeResult{Delivered: delivered}
 			return result, nil
 		}
-		delivered, err := h.manager.TryWaitIdleNudge(ctx, id, req.Source, req.Text, resumeCommand, h.runtimeHints())
+		startHints, err := h.launchRuntimeHints()
+		if err != nil {
+			return NudgeResult{}, err
+		}
+		delivered, err := h.manager.TryWaitIdleNudge(ctx, id, req.Source, req.Text, resumeCommand, startHints)
 		if err != nil {
 			return NudgeResult{}, err
 		}
@@ -406,6 +437,10 @@ func (h *SessionHandle) createDeferredLocked() (sessionpkg.Info, error) {
 }
 
 func (h *SessionHandle) createStartedLocked(ctx context.Context) (sessionpkg.Info, error) {
+	startHints, err := h.launchRuntimeHints()
+	if err != nil {
+		return sessionpkg.Info{}, err
+	}
 	info, err := h.manager.CreateSession(ctx, sessionpkg.CreateOptions{
 		Alias:        h.session.Alias,
 		ExplicitName: h.session.ExplicitName,
@@ -417,7 +452,7 @@ func (h *SessionHandle) createStartedLocked(ctx context.Context) (sessionpkg.Inf
 		Transport:    h.session.Transport,
 		Env:          cloneStringMap(h.session.Env),
 		Resume:       h.session.Resume,
-		Hints:        cloneRuntimeConfig(h.session.Hints),
+		Hints:        startHints,
 		ExtraMeta:    cloneStringMap(h.session.Metadata),
 	})
 	if err != nil {
@@ -507,8 +542,25 @@ func (h *SessionHandle) historyProvider(info sessionpkg.Info) string {
 func (h *SessionHandle) runtimeHints() runtime.Config {
 	cfg := cloneRuntimeConfig(h.session.Hints)
 	cfg.Env = mergeStringMaps(cfg.Env, h.session.Env)
-	cfg.ProviderFenceIdentity = h.providerFenceIdentity()
+	if strings.TrimSpace(cfg.ProviderFenceIdentity) == "" {
+		cfg.ProviderFenceIdentity = h.providerFenceIdentity()
+	}
 	return cfg
+}
+
+func (h *SessionHandle) launchRuntimeHints() (runtime.Config, error) {
+	cfg := h.runtimeHints()
+	if h.session.ResolveProviderFenceIdentity == nil {
+		return cfg, nil
+	}
+	identity, err := h.session.ResolveProviderFenceIdentity()
+	if err != nil {
+		return runtime.Config{}, fmt.Errorf("resolving provider account identity for launch: %w", err)
+	}
+	// A configured resolver is authoritative even when no stable current account
+	// can be derived; falling back here would resurrect stale persisted identity.
+	cfg.ProviderFenceIdentity = strings.TrimSpace(identity)
+	return cfg, nil
 }
 
 func (h *SessionHandle) providerFenceIdentity() string {

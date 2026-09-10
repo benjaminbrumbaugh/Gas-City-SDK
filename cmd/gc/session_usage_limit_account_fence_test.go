@@ -28,6 +28,14 @@ func (s *failProviderFenceClearOnceStore) Update(id string, opts beads.UpdateOpt
 	return s.Store.Update(id, opts)
 }
 
+func (s *failProviderFenceClearOnceStore) CompareAndSetMetadataKey(id, key, expected, next string) (bool, error) {
+	writer, ok := beads.MetadataCASWriterFor(s.Store)
+	if !ok {
+		return false, beads.ErrConditionalWriteUnsupported
+	}
+	return writer.CompareAndSetMetadataKey(id, key, expected, next)
+}
+
 // This regression traverses the reconciler's provider-fence map after the
 // source row has been closed. The source's session metadata is no longer an
 // available input, so a session-row-only fence incorrectly disappears.
@@ -181,10 +189,10 @@ func TestStartedProviderFenceIdentityForCommitPreservesRunningAccount(t *testing
 		want         string
 	}{
 		{
-			name:         "fresh start uses desired account",
+			name:         "fresh commit uses staged launch owner",
 			info:         sessionpkg.Info{StartedProviderFenceIdentity: "account:old", LaunchProviderFenceIdentity: "account:launch"},
 			startedFresh: true,
-			want:         "account:desired",
+			want:         "account:launch",
 		},
 		{
 			name: "warm reuse preserves running account",

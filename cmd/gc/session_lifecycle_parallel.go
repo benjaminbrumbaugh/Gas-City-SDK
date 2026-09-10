@@ -1199,6 +1199,10 @@ func buildPreparedStartWithWorkDirResolver(
 		instanceToken,
 	)
 	agentCfg.Env = mergeEnv(agentCfg.Env, runtimeEnv)
+	// Carry the desired account identity into the worker boundary. The Manager
+	// owns write-ahead launch attribution; leaving this field blank makes the
+	// handle fall back to stale persisted identity before Manager serialization.
+	agentCfg.ProviderFenceIdentity = strings.TrimSpace(tp.ProviderFenceIdentity)
 	if gcProvider := sessionpkg.ProviderFamilyFromInfo(candidate.info, ""); gcProvider != "" {
 		agentCfg.Env = mergeEnv(agentCfg.Env, map[string]string{"GC_PROVIDER": gcProvider})
 	}
@@ -1893,6 +1897,9 @@ func startPreparedStartCandidate(
 	warmClaim warmClaimTriggerProbe,
 ) (bool, error) {
 	name := item.candidate.name()
+	if strings.TrimSpace(item.cfg.ProviderFenceIdentity) == "" {
+		item.cfg.ProviderFenceIdentity = strings.TrimSpace(item.candidate.tp.ProviderFenceIdentity)
+	}
 	if sp != nil {
 		running, alive := observeRuntimeProviderLiveness(sp, name, item.cfg.ProcessNames)
 		if running {
@@ -1949,43 +1956,12 @@ func startPreparedStartCandidate(
 		}
 		return true, handle.StartResolved(ctx, item.cfg.Command, item.cfg)
 	}
-	// Write the account identity before invoking the provider. If the process
-	// starts and the controller dies before CommitStartedPatch, recovery can
-	// still attribute the live runtime to the account that was actually
-	// launched rather than to a later desired-config repoint.
-	launchProviderFenceIdentity := strings.TrimSpace(item.candidate.tp.ProviderFenceIdentity)
-	if _, err := sessionFrontDoor(store).UpdateMetadataInfo(item.candidate.info, sessionpkg.MetadataPatch{
-		"launch_provider_fence_identity": launchProviderFenceIdentity,
-	}); err != nil {
-		return true, fmt.Errorf("recording launch provider account identity for %q: %w", name, err)
-	}
 	handle, err := workerHandleForSessionWithStaleKeyDetectionWaiter(cityPath, store, sp, cfg, item.candidate.info.ID, staleKeyDetectionWaiter)
 	if err != nil {
-		if clearErr := clearFailedLaunchProviderFenceIdentity(store, item.candidate.info.ID, launchProviderFenceIdentity); clearErr != nil {
-			return true, errors.Join(err, clearErr)
-		}
 		return true, err
 	}
 	startErr := handle.StartResolved(ctx, item.cfg.Command, item.cfg)
 	return true, startErr
-}
-
-func clearFailedLaunchProviderFenceIdentity(store beads.Store, id, attemptedIdentity string) error {
-	if store == nil || strings.TrimSpace(id) == "" {
-		return nil
-	}
-	writer, ok := beads.MetadataCASWriterFor(store)
-	if !ok {
-		return fmt.Errorf("clearing failed launch provider account identity for %q: %w", id, beads.ErrConditionalWriteUnsupported)
-	}
-	swapped, err := writer.CompareAndSetMetadataKey(id, "launch_provider_fence_identity", strings.TrimSpace(attemptedIdentity), "")
-	if err != nil {
-		return fmt.Errorf("clearing failed launch provider account identity for %q: %w", id, err)
-	}
-	if !swapped {
-		return fmt.Errorf("clearing failed launch provider account identity for %q lost metadata precondition", id)
-	}
-	return nil
 }
 
 func runtimeObservationLive(obs worker.LiveObservation) bool {
@@ -2157,12 +2133,10 @@ func confirmPendingStart(currentState string) bool {
 
 // startedProviderFenceIdentityForCommit preserves the account identity of an
 // already-running runtime when a warm reuse or recovery confirmation commits
-// refreshed metadata. The desired identity is authoritative only for a fresh
-// start (or for legacy rows that have no launch/runtime identity yet).
-func startedProviderFenceIdentityForCommit(info sessionpkg.Info, tp TemplateParams, startedFresh bool) string {
-	if startedFresh {
-		return strings.TrimSpace(tp.ProviderFenceIdentity)
-	}
+// refreshed metadata. A concurrent caller's requested identity is only a
+// fallback: the write-ahead or already-committed identity names the runtime
+// that actually won serialized launch ownership.
+func startedProviderFenceIdentityForCommit(info sessionpkg.Info, tp TemplateParams, _ bool) string {
 	if identity := strings.TrimSpace(info.LaunchProviderFenceIdentity); identity != "" {
 		return identity
 	}
@@ -2986,6 +2960,21 @@ func executePlannedStartsTraced(
 				)
 			}
 			for _, result := range results {
+				// The worker Manager may have serialized this start behind another
+				// caller and committed that runtime's launch identity. Sync execution
+				// needs the same one-read freshness boundary as async execution before
+				// attributing the runtime in CommitStartedPatch.
+				if !startOpts.async && result.err == nil && store != nil && strings.TrimSpace(result.prepared.candidate.info.ID) != "" {
+					current, _, err := sessFront.GetPersistedResponse(result.prepared.candidate.info.ID)
+					if err != nil {
+						// The runtime is already live. Do not route a read failure through
+						// start-failure rollback; leave the pending lease/launch attribution
+						// intact so the next level-triggered pass can confirm it safely.
+						fmt.Fprintf(stderr, "session reconciler: refreshing synchronous start %s: %v\n", result.prepared.candidate.name(), err) //nolint:errcheck
+						continue
+					}
+					result.prepared.candidate.info = current
+				}
 				if trace != nil {
 					trace.RecordOperation(TraceSiteLifecycleStartRun, TraceReasonStart, result.outcome, "", result.prepared.candidate.tp.TemplateName, result.prepared.candidate.name(), result.finished.Sub(result.started), traceRecordPayload{
 						"rollback_pending": result.rollbackPending,

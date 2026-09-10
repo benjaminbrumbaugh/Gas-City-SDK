@@ -250,20 +250,21 @@ type InteractionResponse struct {
 // SessionSpec describes the concrete session materialized by a session-backed
 // worker handle.
 type SessionSpec struct {
-	ID           string
-	Profile      Profile
-	Template     string
-	Title        string
-	Alias        string
-	ExplicitName string
-	Command      string
-	WorkDir      string
-	Provider     string
-	Transport    string
-	Env          map[string]string
-	Resume       sessionpkg.ProviderResume
-	Hints        runtime.Config
-	Metadata     map[string]string
+	ID                           string
+	Profile                      Profile
+	Template                     string
+	Title                        string
+	Alias                        string
+	ExplicitName                 string
+	Command                      string
+	WorkDir                      string
+	Provider                     string
+	Transport                    string
+	Env                          map[string]string
+	Resume                       sessionpkg.ProviderResume
+	Hints                        runtime.Config
+	ResolveProviderFenceIdentity func() (string, error)
+	Metadata                     map[string]string
 }
 
 // SessionHandleConfig configures a [SessionHandle].

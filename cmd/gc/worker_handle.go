@@ -83,18 +83,22 @@ func workerFactoryWithStaleKeyDetectionWaiter(
 		SearchPaths:             searchPaths,
 		UsageSink:               usageSinkForCity(cfg, cityPath),
 		ResolveTransport:        resolveTransport,
-		ResolveSessionRuntime:   workerSessionRuntimeResolverWithConfig(cityPath, cfg),
+		ResolveSessionRuntime:   workerSessionRuntimeResolverWithConfig(cityPath, cfg, store),
 		StaleKeyDetectionWaiter: waiter,
 		Pricing:                 cfg.PricingRegistry(),
 	})
 }
 
-func workerSessionRuntimeResolverWithConfig(cityPath string, cfg *config.City) worker.SessionRuntimeResolver {
+func workerSessionRuntimeResolverWithConfig(cityPath string, cfg *config.City, stores ...beads.Store) worker.SessionRuntimeResolver {
 	if cfg == nil {
 		return nil
 	}
+	var store beads.Store
+	if len(stores) > 0 {
+		store = stores[0]
+	}
 	return func(info session.Info, sessionKind string, metadata map[string]string) (*worker.ResolvedRuntime, error) {
-		runtimeCfg, err := resolvedWorkerRuntimeWithConfigAndMetadata(cityPath, cfg, info, sessionKind, metadata)
+		runtimeCfg, err := resolvedWorkerRuntimeWithConfigMetadataAndStore(cityPath, store, cfg, info, sessionKind, metadata)
 		if err != nil {
 			return nil, err
 		}
@@ -581,6 +585,10 @@ func resolvedWorkerRuntimeWithConfig(cityPath string, cfg *config.City, info ses
 }
 
 func resolvedWorkerRuntimeWithConfigAndMetadata(cityPath string, cfg *config.City, info session.Info, sessionKind string, metadata map[string]string) (*worker.ResolvedRuntime, error) {
+	return resolvedWorkerRuntimeWithConfigMetadataAndStore(cityPath, nil, cfg, info, sessionKind, metadata)
+}
+
+func resolvedWorkerRuntimeWithConfigMetadataAndStore(cityPath string, store beads.Store, cfg *config.City, info session.Info, sessionKind string, metadata map[string]string) (*worker.ResolvedRuntime, error) {
 	if cfg == nil {
 		return nil, nil
 	}
@@ -625,7 +633,12 @@ func resolvedWorkerRuntimeWithConfigAndMetadata(cityPath string, cfg *config.Cit
 	// dispatcher trace path is per-dispatcher-qualified and must not be
 	// overwritten with the city-uniform default here. template_resolve.go
 	// owns the qualified override for the CLI create path.
-	sessionEnv := mergeEnv(providerProcessPassthroughEnv(), resolved.Env, cityIdentityAnchorsForCity(cityPath), processenv.ControllerOnlyEnvOverlay())
+	// Match the create path's effective launch environment exactly: provider
+	// config values may reference the controller environment (for example
+	// STUB_API_KEY = "$ROTATING_KEY"). Hashing the unexpanded config would bind
+	// the fence to the literal placeholder while launching the expanded secret.
+	providerEnv := expandEnvMap(resolved.Env)
+	sessionEnv := mergeEnv(providerProcessPassthroughEnv(), providerEnv, cityIdentityAnchorsForCity(cityPath), processenv.ControllerOnlyEnvOverlay())
 	// Resolve session_live so resumed sessions get re-themed (status bar,
 	// keybindings) the same way reconciler-started sessions do. Without this,
 	// `gc session attach` recreates the tmux runtime with an empty
@@ -662,16 +675,27 @@ func resolvedWorkerRuntimeWithConfigAndMetadata(cityPath string, cfg *config.Cit
 	runtimeHints.WorkDir = workDir
 	runtimeHints.Env = sessionEnv
 	runtimeHints.MCPServers = mcpServers
+	var providerFenceIdentityResolver func() (string, error)
+	if store != nil {
+		providerFenceIdentityResolver = func() (string, error) {
+			identity, err := providerUsageFenceIdentityForCityWithStore(cityPath, store, resolved, providerFenceAccountEnv(sessionEnv))
+			if err != nil {
+				return "", fmt.Errorf("provider account identity: %w", err)
+			}
+			return identity, nil
+		}
+	}
 	// Stage provider-overlay hooks on resume the same way the reconciler create
 	// path does; this resume resolver builds runtime.Config directly and never
 	// routes through resolveTemplate (gc-6bw8o).
 	applyWorkerOverlayHints(&runtimeHints, cfg, cityPath, info.Template, resolved)
 	return &worker.ResolvedRuntime{
-		Command:    command,
-		WorkDir:    workDir,
-		Provider:   resolvedWorkerRuntimeProviderLabel(resolved, transport, info),
-		SessionEnv: sessionEnv,
-		Hints:      runtimeHints,
+		Command:                      command,
+		WorkDir:                      workDir,
+		Provider:                     resolvedWorkerRuntimeProviderLabel(resolved, transport, info),
+		SessionEnv:                   sessionEnv,
+		Hints:                        runtimeHints,
+		ResolveProviderFenceIdentity: providerFenceIdentityResolver,
 		Resume: session.ProviderResume{
 			ResumeFlag:    firstNonEmptyGCString(resolved.ResumeFlag, info.ResumeFlag),
 			ResumeStyle:   firstNonEmptyGCString(resolved.ResumeStyle, info.ResumeStyle),

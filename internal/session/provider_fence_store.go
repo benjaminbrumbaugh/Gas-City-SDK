@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,6 +17,12 @@ import (
 const ProviderFenceBeadLabel = "gc:provider-fence"
 
 const providerFenceBeadKind = "provider_usage_fence"
+
+const (
+	providerFenceKeyContinuityBeadLabel = "gc:provider-fence-key-continuity"
+	providerFenceKeyContinuityBeadKind  = "provider_fence_key_continuity"
+	providerFenceKeyDigestMetadataKey   = "provider_fence_key_sha256"
+)
 
 const maxExpiredProviderFencesClosedPerRead = 100
 
@@ -55,8 +62,7 @@ func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 	// whose type was damaged disappear and silently fail open.
 	rows, err := s.store.List(beads.ListQuery{
 		Label:         ProviderFenceBeadLabel,
-		Status:        "open",
-		IncludeClosed: false,
+		IncludeClosed: true,
 		Sort:          beads.SortCreatedDesc,
 		Live:          true,
 	})
@@ -68,6 +74,13 @@ func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 	corruptClosed := 0
 	var corruptErrs []error
 	for _, row := range rows {
+		// A prior bounded remediation deliberately leaves the malformed payload
+		// in immutable history with an audited closed marker. Do not repeatedly
+		// remediate that already-contained row on every read.
+		if strings.TrimSpace(row.Status) == "closed" &&
+			strings.TrimSpace(row.Metadata[providerFenceRemediationMetadataKey]) == providerFenceAutoClosedCorruptionReason {
+			continue
+		}
 		identity, until, observedAt, validationErr := decodeProviderFence(row)
 		if validationErr != nil {
 			oldEnough := !row.CreatedAt.IsZero() && !row.CreatedAt.After(now) && now.Sub(row.CreatedAt) >= maxCorruptProviderFenceFailClosedAge
@@ -90,6 +103,9 @@ func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 				continue
 			}
 			corruptErrs = append(corruptErrs, fmt.Errorf("provider fence %q is corrupt and blocks provider starts: %w; inspect and close bead %q explicitly after verifying account safety", row.ID, validationErr, row.ID))
+			continue
+		}
+		if strings.TrimSpace(row.Status) == "closed" {
 			continue
 		}
 		if !until.After(now) {
@@ -126,6 +142,10 @@ func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 }
 
 func decodeProviderFence(row beads.Bead) (string, time.Time, time.Time, error) {
+	status := strings.TrimSpace(row.Status)
+	if status != "open" && status != "closed" {
+		return "", time.Time{}, time.Time{}, fmt.Errorf("invalid status %q", row.Status)
+	}
 	if strings.TrimSpace(row.Type) != WaitBeadType {
 		return "", time.Time{}, time.Time{}, fmt.Errorf("invalid type %q", row.Type)
 	}
@@ -187,6 +207,65 @@ func (s *Store) HasKeyedProviderFenceIdentityHistory() (bool, error) {
 
 func isKeyedProviderFenceIdentity(identity string) bool {
 	return strings.HasPrefix(strings.TrimSpace(identity), "account:hmac-sha256:")
+}
+
+// AttestProviderFenceIdentityKeyDigest anchors the non-secret SHA-256 digest of
+// the city identity key in durable beads state. The local key and digest files
+// can otherwise be replaced coherently; the independent durable anchor makes
+// that replacement detectable once keyed fence/session history exists.
+func (s *Store) AttestProviderFenceIdentityKeyDigest(digest string) error {
+	digest = strings.TrimSpace(digest)
+	decoded, err := hex.DecodeString(digest)
+	if err != nil || len(decoded) != 32 {
+		return fmt.Errorf("provider fence durable key digest is invalid")
+	}
+	if s == nil || s.store.Store == nil {
+		return fmt.Errorf("provider fence store is unavailable")
+	}
+	rows, err := s.store.List(beads.ListQuery{
+		Label: providerFenceKeyContinuityBeadLabel, IncludeClosed: true, Live: true,
+	})
+	if err != nil {
+		return fmt.Errorf("listing provider fence durable key digests: %w", err)
+	}
+	found := false
+	for _, row := range rows {
+		rowDigest := strings.TrimSpace(row.Metadata[providerFenceKeyDigestMetadataKey])
+		rowDecoded, decodeErr := hex.DecodeString(rowDigest)
+		if strings.TrimSpace(row.Type) != WaitBeadType ||
+			strings.TrimSpace(row.Metadata["kind"]) != providerFenceKeyContinuityBeadKind ||
+			decodeErr != nil || len(rowDecoded) != 32 {
+			return fmt.Errorf("provider fence durable key digest row %q is corrupt", row.ID)
+		}
+		if rowDigest != digest {
+			return fmt.Errorf("provider fence durable key digest row %q does not match the current key", row.ID)
+		}
+		found = true
+	}
+	if found {
+		return nil
+	}
+	hasHistory, err := s.HasKeyedProviderFenceIdentityHistory()
+	if err != nil {
+		return err
+	}
+	if hasHistory {
+		return fmt.Errorf("provider fence durable key digest is missing while keyed fence or session attribution history exists")
+	}
+	_, err = s.store.Create(beads.Bead{
+		Title:  "provider fence key continuity",
+		Status: "open",
+		Type:   WaitBeadType,
+		Labels: []string{providerFenceKeyContinuityBeadLabel},
+		Metadata: map[string]string{
+			"kind":                            providerFenceKeyContinuityBeadKind,
+			providerFenceKeyDigestMetadataKey: digest,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("recording provider fence durable key digest: %w", err)
+	}
+	return nil
 }
 
 // RecordProviderFence appends a durable fence record. It is deliberately

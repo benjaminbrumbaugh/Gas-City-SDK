@@ -17,6 +17,10 @@ type ResolvedRuntime struct {
 	SessionEnv map[string]string
 	Resume     sessionpkg.ProviderResume
 	Hints      runtime.Config
+	// ResolveProviderFenceIdentity performs launch-only account attestation.
+	// Keeping it deferred lets stop/kill/observe handles remain available when
+	// launch continuity is broken and needs operator repair.
+	ResolveProviderFenceIdentity func() (string, error)
 }
 
 // ResolvedSessionConfig describes a new session-backed worker handle whose
@@ -87,18 +91,19 @@ func SessionSpecForResolvedRuntime(cfg ResolvedSessionConfig) (SessionSpec, erro
 	}
 
 	return SessionSpec{
-		Alias:        cfg.Alias,
-		ExplicitName: cfg.ExplicitName,
-		Template:     cfg.Template,
-		Title:        cfg.Title,
-		Command:      cfg.Runtime.Command,
-		WorkDir:      cfg.Runtime.WorkDir,
-		Provider:     cfg.Runtime.Provider,
-		Transport:    cfg.Transport,
-		Env:          cfg.Runtime.SessionEnv,
-		Resume:       cfg.Runtime.Resume,
-		Hints:        cfg.Runtime.Hints,
-		Metadata:     cfg.Metadata,
+		Alias:                        cfg.Alias,
+		ExplicitName:                 cfg.ExplicitName,
+		Template:                     cfg.Template,
+		Title:                        cfg.Title,
+		Command:                      cfg.Runtime.Command,
+		WorkDir:                      cfg.Runtime.WorkDir,
+		Provider:                     cfg.Runtime.Provider,
+		Transport:                    cfg.Transport,
+		Env:                          cfg.Runtime.SessionEnv,
+		Resume:                       cfg.Runtime.Resume,
+		Hints:                        cfg.Runtime.Hints,
+		ResolveProviderFenceIdentity: cfg.Runtime.ResolveProviderFenceIdentity,
+		Metadata:                     cfg.Metadata,
 	}, nil
 }
 
@@ -121,6 +126,7 @@ func applyResolvedRuntimeToSessionSpec(spec *SessionSpec, runtime *ResolvedRunti
 	spec.Env = normalized.SessionEnv
 	spec.Resume = normalized.Resume
 	spec.Hints = normalized.Hints
+	spec.ResolveProviderFenceIdentity = normalized.ResolveProviderFenceIdentity
 	if strings.TrimSpace(spec.Hints.WorkDir) == "" {
 		spec.Hints.WorkDir = strings.TrimSpace(spec.WorkDir)
 	}
