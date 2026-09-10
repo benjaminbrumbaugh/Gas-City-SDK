@@ -24,10 +24,11 @@ const gastownTestRootPrefix = "gc-examples-gastown-"
 //  1. dolttest.SweepStale reaps sql-servers left by a PRIOR run of this
 //     binary that was SIGKILLed before its own Guard could react (SIGKILL
 //     is uncatchable in-process, so only a next-run sweep catches that).
-//  2. dolttest.SweepOrphanStoreDirs is the symptom-based fallback
-//     (acceptance criterion 2): age > 60m, a .dolt marker present, not
-//     held open by any live process — catches the directory left behind
-//     regardless of what created it, including cases 1 above still misses.
+//  2. dolttest.SweepOrphanStoreDirsWithPrefix is the symptom-based fallback
+//     for this binary's run-root namespace: age > 60m, a .dolt marker
+//     present, not held open by any live process. The explicit namespace
+//     keeps startup cleanup from recursively inspecting unrelated temporary
+//     trees while still catching stale directories from prior runs.
 //  3. dolttest.Guard reaps any sql-server still alive under this run's own
 //     root on SIGINT/SIGTERM/SIGQUIT (go test -timeout) or normal exit.
 //
@@ -46,7 +47,7 @@ func TestMain(m *testing.M) {
 	}
 
 	dolttest.SweepStale(parent, gastownTestRootPrefix)
-	dolttest.SweepOrphanStoreDirs(parent)
+	dolttest.SweepOrphanStoreDirsWithPrefix(parent, gastownTestRootPrefix)
 	stopGuard := dolttest.Guard(runRoot)
 
 	code := m.Run()

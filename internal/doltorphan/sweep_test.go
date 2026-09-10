@@ -227,6 +227,29 @@ func TestSweep_RootReadErrorIsReported(t *testing.T) {
 	}
 }
 
+func TestSweep_EntryPrefixScopesCandidateScan(t *testing.T) {
+	root := t.TempDir()
+	old := time.Now().Add(-2 * time.Hour)
+	matching := mkStoreDir(t, root, "gc-examples-gastown-123", 3, old)
+	outside := mkStoreDir(t, root, "unrelated-test-123", 3, old)
+
+	result := Sweep(SweepConfig{
+		Root:        root,
+		EntryPrefix: "gc-examples-gastown-",
+		RunLsof:     noLsofHits,
+	})
+
+	if len(result.Errors) != 0 {
+		t.Fatalf("unexpected errors: %v", result.Errors)
+	}
+	if len(result.Removed) != 1 || result.Removed[0] != matching {
+		t.Fatalf("Removed = %v, want [%s]", result.Removed, matching)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("unrelated directory should not be scanned or removed: %v", err)
+	}
+}
+
 func TestSweep_DefaultMinAgeAppliesWhenUnset(t *testing.T) {
 	root := t.TempDir()
 	justUnderDefault := time.Now().Add(-DefaultMinAge + time.Minute)
