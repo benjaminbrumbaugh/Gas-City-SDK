@@ -829,6 +829,14 @@ type Store interface {
 	DepList(id, direction string) ([]Dep, error)
 }
 
+// ContextStoreReader is an optional exact/list read capability for
+// deadline-sensitive controller paths. Implementations must propagate ctx to
+// the backing query and stop iterating when it is canceled.
+type ContextStoreReader interface {
+	GetContext(ctx context.Context, id string) (Bead, error)
+	ListContext(ctx context.Context, query ListQuery) ([]Bead, error)
+}
+
 // ContextReadyReader is an optional Ready capability for deadline-sensitive
 // callers. Implementations must stop all work started by ReadyContext before
 // returning after ctx cancellation; callers may treat ErrCacheUnavailable as a

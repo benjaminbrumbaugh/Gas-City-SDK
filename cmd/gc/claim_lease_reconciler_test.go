@@ -15,6 +15,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/coordclass"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
 )
@@ -26,17 +27,18 @@ type claimLeaseHeartbeat struct {
 
 type claimLeaseTestStore struct {
 	*beads.MemStore
-	mu               sync.Mutex
-	listErr          error
-	heartbeats       []claimLeaseHeartbeat
-	heartbeatErr     error
-	reclaimCalls     []time.Duration
-	reclaimAssignees [][]string
-	reclaimClaimIDs  [][]string
-	reclaimCount     int
-	reclaimErr       error
-	reclaimRows      bool
-	leaseExpiresAt   time.Time
+	mu                sync.Mutex
+	listErr           error
+	heartbeats        []claimLeaseHeartbeat
+	heartbeatErr      error
+	reclaimCalls      []time.Duration
+	reclaimAssignees  [][]string
+	reclaimClaimIDs   [][]string
+	reclaimCount      int
+	reclaimErr        error
+	reclaimRows       bool
+	leaseExpiresAt    time.Time
+	beforeGetLeaseRow func(id string)
 }
 
 type concurrentClaimLeaseTestStore struct {
@@ -98,9 +100,12 @@ func (s *claimLeaseTestStore) ListOpenSessionRows(ctx context.Context) ([]beads.
 	return s.List(beads.ListQuery{AllowScan: true, TierMode: beads.TierBoth, Live: true})
 }
 
-func (s *claimLeaseTestStore) GetClaimOwner(ctx context.Context, id string) (beads.Bead, error) {
+func (s *claimLeaseTestStore) GetLeaseRow(ctx context.Context, id string) (beads.Bead, error) {
 	if err := ctx.Err(); err != nil {
 		return beads.Bead{}, err
+	}
+	if s.beforeGetLeaseRow != nil {
+		s.beforeGetLeaseRow(id)
 	}
 	return s.Get(id)
 }
@@ -421,6 +426,75 @@ func TestReconcileClaimLeasesReclaimsOnlyExactTerminalAssignee(t *testing.T) {
 	}
 	if got.Stores[0].Errors != 0 || got.LastSuccessfulAt.IsZero() {
 		t.Fatalf("mixed-owner diagnostics = %#v, want success", got)
+	}
+}
+
+func TestReconcileClaimLeasesReclaimsEachTerminalTupleIndependently(t *testing.T) {
+	store := newClaimLeaseTestStore(t,
+		beads.Bead{ID: "claim-a", Status: "in_progress", Assignee: "worker-a", Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: "session-a"}},
+		beads.Bead{ID: "claim-b", Status: "in_progress", Assignee: "worker-b", Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: "session-b"}},
+		beads.Bead{ID: "session-a", Type: session.BeadType, Status: "closed", Labels: []string{session.LabelSession}, Metadata: beads.StringMap{"session_name": "worker-a", "instance_token": "token-a"}},
+		beads.Bead{ID: "session-b", Type: session.BeadType, Status: "closed", Labels: []string{session.LabelSession}, Metadata: beads.StringMap{"session_name": "worker-b", "instance_token": "token-b"}},
+	)
+
+	got := reconcileClaimLeases(context.Background(), nil, nil, []claimLeaseScope{{Name: "city", Store: store, Lease: store}}, time.Now())
+	if got.Stores[0].Errors != 0 || len(store.reclaimCalls) != 2 {
+		t.Fatalf("reclaim diagnostics = %#v calls=%d, want two exact calls", got.Stores[0], len(store.reclaimCalls))
+	}
+	want := map[string]string{"claim-a": "worker-a", "claim-b": "worker-b"}
+	for i := range store.reclaimCalls {
+		if len(store.reclaimClaimIDs[i]) != 1 || len(store.reclaimAssignees[i]) != 1 {
+			t.Fatalf("reclaim call %d = ids:%v assignees:%v, want one tuple", i, store.reclaimClaimIDs[i], store.reclaimAssignees[i])
+		}
+		if want[store.reclaimClaimIDs[i][0]] != store.reclaimAssignees[i][0] {
+			t.Fatalf("reclaim call %d crossed owner tuples: ids:%v assignees:%v", i, store.reclaimClaimIDs[i], store.reclaimAssignees[i])
+		}
+	}
+}
+
+func TestReconcileClaimLeasesRevalidatesClaimBeforeTerminalReclaim(t *testing.T) {
+	store := newClaimLeaseTestStore(t,
+		beads.Bead{ID: "claim", Status: "in_progress", Assignee: "old-worker", Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: "old-session"}},
+		beads.Bead{ID: "old-session", Type: session.BeadType, Status: "closed", Labels: []string{session.LabelSession}, Metadata: beads.StringMap{"session_name": "old-worker", "instance_token": "old-token"}},
+	)
+	changed := false
+	store.beforeGetLeaseRow = func(id string) {
+		if id != "claim" || changed {
+			return
+		}
+		changed = true
+		newAssignee := "new-worker"
+		if err := store.Update("claim", beads.UpdateOpts{Assignee: &newAssignee, Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: "new-session"}}); err != nil {
+			t.Fatalf("transfer claim: %v", err)
+		}
+	}
+
+	got := reconcileClaimLeases(context.Background(), nil, nil, []claimLeaseScope{{Name: "city", Store: store, Lease: store}}, time.Now())
+	if len(store.reclaimCalls) != 0 {
+		t.Fatalf("transferred claim reclaim calls = %v, want none", store.reclaimCalls)
+	}
+	if got.Stores[0].Errors == 0 || !got.LastSuccessfulAt.IsZero() {
+		t.Fatalf("transferred claim diagnostics = %#v, want fail-closed error", got)
+	}
+}
+
+func TestReconcileClaimLeasesUsesRelocatedSessionOwnerStore(t *testing.T) {
+	const sessionID, sessionName = "relocated-session", "relocated-worker"
+	claims := newClaimLeaseTestStore(t, beads.Bead{ID: "claim", Status: "in_progress", Assignee: sessionName, Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: sessionID}})
+	owners := newClaimLeaseTestStore(t, beads.Bead{ID: sessionID, Type: session.BeadType, Labels: []string{session.LabelSession}, Metadata: beads.StringMap{"state": string(session.StateActive), "session_name": sessionName, "instance_token": "token"}})
+	cr := &CityRuntime{storageRoutes: &storageRoutes{stores: map[coordclass.Class]beads.Store{coordclass.ClassSessions: owners}}}
+	claimScopes := []claimLeaseScope{{Name: "city", Store: claims, Lease: claims}}
+	ownerScopes, err := cr.claimLeaseOwnerScopes(claimScopes)
+	if err != nil {
+		t.Fatalf("claimLeaseOwnerScopes() error = %v", err)
+	}
+	census, err := loadCurrentClaimLeaseOwners(context.Background(), ownerScopes)
+	if err != nil {
+		t.Fatalf("loadCurrentClaimLeaseOwners() error = %v", err)
+	}
+	got := reconcileClaimLeasesWithOwnerScopes(context.Background(), nil, census, claimScopes, ownerScopes, time.Now())
+	if len(claims.heartbeats) != 1 || claims.heartbeats[0].id != "claim" || got.Stores[0].Errors != 0 {
+		t.Fatalf("relocated-owner result = heartbeats:%v diagnostics:%#v", claims.heartbeats, got)
 	}
 }
 

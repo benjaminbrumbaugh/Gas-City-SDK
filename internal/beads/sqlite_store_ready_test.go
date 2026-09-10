@@ -19,6 +19,31 @@ func newReadySQLiteStore(t *testing.T) *SQLiteStore {
 	return store
 }
 
+func TestSQLiteStoreContextReadsMatchStoreAndHonorCancellation(t *testing.T) {
+	store := newReadySQLiteStore(t)
+	created, err := store.Create(Bead{Title: "context read", Type: "task", Status: "open"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := store.GetContext(context.Background(), created.ID)
+	if err != nil || got.ID != created.ID {
+		t.Fatalf("GetContext() = (%#v, %v), want exact created row", got, err)
+	}
+	rows, err := store.ListContext(context.Background(), ListQuery{Status: "open", TierMode: TierBoth, Live: true})
+	if err != nil || len(rows) != 1 || rows[0].ID != created.ID {
+		t.Fatalf("ListContext() = (%#v, %v), want exact open row", rows, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.GetContext(ctx, created.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetContext() error = %v, want context.Canceled", err)
+	}
+	if _, err := store.ListContext(ctx, ListQuery{AllowScan: true}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListContext() error = %v, want context.Canceled", err)
+	}
+}
+
 // seedReadyCorpus populates a store with beads that exercise every ReadyQuery
 // filter: assignee, tier, dependency gating, and non-actionable types.
 func seedReadyCorpus(t *testing.T, store *SQLiteStore) {

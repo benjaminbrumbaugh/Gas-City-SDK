@@ -50,6 +50,7 @@ type SQLiteStoreOptions struct {
 var (
 	_ Store                         = (*SQLiteStore)(nil)
 	_ AtomicTxStore                 = (*SQLiteStore)(nil)
+	_ ContextStoreReader            = (*SQLiteStore)(nil)
 	_ ContextReadyReader            = (*SQLiteStore)(nil)
 	_ ConditionalAssignmentReleaser = (*SQLiteStore)(nil)
 	_ ForeignIDCreator              = (*SQLiteStore)(nil)
@@ -1027,15 +1028,30 @@ func (s *SQLiteStore) IDPrefix() string {
 
 // Get retrieves a bead by ID.
 func (s *SQLiteStore) Get(id string) (Bead, error) {
+	return s.GetContext(context.Background(), id)
+}
+
+// GetContext retrieves a bead by exact ID while propagating cancellation to
+// SQLite's query.
+func (s *SQLiteStore) GetContext(ctx context.Context, id string) (Bead, error) {
 	if err := s.ensureOpen(); err != nil {
 		return Bead{}, err
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return Bead{}, err
+	}
 	row := s.readDB.QueryRowContext(
-		context.Background(),
+		ctx,
 		`SELECT `+s.sqliteBeadProjection()+` FROM beads b WHERE b.id=?`,
 		id,
 	)
 	b, err := scanSQLiteBead(row)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return Bead{}, ctxErr
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
 	}
@@ -1285,22 +1301,43 @@ func (s *SQLiteStore) CloseAll(ids []string, metadata map[string]string) (int, e
 
 // List returns beads matching the query.
 func (s *SQLiteStore) List(query ListQuery) ([]Bead, error) {
+	return s.ListContext(context.Background(), query)
+}
+
+// ListContext lists matching beads while propagating cancellation to SQLite's
+// query and decode loop.
+func (s *SQLiteStore) ListContext(ctx context.Context, query ListQuery) ([]Bead, error) {
 	if err := s.ensureOpen(); err != nil {
+		return nil, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if !query.HasFilter() && !query.AllowScan {
 		return nil, fmt.Errorf("listing beads: %w", ErrQueryRequiresScan)
 	}
 	sqlText, args := sqliteListSQL(query, s.sqliteBeadProjection())
-	rows, err := s.readDB.QueryContext(context.Background(), sqlText, args...)
+	rows, err := s.readDB.QueryContext(ctx, sqlText, args...)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("listing sqlite beads: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck
 	var result []Bead
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		b, err := scanSQLiteBead(rows)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			return nil, fmt.Errorf("listing sqlite beads: %w", err)
 		}
 		if !query.Matches(b) {
@@ -1309,6 +1346,9 @@ func (s *SQLiteStore) List(query ListQuery) ([]Bead, error) {
 		result = append(result, b)
 	}
 	if err := rows.Err(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("listing sqlite beads: %w", err)
 	}
 	sortBeadsForQuery(result, query.Sort)

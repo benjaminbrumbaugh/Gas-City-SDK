@@ -52,9 +52,9 @@ func TestBdStoreLeaseReadsUseBoundedNativeRunner(t *testing.T) {
 	if err != nil || len(sessions) != 1 || sessions[0].ID != "row" {
 		t.Fatalf("ListOpenSessionRows() = (%#v, %v), want row", sessions, err)
 	}
-	owner, err := store.GetClaimOwner(ctx, "row")
+	owner, err := store.GetLeaseRow(ctx, "row")
 	if err != nil || owner.ID != "row" {
-		t.Fatalf("GetClaimOwner() = (%#v, %v), want exact row", owner, err)
+		t.Fatalf("GetLeaseRow() = (%#v, %v), want exact row", owner, err)
 	}
 	want := [][]string{
 		{"list", "--json", "--include-infra", "--include-gates", "--include-templates", "--limit", "0", "--status", "in_progress"},
@@ -66,13 +66,13 @@ func TestBdStoreLeaseReadsUseBoundedNativeRunner(t *testing.T) {
 	}
 }
 
-func TestBdStoreGetClaimOwnerRejectsNonExactResolution(t *testing.T) {
+func TestBdStoreGetLeaseRowRejectsNonExactResolution(t *testing.T) {
 	store := NewBdStore("/city", nil, WithBdStoreLeaseRunner(func(context.Context, string, string, ...string) ([]byte, error) {
 		return []byte(`[{"id":"prefix-other","title":"row","status":"closed","issue_type":"session"}]`), nil
 	}))
 
-	if _, err := store.GetClaimOwner(context.Background(), "prefix"); !errors.Is(err, ErrIDCollision) {
-		t.Fatalf("GetClaimOwner() error = %v, want ErrIDCollision", err)
+	if _, err := store.GetLeaseRow(context.Background(), "prefix"); !errors.Is(err, ErrIDCollision) {
+		t.Fatalf("GetLeaseRow() error = %v, want ErrIDCollision", err)
 	}
 }
 
@@ -89,8 +89,8 @@ func TestBdStoreLeaseReadsPropagateCancellation(t *testing.T) {
 	if _, err := store.ListOpenSessionRows(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("ListOpenSessionRows() error = %v, want context.Canceled", err)
 	}
-	if _, err := store.GetClaimOwner(ctx, "owner"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("GetClaimOwner() error = %v, want context.Canceled", err)
+	if _, err := store.GetLeaseRow(ctx, "owner"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetLeaseRow() error = %v, want context.Canceled", err)
 	}
 }
 
@@ -169,8 +169,8 @@ func TestBdStoreLeaseMethodsRefuseWithoutNativeLeaseRunner(t *testing.T) {
 	if _, err := store.ListOpenSessionRows(context.Background()); !errors.Is(err, ErrClaimLeaseUnsupported) {
 		t.Fatalf("ListOpenSessionRows() error = %v, want ErrClaimLeaseUnsupported", err)
 	}
-	if _, err := store.GetClaimOwner(context.Background(), "owner"); !errors.Is(err, ErrClaimLeaseUnsupported) {
-		t.Fatalf("GetClaimOwner() error = %v, want ErrClaimLeaseUnsupported", err)
+	if _, err := store.GetLeaseRow(context.Background(), "owner"); !errors.Is(err, ErrClaimLeaseUnsupported) {
+		t.Fatalf("GetLeaseRow() error = %v, want ErrClaimLeaseUnsupported", err)
 	}
 	if err := store.HeartbeatClaim(context.Background(), "claim", "token"); !errors.Is(err, ErrClaimLeaseUnsupported) {
 		t.Fatalf("HeartbeatClaim() error = %v, want ErrClaimLeaseUnsupported", err)

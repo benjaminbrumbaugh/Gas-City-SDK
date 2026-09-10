@@ -30,22 +30,30 @@ func WithBdStoreLeaseRunner(runner LeaseCommandRunner) BdStoreOption {
 	}
 }
 
+// ClaimLeaseOwnerStore provides the bounded reads required to establish current
+// and terminal session ownership. It is separate from ClaimLeaseStore because a
+// relocated session-class store carries durable owner rows but no native lease
+// table of its own.
+type ClaimLeaseOwnerStore interface {
+	// ListOpenSessionRows returns the current non-closed rows from which the
+	// controller builds its session-owner census. The beads package deliberately
+	// does not classify session rows, avoiding a package cycle with session.
+	ListOpenSessionRows(ctx context.Context) ([]Bead, error)
+	// GetLeaseRow resolves an exact persisted row, including closed history.
+	// Reconciliation uses it for both terminal-owner and final claim fencing.
+	GetLeaseRow(ctx context.Context, id string) (Bead, error)
+}
+
 // ClaimLeaseStore exposes the native, node-local claim lease operations. The
 // interface is deliberately optional: backends that do not implement bd's
 // ephemeral lease table must fail closed rather than emulate it with metadata.
 type ClaimLeaseStore interface {
+	ClaimLeaseOwnerStore
 	// ListInProgressClaims returns the current durable and ephemeral rows whose
 	// stored status is in_progress. The caller applies claim identity checks;
 	// this read exists here so the same bounded native runner owns the complete
 	// lease patrol rather than falling back to context-free Store.List.
 	ListInProgressClaims(ctx context.Context) ([]Bead, error)
-	// ListOpenSessionRows returns the current non-closed rows from which the
-	// controller builds its session-owner census. The beads package deliberately
-	// does not classify session rows, avoiding a package cycle with session.
-	ListOpenSessionRows(ctx context.Context) ([]Bead, error)
-	// GetClaimOwner resolves an exact persisted owner row, including closed
-	// history, through the bounded native runner.
-	GetClaimOwner(ctx context.Context, id string) (Bead, error)
 	HeartbeatClaim(ctx context.Context, id, holder string) error
 	ReclaimExpiredClaims(ctx context.Context, olderThan time.Duration, scope ClaimLeaseReclaimScope) (int, error)
 }
@@ -93,29 +101,29 @@ func (s *BdStore) listLeaseRows(ctx context.Context, filters ...string) ([]Bead,
 	return rows, nil
 }
 
-// GetClaimOwner resolves one exact persisted owner row, including closed rows,
-// through the context-bound native lease runner.
-func (s *BdStore) GetClaimOwner(ctx context.Context, id string) (Bead, error) {
+// GetLeaseRow resolves one exact persisted row, including closed rows, through
+// the context-bound native lease runner.
+func (s *BdStore) GetLeaseRow(ctx context.Context, id string) (Bead, error) {
 	if s == nil || s.leaseRunner == nil {
 		return Bead{}, ErrClaimLeaseUnsupported
 	}
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return Bead{}, errors.New("getting claim owner: empty bead id")
+		return Bead{}, errors.New("getting claim lease row: empty bead id")
 	}
 	out, err := s.leaseRunner(ctx, s.dir, "", s.bdTransientWriteArgs([]string{"show", "--json", id})...)
 	if err != nil {
 		if isBdNotFound(err) {
-			return Bead{}, fmt.Errorf("getting claim owner %q: %w", id, ErrNotFound)
+			return Bead{}, fmt.Errorf("getting claim lease row %q: %w", id, ErrNotFound)
 		}
-		return Bead{}, fmt.Errorf("getting claim owner %q: %w", id, err)
+		return Bead{}, fmt.Errorf("getting claim lease row %q: %w", id, err)
 	}
 	issues, err := parseIssuesTolerant(extractJSON(out))
 	if err != nil {
-		return Bead{}, fmt.Errorf("getting claim owner %q: %w", id, err)
+		return Bead{}, fmt.Errorf("getting claim lease row %q: %w", id, err)
 	}
 	if len(issues) == 0 {
-		return Bead{}, fmt.Errorf("getting claim owner %q: %w", id, ErrNotFound)
+		return Bead{}, fmt.Errorf("getting claim lease row %q: %w", id, ErrNotFound)
 	}
 	bead := issues[0].toBead()
 	if bead.ID != id {

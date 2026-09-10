@@ -11,6 +11,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/coordclass"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
@@ -37,6 +38,26 @@ type claimLeaseScope struct {
 	Name  string
 	Store beads.Store
 	Lease beads.ClaimLeaseStore
+	Owner beads.ClaimLeaseOwnerStore
+}
+
+func (scope claimLeaseScope) ownerStore() beads.ClaimLeaseOwnerStore {
+	if scope.Owner != nil {
+		return scope.Owner
+	}
+	return scope.Lease
+}
+
+type contextualClaimLeaseOwnerStore struct {
+	reader beads.ContextStoreReader
+}
+
+func (s contextualClaimLeaseOwnerStore) ListOpenSessionRows(ctx context.Context) ([]beads.Bead, error) {
+	return s.reader.ListContext(ctx, beads.ListQuery{AllowScan: true, TierMode: beads.TierBoth, Live: true})
+}
+
+func (s contextualClaimLeaseOwnerStore) GetLeaseRow(ctx context.Context, id string) (beads.Bead, error) {
+	return s.reader.GetContext(ctx, id)
 }
 
 type claimLeaseStoreReport struct {
@@ -61,6 +82,10 @@ type claimLeaseReconcileResult struct {
 // is attempted for that scope. Missing or fenced ownership evidence is also a
 // safety failure: the pass does not guess that a worker is gone.
 func reconcileClaimLeases(ctx context.Context, _ runtime.Provider, infos []session.Info, scopes []claimLeaseScope, now time.Time) claimLeaseReconcileResult {
+	return reconcileClaimLeasesWithOwnerScopes(ctx, nil, infos, scopes, scopes, now)
+}
+
+func reconcileClaimLeasesWithOwnerScopes(ctx context.Context, _ runtime.Provider, infos []session.Info, scopes, ownerScopes []claimLeaseScope, now time.Time) claimLeaseReconcileResult {
 	result := claimLeaseReconcileResult{LastAttemptAt: now.UTC()}
 	bySessionID := make(map[string]session.Info, len(infos))
 	for _, info := range infos {
@@ -138,7 +163,7 @@ func reconcileClaimLeases(ctx context.Context, _ runtime.Provider, infos []sessi
 			if !exists {
 				lookup, lookedUp := closedOwners[sessionID]
 				if !lookedUp {
-					lookup.info, lookup.found, lookup.err = findClosedClaimLeaseOwner(ctx, sessionID, scopes)
+					lookup.info, lookup.found, lookup.err = findClosedClaimLeaseOwner(ctx, sessionID, ownerScopes)
 					closedOwners[sessionID] = lookup
 				}
 				if lookup.err != nil || !lookup.found {
@@ -202,53 +227,54 @@ func reconcileClaimLeases(ctx context.Context, _ runtime.Provider, infos []sessi
 			current.Renewed++
 		}
 		assigneeList := make([]string, 0, len(reclaimCandidates))
-		claimIDs := make([]string, 0)
-		for assignee, candidates := range reclaimCandidates {
+		for assignee := range reclaimCandidates {
 			if reclaimDenied[assignee] {
 				continue
 			}
-			// Re-read terminal owners immediately before the destructive call.
-			// Session closure is terminal, but this second exact read also fences
-			// stale first-pass observations and cross-store identity movement.
-			valid := true
-			for _, candidate := range candidates {
-				owner, found, err := findClosedClaimLeaseOwner(ctx, candidate.ownerID, scopes)
-				if err != nil || !found {
-					valid = false
-					break
-				}
-				_, _, safe := claimLeaseOwnerStatus(owner)
-				if !safe || !claimLeaseAssigneeMatches(owner, assignee) {
-					valid = false
-					break
-				}
-			}
-			if !valid {
-				current.Errors++
-				allComplete = false
-				continue
-			}
 			assigneeList = append(assigneeList, assignee)
-			for _, candidate := range candidates {
-				claimIDs = append(claimIDs, candidate.claimID)
-			}
 		}
 		if len(assigneeList) == 0 {
 			continue
 		}
 		sort.Strings(assigneeList)
-		sort.Strings(claimIDs)
-		opCtx, cancel := context.WithTimeout(ctx, claimLeaseOperationTimeout)
-		reclaimed, err := scope.Lease.ReclaimExpiredClaims(opCtx, claimLeaseReclaimGrace, beads.ClaimLeaseReclaimScope{
-			ClaimIDs: claimIDs, Assignees: assigneeList,
-		})
-		cancel()
-		if err != nil {
-			current.Errors++
-			allComplete = false
-			continue
+		for _, assignee := range assigneeList {
+			candidates := reclaimCandidates[assignee]
+			sort.Slice(candidates, func(i, j int) bool { return candidates[i].claimID < candidates[j].claimID })
+			for _, candidate := range candidates {
+				// Re-read both sides immediately before a one-claim/one-assignee
+				// native reclaim. The command's atomic AND filter therefore cannot
+				// form Cartesian owner/claim combinations.
+				owner, found, err := findClosedClaimLeaseOwner(ctx, candidate.ownerID, ownerScopes)
+				if err != nil || !found {
+					current.Errors++
+					allComplete = false
+					continue
+				}
+				_, _, safe := claimLeaseOwnerStatus(owner)
+				if !safe || !claimLeaseAssigneeMatches(owner, assignee) {
+					current.Errors++
+					allComplete = false
+					continue
+				}
+				claim, err := scope.Lease.GetLeaseRow(ctx, candidate.claimID)
+				if err != nil || claim.Status != "in_progress" || session.IsSessionBeadOrRepairable(claim) || strings.TrimSpace(claim.Assignee) != assignee || strings.TrimSpace(claim.Metadata[beadmeta.SessionIDMetadataKey]) != candidate.ownerID {
+					current.Errors++
+					allComplete = false
+					continue
+				}
+				opCtx, cancel := context.WithTimeout(ctx, claimLeaseOperationTimeout)
+				reclaimed, err := scope.Lease.ReclaimExpiredClaims(opCtx, claimLeaseReclaimGrace, beads.ClaimLeaseReclaimScope{
+					ClaimIDs: []string{candidate.claimID}, Assignees: []string{assignee},
+				})
+				cancel()
+				if err != nil {
+					current.Errors++
+					allComplete = false
+					continue
+				}
+				current.Reclaimed += reclaimed
+			}
 		}
-		current.Reclaimed = reclaimed
 	}
 	if allComplete && len(result.Stores) > 0 {
 		result.LastSuccessfulAt = now.UTC()
@@ -264,10 +290,11 @@ func reconcileClaimLeases(ctx context.Context, _ runtime.Provider, infos []sessi
 func findClosedClaimLeaseOwner(ctx context.Context, sessionID string, scopes []claimLeaseScope) (session.Info, bool, error) {
 	var found session.Info
 	for _, scope := range scopes {
-		if scope.Lease == nil {
+		ownerStore := scope.ownerStore()
+		if ownerStore == nil {
 			return session.Info{}, false, fmt.Errorf("session owner lookup store %q is unavailable", scope.Name)
 		}
-		row, err := scope.Lease.GetClaimOwner(ctx, sessionID)
+		row, err := ownerStore.GetLeaseRow(ctx, sessionID)
 		if err != nil {
 			if errors.Is(err, beads.ErrNotFound) {
 				continue
@@ -381,7 +408,7 @@ func (cr *CityRuntime) runFreshClaimLeaseReconcile(ctx context.Context, now time
 	}
 	passCtx, cancel := context.WithTimeout(ctx, claimLeasePassTimeout)
 	defer cancel()
-	owners, err := loadCurrentClaimLeaseOwners(passCtx, scopes)
+	ownerScopes, err := cr.claimLeaseOwnerScopes(scopes)
 	if err != nil {
 		result := claimLeaseReconcileResult{LastAttemptAt: now.UTC()}
 		for _, scope := range scopes {
@@ -391,7 +418,17 @@ func (cr *CityRuntime) runFreshClaimLeaseReconcile(ctx context.Context, now time
 		cr.publishClaimLeaseResult(result)
 		return
 	}
-	result := reconcileClaimLeases(passCtx, nil, owners, scopes, now)
+	owners, err := loadCurrentClaimLeaseOwners(passCtx, ownerScopes)
+	if err != nil {
+		result := claimLeaseReconcileResult{LastAttemptAt: now.UTC()}
+		for _, scope := range scopes {
+			result.Stores = append(result.Stores, claimLeaseStoreReport{Name: scope.Name, Errors: 1})
+		}
+		sortClaimLeaseReports(result.Stores)
+		cr.publishClaimLeaseResult(result)
+		return
+	}
+	result := reconcileClaimLeasesWithOwnerScopes(passCtx, nil, owners, scopes, ownerScopes, now)
 	sortClaimLeaseReports(result.Stores)
 	cr.publishClaimLeaseResult(result)
 }
@@ -400,10 +437,11 @@ func loadCurrentClaimLeaseOwners(ctx context.Context, scopes []claimLeaseScope) 
 	owners := make([]session.Info, 0)
 	ownerScopes := make(map[string]string)
 	for _, scope := range scopes {
-		if scope.Lease == nil {
+		ownerStore := scope.ownerStore()
+		if ownerStore == nil {
 			return nil, fmt.Errorf("claim lease owner census store %q is unavailable", scope.Name)
 		}
-		rows, err := scope.Lease.ListOpenSessionRows(ctx)
+		rows, err := ownerStore.ListOpenSessionRows(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("claim lease owner census in %s: %w", scope.Name, err)
 		}
@@ -502,6 +540,26 @@ func (cr *CityRuntime) claimLeaseScopes() ([]claimLeaseScope, error) {
 		})
 	}
 	return scopes, nil
+}
+
+// claimLeaseOwnerScopes adds a relocated session-class store to the bounded
+// owner census without granting it claim-lease mutation authority.
+func (cr *CityRuntime) claimLeaseOwnerScopes(claimScopes []claimLeaseScope) ([]claimLeaseScope, error) {
+	ownerScopes := append([]claimLeaseScope(nil), claimScopes...)
+	store, relocated := cr.storageRoutes.storeFor(coordclass.ClassSessions)
+	if !relocated {
+		return ownerScopes, nil
+	}
+	var owner beads.ClaimLeaseOwnerStore
+	if native, ok := store.(beads.ClaimLeaseOwnerStore); ok {
+		owner = native
+	} else if reader, ok := store.(beads.ContextStoreReader); ok {
+		owner = contextualClaimLeaseOwnerStore{reader: reader}
+	}
+	if owner == nil {
+		return nil, errors.New("relocated session owner store does not support bounded reads")
+	}
+	return append(ownerScopes, claimLeaseScope{Name: "sessions", Store: store, Owner: owner}), nil
 }
 
 func (cr *CityRuntime) claimLeaseBackend(scopeRoot string, store beads.Store, cfg *config.City) beads.ClaimLeaseStore {
