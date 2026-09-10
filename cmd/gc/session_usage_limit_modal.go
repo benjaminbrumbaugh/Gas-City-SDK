@@ -197,3 +197,24 @@ func usageLimitModalRuntimeMatchesInstance(sp runtime.Provider, name string, inf
 	}
 	return nil
 }
+
+// usageLimitRestartHandoffRollback restores the fields RestartRequestPatch
+// changes destructively when the atomic runtime guard refuses the stop. The
+// restart request itself deliberately remains armed for a later safe retry.
+func usageLimitRestartHandoffRollback(info sessionpkg.Info, handoff sessionpkg.MetadataPatch) sessionpkg.MetadataPatch {
+	rollback := sessionpkg.MetadataPatch{
+		"started_config_hash":                    info.StartedConfigHash,
+		"continuation_reset_pending":             info.ContinuationResetPending,
+		sessionpkg.ResetCommittedAtKey:           info.ResetCommittedAt,
+		"last_woke_at":                           info.LastWokeAt,
+		"pending_create_claim":                   info.PendingCreateClaimMetadata,
+		"pending_create_started_at":              info.PendingCreateStartedAt,
+		sessionpkg.PrimedAtMetadataKey:           info.PrimedAtMetadata,
+		sessionpkg.PrimingAttemptedAtMetadataKey: info.PrimingAttemptedAtMetadata,
+		sessionpkg.PromptHashMetadataKey:         info.PromptHashMetadata,
+	}
+	if _, changed := handoff["session_key"]; changed {
+		rollback["session_key"] = info.SessionKey
+	}
+	return rollback
+}

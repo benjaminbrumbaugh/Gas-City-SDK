@@ -25,6 +25,7 @@ var (
 	_ runtime.InterruptedTurnResetProvider  = (*Provider)(nil)
 	_ runtime.RelaunchProvider              = (*Provider)(nil)
 	_ runtime.LivenessObserver              = (*Provider)(nil)
+	_ runtime.ConditionalStopProvider       = (*Provider)(nil)
 )
 
 // New creates a hybrid provider. isRemote returns true for sessions
@@ -48,6 +49,15 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 // Stop delegates to the routed backend.
 func (p *Provider) Stop(name string) error {
 	return p.route(name).Stop(name)
+}
+
+// StopIfDetached delegates the fenced stop when the routed backend supports it.
+func (p *Provider) StopIfDetached(name, expectedInstanceToken string) error {
+	provider, ok := p.route(name).(runtime.ConditionalStopProvider)
+	if !ok {
+		return runtime.ErrConditionalStopUnsupported
+	}
+	return provider.StopIfDetached(name, expectedInstanceToken)
 }
 
 // Interrupt delegates to the routed backend.

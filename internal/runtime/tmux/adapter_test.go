@@ -100,6 +100,43 @@ func TestProvider_StartStopIsRunning(t *testing.T) {
 	}
 }
 
+func TestProvider_StopIfDetachedUsesLiveTmuxGuards(t *testing.T) {
+	if !hasTmux() {
+		t.Skip("tmux not installed")
+	}
+
+	cfg := DefaultConfig()
+	cfg.SocketName = testSocketName
+	p := NewProviderWithConfig(cfg)
+	name := "gc-test-conditional-stop"
+	_ = p.Stop(name)
+	if err := p.Start(context.Background(), name, runtime.Config{Command: "sleep 300"}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = p.Stop(name) }()
+
+	token, err := p.GetMeta(name, "GC_INSTANCE_TOKEN")
+	if err != nil {
+		t.Fatalf("GetMeta(GC_INSTANCE_TOKEN): %v", err)
+	}
+	wrong := strings.Repeat("0", 32)
+	if token == wrong {
+		wrong = strings.Repeat("f", 32)
+	}
+	if err := p.StopIfDetached(name, wrong); !errors.Is(err, runtime.ErrConditionalStopRefused) {
+		t.Fatalf("StopIfDetached(wrong token) = %v, want ErrConditionalStopRefused", err)
+	}
+	if !p.IsRunning(name) {
+		t.Fatal("token-mismatched runtime was stopped")
+	}
+	if err := p.StopIfDetached(name, token); err != nil {
+		t.Fatalf("StopIfDetached(matching token): %v", err)
+	}
+	if p.IsRunning(name) {
+		t.Fatal("matching detached runtime remained running")
+	}
+}
+
 func TestProvider_StartWithEnv(t *testing.T) {
 	if !hasTmux() {
 		t.Skip("tmux not installed")

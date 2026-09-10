@@ -777,6 +777,34 @@ func (t *Tmux) KillSession(name string) error {
 	return err
 }
 
+const conditionalStopRefusedMarker = "gc:conditional-stop-refused"
+
+var instanceTokenPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// conditionalKillSession asks the tmux server to evaluate the incarnation and
+// attachment guards and kill the captured session ID in one command-queue item.
+// Targeting the immutable session ID ensures a same-name replacement cannot be
+// selected even if the observed session disappears before this command runs.
+func (t *Tmux) conditionalKillSession(sessionID, expectedInstanceToken string) error {
+	if !instanceTokenPattern.MatchString(expectedInstanceToken) {
+		return fmt.Errorf("invalid instance token %q", expectedInstanceToken)
+	}
+	condition := fmt.Sprintf(
+		"#{&&:#{==:#{GC_INSTANCE_TOKEN},%s},#{==:#{session_attached},0}}",
+		expectedInstanceToken,
+	)
+	killCommand := "kill-session -t " + shellquote.Quote(sessionID)
+	refuseCommand := "display-message -p " + shellquote.Quote(conditionalStopRefusedMarker)
+	out, err := t.run("if-shell", "-F", "-t", sessionID, condition, killCommand, refuseCommand)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(out) == conditionalStopRefusedMarker {
+		return runtime.ErrConditionalStopRefused
+	}
+	return nil
+}
+
 // processKillGracePeriod is how long to wait after SIGTERM before sending SIGKILL.
 // 2 seconds gives processes time to clean up gracefully. The previous 100ms was too short
 // and caused Claude processes to become orphans when they couldn't shut down in time.

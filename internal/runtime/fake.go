@@ -28,6 +28,8 @@ type Fake struct {
 	StartErrors             map[string]error             // per-session Start errors for testing
 	StopErrors              map[string]error             // per-session Stop errors for testing
 	StopLeavesRunning       map[string]bool              // per-session Stop returns nil without deleting the session
+	ConditionalStopAttached map[string]bool              // attachment injected at the atomic stop boundary
+	ConditionalStopTokens   map[string]string            // live token injected at the atomic stop boundary
 	PendingInteractions     map[string]*PendingInteraction
 	Responses               map[string][]InteractionResponse
 	SleepCapabilityValue    SessionSleepCapability
@@ -56,8 +58,9 @@ type Fake struct {
 }
 
 var (
-	_ ProcessTableScanner = (*Fake)(nil)
-	_ RelaunchProvider    = (*Fake)(nil)
+	_ ProcessTableScanner     = (*Fake)(nil)
+	_ RelaunchProvider        = (*Fake)(nil)
+	_ ConditionalStopProvider = (*Fake)(nil)
 )
 
 // Call records a single method invocation on [Fake].
@@ -119,6 +122,8 @@ func NewFake() *Fake {
 		StartErrors:             make(map[string]error),
 		StopErrors:              make(map[string]error),
 		StopLeavesRunning:       make(map[string]bool),
+		ConditionalStopAttached: make(map[string]bool),
+		ConditionalStopTokens:   make(map[string]string),
 		PendingInteractions:     make(map[string]*PendingInteraction),
 		Responses:               make(map[string][]InteractionResponse),
 		SleepCapabilityValue:    SessionSleepCapabilityFull,
@@ -147,6 +152,8 @@ func NewFailFake() *Fake {
 		StartErrors:             make(map[string]error),
 		StopErrors:              make(map[string]error),
 		StopLeavesRunning:       make(map[string]bool),
+		ConditionalStopAttached: make(map[string]bool),
+		ConditionalStopTokens:   make(map[string]string),
 		PendingInteractions:     make(map[string]*PendingInteraction),
 		Responses:               make(map[string][]InteractionResponse),
 		SleepCapabilityValue:    SessionSleepCapabilityFull,
@@ -198,6 +205,43 @@ func (f *Fake) Stop(name string) error {
 		return nil
 	}
 	delete(f.sessions, name)
+	return nil
+}
+
+// StopIfDetached atomically checks the fake session's incarnation and
+// attachment state before removing it.
+func (f *Fake) StopIfDetached(name, expectedInstanceToken string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Calls = append(f.Calls, Call{Method: "StopIfDetached", Name: name, Value: expectedInstanceToken})
+	if f.broken {
+		return fmt.Errorf("session unavailable")
+	}
+	if _, exists := f.sessions[name]; !exists {
+		return nil
+	}
+	if err, ok := f.StopErrors[name]; ok {
+		return err
+	}
+	attached := f.Attached[name] || f.ConditionalStopAttached[name]
+	if seq := f.AttachedSequence[name]; len(seq) > 0 {
+		attached = attached || seq[0]
+		if len(seq) == 1 {
+			delete(f.AttachedSequence, name)
+		} else {
+			f.AttachedSequence[name] = seq[1:]
+		}
+	}
+	liveToken := f.meta[name]["GC_INSTANCE_TOKEN"]
+	if injected, ok := f.ConditionalStopTokens[name]; ok {
+		liveToken = injected
+	}
+	if liveToken != expectedInstanceToken || attached {
+		return ErrConditionalStopRefused
+	}
+	if !f.StopLeavesRunning[name] {
+		delete(f.sessions, name)
+	}
 	return nil
 }
 

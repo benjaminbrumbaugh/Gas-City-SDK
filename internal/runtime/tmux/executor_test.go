@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/runtime"
 )
 
 // fakeExecutor captures tmux command arguments for unit testing.
@@ -66,6 +68,33 @@ func TestSessionAttachedRecognizesMultipleClients(t *testing.T) {
 	}
 	if !attached {
 		t.Fatal("sessionAttached reported detached with two attached clients")
+	}
+}
+
+func TestConditionalKillSessionChecksTokenAndAttachmentInOneTmuxCommand(t *testing.T) {
+	fe := &fakeExecutor{}
+	tm := &Tmux{cfg: Config{SocketName: "x"}, exec: fe}
+
+	if err := tm.conditionalKillSession("$7", "0123456789abcdef0123456789abcdef"); err != nil {
+		t.Fatalf("conditionalKillSession: %v", err)
+	}
+	if len(fe.calls) != 1 {
+		t.Fatalf("tmux calls = %d, want 1", len(fe.calls))
+	}
+	joined := strings.Join(fe.calls[0], "\x00")
+	for _, want := range []string{"if-shell", "-F", "-t\x00$7", "#{GC_INSTANCE_TOKEN}", "#{session_attached}", "kill-session -t '$7'"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("conditional tmux argv %q missing %q", joined, want)
+		}
+	}
+}
+
+func TestConditionalKillSessionMapsRefusalMarker(t *testing.T) {
+	tm := &Tmux{cfg: DefaultConfig(), exec: &fakeExecutor{out: conditionalStopRefusedMarker}}
+
+	err := tm.conditionalKillSession("$3", "0123456789abcdef0123456789abcdef")
+	if !errors.Is(err, runtime.ErrConditionalStopRefused) {
+		t.Fatalf("conditionalKillSession error = %v, want ErrConditionalStopRefused", err)
 	}
 }
 

@@ -2790,15 +2790,8 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				wedgePatch["provider_fence_identity"] = providerFenceIdentity
 				pinned := pinnedConfiguredNamedSessionKillProtected(infoByID[id])
 				if !pinned {
-					newSessionKey, hasCapability := freshRestartSessionKeyInfo(tp, infoByID[id])
-					for key, value := range sessionpkg.RestartRequestPatch(newSessionKey, clk.Now()) {
-						wedgePatch[key] = value
-					}
-					if hasCapability && newSessionKey == "" {
-						wedgePatch["session_key"] = ""
-					}
-					// Keep the durable request armed until the ordinary restart block
-					// stops the runtime and consumes it.
+					// Keep the durable request armed until the restart block records
+					// the fresh-conversation handoff immediately before its fenced stop.
 					wedgePatch["restart_requested"] = "true"
 				}
 				next, err := sessFront.UpdateMetadataInfo(infoByID[id], wedgePatch)
@@ -2881,53 +2874,39 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				usageLimitRestartSessionKey := ""
 				usageLimitRestartHasCapability := false
 				if runtimeRunning && strings.TrimSpace(infoByID[id].HealthReason) == sessionHealthReasonUsageLimitModal {
+					conditionalStop, ok := sp.(runtime.ConditionalStopProvider)
+					if !ok {
+						fmt.Fprintf(stderr, "session reconciler: runtime cannot conditionally stop usage-limit session %s; leaving runtime untouched\n", name) //nolint:errcheck
+						continue
+					}
 					if err := usageLimitModalRuntimeMatchesInstance(sp, name, infoByID[id]); err != nil {
 						fmt.Fprintf(stderr, "session reconciler: usage-limit restart for %s no longer matches the observed runtime: %v; disarming restart\n", name, err) //nolint:errcheck
 						tick.applyStore(id, sessFront, sessionpkg.MetadataPatch{"restart_requested": ""})
 						continue
 					}
-					// Persist the fresh-conversation handoff before the final
-					// attachment observation and destructive stop. Keep the request
-					// marker armed until Stop succeeds; if a human attaches during
-					// the write, the next tick can safely reconsider it. A wedge
-					// detected earlier this same pass already wrote this handoff;
-					// reuse its key rather than rotating twice.
-					if strings.TrimSpace(infoByID[id].ContinuationResetPending) == "true" && strings.TrimSpace(infoByID[id].StartedConfigHash) == "" {
-						usageLimitRestartSessionKey = infoByID[id].SessionKey
-						usageLimitRestartHasCapability = true
-						usageLimitRestartHandoffPersisted = true
-					} else {
-						usageLimitRestartSessionKey, usageLimitRestartHasCapability = freshRestartSessionKeyInfo(tp, infoByID[id])
-						preStopHandoff := sessionpkg.RestartRequestPatch(usageLimitRestartSessionKey, clk.Now())
-						preStopHandoff["restart_requested"] = "true"
-						if usageLimitRestartHasCapability && usageLimitRestartSessionKey == "" {
-							preStopHandoff["session_key"] = ""
-						}
-						if _, err := sessFront.UpdateMetadataInfo(infoByID[id], preStopHandoff); err != nil {
-							fmt.Fprintf(stderr, "session reconciler: recording restart handoff before usage-limit stop for %s: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
-							continue
-						}
-						usageLimitRestartHandoffPersisted = true
+					// Persist the fresh-conversation handoff before the destructive
+					// boundary. If the atomic runtime guard refuses, restore every
+					// destructive field while leaving restart_requested armed.
+					usageLimitRestartSessionKey, usageLimitRestartHasCapability = freshRestartSessionKeyInfo(tp, infoByID[id])
+					preStopHandoff := sessionpkg.RestartRequestPatch(usageLimitRestartSessionKey, clk.Now())
+					preStopHandoff["restart_requested"] = "true"
+					if usageLimitRestartHasCapability && usageLimitRestartSessionKey == "" {
+						preStopHandoff["session_key"] = ""
 					}
-					// Keep identity and metadata reads ahead of this final safety
-					// observation so they cannot widen the interval in which a newly
-					// attached human is unobserved before the destructive call.
-					attached, err := runtime.ObserveAttachment(sp, name)
+					rollback := usageLimitRestartHandoffRollback(infoByID[id], preStopHandoff)
+					handoffInfo, err := sessFront.UpdateMetadataInfo(infoByID[id], preStopHandoff)
 					if err != nil {
-						fmt.Fprintf(stderr, "session reconciler: checking attachment immediately before usage-limit restart for %s: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
+						fmt.Fprintf(stderr, "session reconciler: recording restart handoff before usage-limit stop for %s: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
 						continue
 					}
-					if attached {
-						continue
-					}
-					// Stop through the already-resolved provider immediately after
-					// the final attachment observation. Reconstructing a worker
-					// handle here performs additional store and runtime reads, which
-					// creates a window for a human to attach before the destructive
-					// call. The durable fence and restart handoff were persisted
-					// above, so no further resolution is needed.
-					if err := sp.Stop(name); err != nil {
-						fmt.Fprintf(stderr, "session reconciler: stopping restart-requested %s: %v\n", name, err) //nolint:errcheck
+					usageLimitRestartHandoffPersisted = true
+					if err := conditionalStop.StopIfDetached(name, strings.TrimSpace(infoByID[id].InstanceToken)); err != nil {
+						if next, rollbackErr := sessFront.UpdateMetadataInfo(handoffInfo, rollback); rollbackErr != nil {
+							fmt.Fprintf(stderr, "session reconciler: restoring restart handoff after refused usage-limit stop for %s: %v\n", name, rollbackErr) //nolint:errcheck
+						} else {
+							tick.set(id, next)
+						}
+						fmt.Fprintf(stderr, "session reconciler: conditionally stopping restart-requested %s: %v\n", name, err) //nolint:errcheck
 						continue
 					}
 					usageLimitRuntimeStopped = true

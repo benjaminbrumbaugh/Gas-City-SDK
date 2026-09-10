@@ -7,8 +7,45 @@ import (
 	"time"
 )
 
-// Compile-time check: Fake implements Provider.
-var _ Provider = (*Fake)(nil)
+// Compile-time checks for Fake's provider surfaces.
+var (
+	_ Provider                = (*Fake)(nil)
+	_ ConditionalStopProvider = (*Fake)(nil)
+)
+
+func TestFakeStopIfDetachedFencesInstanceAndAttachmentAtomically(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		liveToken string
+		expected  string
+		attached  bool
+		wantErr   error
+		wantLive  bool
+	}{
+		{name: "matching detached incarnation", liveToken: "live", expected: "live"},
+		{name: "replacement incarnation", liveToken: "replacement", expected: "observed", wantErr: ErrConditionalStopRefused, wantLive: true},
+		{name: "new human attachment", liveToken: "live", expected: "live", attached: true, wantErr: ErrConditionalStopRefused, wantLive: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := NewFake()
+			if err := f.Start(context.Background(), "worker", Config{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.SetMeta("worker", "GC_INSTANCE_TOKEN", tc.liveToken); err != nil {
+				t.Fatal(err)
+			}
+			f.SetAttached("worker", tc.attached)
+
+			err := f.StopIfDetached("worker", tc.expected)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("StopIfDetached error = %v, want %v", err, tc.wantErr)
+			}
+			if got := f.IsRunning("worker"); got != tc.wantLive {
+				t.Fatalf("IsRunning = %v, want %v", got, tc.wantLive)
+			}
+		})
+	}
+}
 
 func TestFake_StartStop(t *testing.T) {
 	f := NewFake()

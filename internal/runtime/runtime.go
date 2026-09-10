@@ -43,6 +43,15 @@ var ErrSessionDiedDuringStartup = errors.New("session died during startup")
 // dispatch with errors.Is.
 var ErrSessionNotFound = errors.New("session not found")
 
+// ErrConditionalStopRefused reports that a conditional destructive stop did
+// not run because the live session no longer matched the observed incarnation
+// or had gained a human attachment.
+var ErrConditionalStopRefused = errors.New("conditional stop refused")
+
+// ErrConditionalStopUnsupported reports that the routed runtime cannot make
+// the incarnation and attachment check atomic with its destructive stop.
+var ErrConditionalStopUnsupported = errors.New("conditional stop unsupported")
+
 // ErrExecUnsupported reports that a provider implements [ExecProvider] but the
 // underlying runtime does not implement the RPP `exec` wire op (it answered
 // exit 2). Carriers treat this as "fall back to the legacy driving op".
@@ -234,6 +243,16 @@ type Provider interface {
 // unreadable attachment state.
 type AttachmentObserver interface {
 	ObserveAttachment(name string) (bool, error)
+}
+
+// ConditionalStopProvider is an optional capability for controller repairs
+// that must not race a same-name replacement runtime or a newly attached human.
+// Implementations stop only when the named live runtime still carries
+// expectedInstanceToken and is detached at the destructive boundary. A missing
+// runtime is an idempotent success; a changed token or attachment returns
+// [ErrConditionalStopRefused].
+type ConditionalStopProvider interface {
+	StopIfDetached(name, expectedInstanceToken string) error
 }
 
 // ObserveAttachment preserves observation failures when the provider supports

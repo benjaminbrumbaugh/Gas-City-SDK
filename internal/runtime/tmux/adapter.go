@@ -42,6 +42,7 @@ var (
 	_ runtime.InterruptBoundaryWaitProvider = (*Provider)(nil)
 	_ runtime.InterruptedTurnResetProvider  = (*Provider)(nil)
 	_ runtime.ProcessTableScanner           = (*Provider)(nil)
+	_ runtime.ConditionalStopProvider       = (*Provider)(nil)
 	_ runtime.ServerLifecycleProvider       = (*Provider)(nil)
 	_ runtime.SessionRosterProvider         = (*Provider)(nil)
 )
@@ -265,6 +266,53 @@ func (p *Provider) Stop(name string) error {
 		p.cache.EvictSession(name)
 	}
 	return err
+}
+
+// StopIfDetached stops only the observed detached runtime incarnation. The
+// tmux-side guard is evaluated against the captured immutable session ID so a
+// same-name replacement or newly attached human is never selected for teardown.
+func (p *Provider) StopIfDetached(name, expectedInstanceToken string) error {
+	p.tm.CloseHiddenAttachClient(name)
+	out, err := p.tm.run("display-message", "-t", "="+name+":^.0", "-p", "#{session_id}	#{pane_pid}")
+	if err != nil {
+		if errors.Is(err, ErrSessionNotFound) || errors.Is(err, ErrNoServer) {
+			return nil
+		}
+		return err
+	}
+	parts := strings.SplitN(strings.TrimSpace(out), "	", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("invalid tmux session identity %q for %s", out, name)
+	}
+	sessionID, panePID := parts[0], parts[1]
+
+	// Discover the process set without signaling it. The final tmux command
+	// below is the destructive boundary and re-checks both guards atomically.
+	descendants := getAllDescendants(panePID)
+	knownPIDs := make(map[string]bool, len(descendants)+1)
+	knownPIDs[panePID] = true
+	for _, pid := range descendants {
+		knownPIDs[pid] = true
+	}
+	var reparented []string
+	if pgid := getProcessGroupID(panePID); pgid != "" && pgid != "0" && pgid != "1" {
+		reparented = collectReparentedGroupMembers(pgid, knownPIDs)
+	}
+	killList, killPaneLeader := computeExcludingKillSet(panePID, descendants, reparented, nil)
+
+	if err := p.tm.conditionalKillSession(sessionID, expectedInstanceToken); err != nil {
+		if errors.Is(err, ErrSessionNotFound) || errors.Is(err, ErrNoServer) {
+			p.cache.EvictSession(name)
+			return nil
+		}
+		return err
+	}
+	terminateProcesses(killList)
+	if killPaneLeader {
+		terminateProcesses([]string{panePID})
+	}
+	p.cache.EvictSession(name)
+	return nil
 }
 
 // Interrupt sends Ctrl-C to the named tmux session.

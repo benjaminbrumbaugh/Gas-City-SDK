@@ -33,6 +33,7 @@ var (
 	_ runtime.TransportCapabilityProvider   = (*Provider)(nil)
 	_ runtime.RelaunchProvider              = (*Provider)(nil)
 	_ runtime.LivenessObserver              = (*Provider)(nil)
+	_ runtime.ConditionalStopProvider       = (*Provider)(nil)
 )
 
 // New creates a composite provider. defaultSP handles sessions not
@@ -155,6 +156,21 @@ func (p *Provider) Stop(name string) error {
 		return nil
 	}
 	return mergedErr
+}
+
+// StopIfDetached forwards a fenced stop only to the explicitly routed backend;
+// unlike legacy Stop it must not probe-and-destroy a different backend after
+// the incarnation check.
+func (p *Provider) StopIfDetached(name, expectedInstanceToken string) error {
+	provider, ok := p.route(name).(runtime.ConditionalStopProvider)
+	if !ok {
+		return runtime.ErrConditionalStopUnsupported
+	}
+	if err := provider.StopIfDetached(name, expectedInstanceToken); err != nil {
+		return err
+	}
+	p.Unroute(name)
+	return nil
 }
 
 // Interrupt delegates to the routed backend.

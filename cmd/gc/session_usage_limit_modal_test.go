@@ -536,17 +536,12 @@ func TestReconcileSessionBeads_UsageLimitModalRestartsWedgedSession(t *testing.T
 	if got.Metadata["started_config_hash"] != "" {
 		t.Errorf("started_config_hash = %q, want cleared so the next wake starts a fresh conversation", got.Metadata["started_config_hash"])
 	}
-	for i := len(env.sp.Calls) - 1; i >= 0; i-- {
-		call := env.sp.Calls[i]
-		if call.Method != "ObserveAttachment" || call.Name != sessionName {
-			continue
-		}
-		if i+1 >= len(env.sp.Calls) || env.sp.Calls[i+1].Method != "Stop" || env.sp.Calls[i+1].Name != sessionName {
-			t.Fatalf("final attachment observation was not immediately followed by stopping the same runtime: calls[%d:] = %+v", i, env.sp.Calls[i:])
-		}
-		return
+	if calls := env.sp.CountCalls("StopIfDetached", sessionName); calls != 1 {
+		t.Fatalf("StopIfDetached calls = %d, want 1", calls)
 	}
-	t.Fatal("missing final attachment observation before usage-limit restart")
+	if calls := env.sp.CountCalls("Stop", sessionName); calls != 0 {
+		t.Fatalf("ordinary Stop calls = %d, want 0", calls)
+	}
 }
 
 // TestReconcileSessionBeads_UsageLimitModalLeavesWorkingSessionAlone is the
@@ -667,12 +662,12 @@ func TestReconcileSessionBeads_UsageLimitModalRetriesFailedKill(t *testing.T) {
 
 	stopCalls := 0
 	for _, call := range env.sp.Calls {
-		if call.Method == "Stop" && call.Name == sessionName {
+		if call.Method == "StopIfDetached" && call.Name == sessionName {
 			stopCalls++
 		}
 	}
 	if stopCalls < 2 {
-		t.Fatalf("Stop calls = %d, want at least 2 across the failed and successful ticks", stopCalls)
+		t.Fatalf("StopIfDetached calls = %d, want at least 2 across the failed and successful ticks", stopCalls)
 	}
 }
 
@@ -701,6 +696,108 @@ func TestReconcileSessionBeads_UsageLimitModalDoesNotStopReplacementIncarnation(
 	}
 	if got.Metadata["restart_requested"] == "true" {
 		t.Fatal("stale restart request remained armed after the runtime instance changed")
+	}
+}
+
+func TestReconcileSessionBeads_UsageLimitModalRefusalRestoresHandoffMetadata(t *testing.T) {
+	env, session, sessionName := newUsageLimitModalScenario(t)
+	env.setSessionMetadata(&session, map[string]string{
+		"primed_at":            "2026-03-08T10:58:00Z",
+		"priming_attempted_at": "2026-03-08T10:57:00Z",
+		"prompt_hash":          "original-prompt-hash",
+	})
+	// A human attaches at the atomic conditional-stop boundary after the
+	// detector saw a detached pane and the durable handoff was written.
+	env.sp.ConditionalStopAttached[sessionName] = true
+
+	env.reconcile([]beads.Bead{session})
+
+	if !env.sp.IsRunning(sessionName) {
+		t.Fatalf("newly attached runtime was stopped; calls: %+v", env.sp.SnapshotCalls())
+	}
+	got, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"session_key":                "wedged-key",
+		"started_config_hash":        "hash-before-wedge",
+		"continuation_reset_pending": "",
+		"reset_committed_at":         "",
+		"primed_at":                  "2026-03-08T10:58:00Z",
+		"priming_attempted_at":       "2026-03-08T10:57:00Z",
+		"prompt_hash":                "original-prompt-hash",
+	}
+	for key, value := range want {
+		if got.Metadata[key] != value {
+			t.Errorf("%s = %q, want restored %q", key, got.Metadata[key], value)
+		}
+	}
+	if got.Metadata["restart_requested"] != "true" {
+		t.Error("refused stop must remain retryable")
+	}
+	if calls := env.sp.CountCalls("Stop", sessionName); calls != 0 {
+		t.Fatalf("ordinary Stop calls = %d, want 0", calls)
+	}
+}
+
+func TestUsageLimitRestartHandoffRollbackRestoresEveryDestructiveField(t *testing.T) {
+	info := sessionpkg.Info{
+		SessionKey:                 "old-key",
+		StartedConfigHash:          "old-hash",
+		ContinuationResetPending:   "old-reset-pending",
+		ResetCommittedAt:           "old-reset-time",
+		LastWokeAt:                 "old-wake-time",
+		PendingCreateClaimMetadata: "old-claim",
+		PendingCreateStartedAt:     "old-create-time",
+		PrimedAtMetadata:           "old-prime-time",
+		PrimingAttemptedAtMetadata: "old-attempt-time",
+		PromptHashMetadata:         "old-prompt-hash",
+	}
+	handoff := sessionpkg.RestartRequestPatch("new-key", time.Now())
+	rollback := usageLimitRestartHandoffRollback(info, handoff)
+	want := sessionpkg.MetadataPatch{
+		"session_key":                            "old-key",
+		"started_config_hash":                    "old-hash",
+		"continuation_reset_pending":             "old-reset-pending",
+		sessionpkg.ResetCommittedAtKey:           "old-reset-time",
+		"last_woke_at":                           "old-wake-time",
+		"pending_create_claim":                   "old-claim",
+		"pending_create_started_at":              "old-create-time",
+		sessionpkg.PrimedAtMetadataKey:           "old-prime-time",
+		sessionpkg.PrimingAttemptedAtMetadataKey: "old-attempt-time",
+		sessionpkg.PromptHashMetadataKey:         "old-prompt-hash",
+	}
+	for key, value := range want {
+		if rollback[key] != value {
+			t.Errorf("rollback[%q] = %q, want %q", key, rollback[key], value)
+		}
+	}
+	if _, ok := rollback["restart_requested"]; ok {
+		t.Error("rollback must leave restart_requested armed")
+	}
+}
+
+func TestReconcileSessionBeads_UsageLimitModalDoesNotStopReplacementAtConditionalBoundary(t *testing.T) {
+	env, session, sessionName := newUsageLimitModalScenario(t)
+	// The ordinary identity pre-check still sees the observed incarnation; the
+	// replacement appears only at the provider's atomic destructive boundary.
+	env.sp.ConditionalStopTokens[sessionName] = "replacement-instance"
+
+	env.reconcile([]beads.Bead{session})
+
+	if !env.sp.IsRunning(sessionName) {
+		t.Fatal("replacement runtime was stopped")
+	}
+	got, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Metadata["started_config_hash"] != "hash-before-wedge" || got.Metadata["continuation_reset_pending"] != "" {
+		t.Fatalf("replacement refusal retained destructive handoff metadata: %+v", got.Metadata)
+	}
+	if got.Metadata["restart_requested"] != "true" {
+		t.Fatal("replacement refusal was not left retryable")
 	}
 }
 
