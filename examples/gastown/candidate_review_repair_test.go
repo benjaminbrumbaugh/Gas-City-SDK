@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -122,15 +121,14 @@ func TestCandidateReviewRepairOrderRoutesOnlyExplicitMechanicalHolds(t *testing.
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(t.TempDir(), "gc.log")
-	cmd := exec.Command("bash", orderScript)
-	cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"PATH="+filepath.Dir(fakeGC)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GC_QUERY="+queryFile,
 		"FAKE_GC_LOG="+logFile,
 		"GC_PACK_STATE_DIR="+t.TempDir(),
 		"PACK_DIR="+root,
 	)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runCmdWithEnv(t, "", env, "bash", orderScript); err != nil {
 		t.Fatalf("candidate repair order: %v\n%s", err, out)
 	}
 	logData, err := os.ReadFile(logFile)
@@ -146,6 +144,9 @@ func TestCandidateReviewRepairOrderRoutesOnlyExplicitMechanicalHolds(t *testing.
 	}
 	if strings.Contains(log, "bead-injected-gate") {
 		t.Fatalf("bead metadata injected an unattended gate command; log:\n%s", log)
+	}
+	if strings.Contains(log, "--no-convoy") || strings.Contains(log, "--var bead_id=") {
+		t.Fatalf("v2 repair formula bypassed its runtime convoy binding; log:\n%s", log)
 	}
 	if strings.Contains(log, "human-1") || strings.Contains(log, "human-review-1") || strings.Contains(log, "foreign-1") {
 		t.Fatalf("non-mechanical holds were mutated; log:\n%s", log)
@@ -236,8 +237,7 @@ func TestCandidateReviewRepairWorkerPublishesCurrentTargetCandidate(t *testing.T
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(temp, "gc.log")
-	cmd := exec.Command("bash", worker, "candidate-1")
-	cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"PATH="+filepath.Dir(fakeGC)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GC_BEAD="+beadFile,
 		"FAKE_GC_LOG="+logFile,
@@ -246,7 +246,7 @@ func TestCandidateReviewRepairWorkerPublishesCurrentTargetCandidate(t *testing.T
 		"GC_CANDIDATE_REPAIR_WORK_DIR="+work,
 		"GC_CANDIDATE_REPAIR_TEST_COMMAND=git diff --check",
 	)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runCmdWithEnv(t, work, env, "bash", worker, "candidate-1"); err != nil {
 		t.Fatalf("candidate repair worker: %v\n%s", err, out)
 	}
 	if _, err := os.Stat(filepath.Join(work, "agent-plan.md")); !os.IsNotExist(err) {
@@ -259,7 +259,7 @@ func TestCandidateReviewRepairWorkerPublishesCurrentTargetCandidate(t *testing.T
 	if branchSHA == target {
 		t.Fatal("worker did not publish a candidate commit")
 	}
-	if cmd := exec.Command("git", "-C", work, "merge-base", "--is-ancestor", target, "candidate"); cmd.Run() != nil {
+	if _, err := runCmdWithEnv(t, work, nil, "git", "-C", work, "merge-base", "--is-ancestor", target, "candidate"); err != nil {
 		t.Fatalf("current target %s is not an ancestor of repaired candidate", target)
 	}
 	logData, err := os.ReadFile(logFile)
@@ -297,8 +297,7 @@ func TestCandidateReviewRepairOrderDoesNotDispatchAfterLosingClaimCAS(t *testing
 	if err := os.WriteFile(queryFile, queryJSON, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", filepath.Join(root, "assets", "scripts", "candidate-review-repair.sh"))
-	cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"PATH="+filepath.Dir(fakeGC)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GC_QUERY="+queryFile,
 		"FAKE_GC_LOG="+logFile,
@@ -306,7 +305,7 @@ func TestCandidateReviewRepairOrderDoesNotDispatchAfterLosingClaimCAS(t *testing
 		"GC_PACK_STATE_DIR="+t.TempDir(),
 		"PACK_DIR="+root,
 	)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runCmdWithEnv(t, "", env, "bash", filepath.Join(root, "assets", "scripts", "candidate-review-repair.sh")); err != nil {
 		t.Fatalf("losing a claim race should be a clean no-op: %v\n%s", err, out)
 	}
 	logData, err := os.ReadFile(logFile)
@@ -403,15 +402,14 @@ func TestCandidateReviewRepairWorkerDoesNotMutateReclassifiedHold(t *testing.T) 
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(temp, "gc.log")
-	cmd := exec.Command("bash", filepath.Join(root, "assets", "scripts", "candidate-review-repair-worker.sh"), "human-1")
-	cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"PATH="+filepath.Dir(fakeGC)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GC_BEAD="+beadFile,
 		"FAKE_GC_LOG="+logFile,
 		"GC_AGENT=rig/repairer",
 		"GC_CANDIDATE_REPAIR_TOKEN=repair-token-human",
 	)
-	if out, err := cmd.CombinedOutput(); err == nil {
+	if out, err := runCmdWithEnv(t, "", env, "bash", filepath.Join(root, "assets", "scripts", "candidate-review-repair-worker.sh"), "human-1"); err == nil {
 		t.Fatalf("worker accepted a reclassified human hold; output:\n%s", out)
 	}
 	logData, err := os.ReadFile(logFile)
@@ -454,8 +452,7 @@ func assertCandidateRepairWorkerFailsClosed(t *testing.T, work, source, residue,
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(temp, "gc.log")
-	cmd := exec.Command("bash", worker, "candidate-fail-closed")
-	cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"PATH="+filepath.Dir(fakeGC)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GC_BEAD="+beadFile,
 		"FAKE_GC_LOG="+logFile,
@@ -463,7 +460,7 @@ func assertCandidateRepairWorkerFailsClosed(t *testing.T, work, source, residue,
 		"GC_CANDIDATE_REPAIR_TOKEN=repair-token-fail",
 		"GC_CANDIDATE_REPAIR_WORK_DIR="+work,
 	)
-	out, err := cmd.CombinedOutput()
+	out, err := runCmdWithEnv(t, work, env, "bash", worker, "candidate-fail-closed")
 	if err == nil {
 		t.Fatalf("worker succeeded for unsafe candidate; output=%s", out)
 	}
@@ -513,8 +510,7 @@ exit 0
 
 func runCandidateRepairGit(t *testing.T, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	out, err := cmd.CombinedOutput()
+	out, err := runCmdWithEnv(t, "", nil, "git", args...)
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
