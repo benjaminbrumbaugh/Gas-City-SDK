@@ -220,6 +220,9 @@ func (f *Fake) StopIfDetached(name, expectedInstanceToken string) error {
 	if _, exists := f.sessions[name]; !exists {
 		return nil
 	}
+	if !ValidInstanceToken(expectedInstanceToken) {
+		return fmt.Errorf("invalid instance token %q", expectedInstanceToken)
+	}
 	if err, ok := f.StopErrors[name]; ok {
 		return err
 	}

@@ -16,7 +16,10 @@ func providerUsageFenceIdentity(tp TemplateParams) string {
 	return strings.TrimSpace(tp.ProviderFenceIdentity)
 }
 
-const legacyProviderUsageFenceIdentity = "legacy:any-provider-account"
+const (
+	legacyProviderUsageFenceIdentity   = "legacy:any-provider-account"
+	unscopedProviderUsageFenceIdentity = "unscoped:no-provider-account"
+)
 
 // providerUsageFenceIdentityForRuntime attributes a live observation to the
 // account that actually launched the runtime. Desired configuration is the
@@ -40,6 +43,9 @@ func providerUsageFenceIdentityForRuntime(info sessionpkg.Info, tp TemplateParam
 // fail-closed identity instead of being silently narrowed to current config.
 func recordedProviderUsageFenceIdentity(info sessionpkg.Info, current string) string {
 	if identity := strings.TrimSpace(info.ProviderFenceIdentity); identity != "" {
+		if identity == unscopedProviderUsageFenceIdentity {
+			return ""
+		}
 		return identity
 	}
 	if strings.TrimSpace(info.HealthReason) == sessionHealthReasonUsageLimitModal {

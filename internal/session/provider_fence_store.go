@@ -16,6 +16,8 @@ const ProviderFenceBeadLabel = "gc:provider-fence"
 
 const providerFenceBeadKind = "provider_usage_fence"
 
+const maxExpiredProviderFencesClosedPerRead = 100
+
 // ProviderFence is the typed durable record used by the reconciler to block
 // starts for a provider account until its observed reset deadline.
 type ProviderFence struct {
@@ -27,7 +29,7 @@ type ProviderFence struct {
 
 // ActiveProviderFences reads the durable provider-fence records. The returned
 // slice is folded by identity using the latest deadline; expired records are
-// ignored but left in history for auditability. A read error is returned to
+// ignored and a bounded batch is closed while remaining in history. A read error is returned to
 // callers so lifecycle code can fail closed instead of treating an unavailable
 // fence store as an empty store.
 func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
@@ -40,11 +42,13 @@ func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 		Status:        "open",
 		IncludeClosed: false,
 		Sort:          beads.SortCreatedDesc,
+		Live:          true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("listing provider fences: %w", err)
 	}
 	byIdentity := make(map[string]ProviderFence)
+	expiredClosed := 0
 	for _, row := range rows {
 		if strings.TrimSpace(row.Metadata["kind"]) != providerFenceBeadKind {
 			continue
@@ -58,6 +62,16 @@ func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 			return nil, fmt.Errorf("provider fence %q has invalid deadline: %w", row.ID, parseErr)
 		}
 		if !until.After(now) {
+			// Fence rows are immutable append-only observations, so an expired
+			// row can be closed without racing a deadline extension. Bound the
+			// opportunistic work so one reconciliation read cannot turn an old
+			// backlog into an unbounded write burst.
+			if expiredClosed < maxExpiredProviderFencesClosedPerRead {
+				if err := s.store.Close(row.ID); err != nil {
+					return nil, fmt.Errorf("closing expired provider fence %q: %w", row.ID, err)
+				}
+				expiredClosed++
+			}
 			continue
 		}
 		observedAt := time.Time{}
@@ -85,8 +99,8 @@ func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 }
 
 // RecordProviderFence appends a durable fence record. It is deliberately
-// monotonic at read time: older records may remain open, and ActiveProviderFences
-// selects the maximum deadline. That avoids an update race where a slower
+// monotonic at read time: overlapping records may remain open until expiry, and
+// ActiveProviderFences selects the maximum deadline. That avoids an update race where a slower
 // observer could shorten a newer account quarantine.
 func (s *Store) RecordProviderFence(identity string, until, observedAt time.Time, reason string) error {
 	identity = strings.TrimSpace(identity)

@@ -8,6 +8,7 @@ package runtime //nolint:revive // shadows stdlib runtime; isolated to internal
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -253,6 +254,18 @@ type AttachmentObserver interface {
 // [ErrConditionalStopRefused].
 type ConditionalStopProvider interface {
 	StopIfDetached(name, expectedInstanceToken string) error
+}
+
+// ValidInstanceToken reports whether token has the exact lowercase 128-bit
+// hexadecimal shape generated for managed runtime incarnations. Conditional
+// stop implementations share this validator so test doubles cannot accept a
+// token that the production tmux boundary rejects.
+func ValidInstanceToken(token string) bool {
+	if len(token) != 32 {
+		return false
+	}
+	decoded, err := hex.DecodeString(token)
+	return err == nil && len(decoded) == 16 && token == strings.ToLower(token)
 }
 
 // ObserveAttachment preserves observation failures when the provider supports

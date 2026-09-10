@@ -762,7 +762,7 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	// entries used when an upstream binds credentials to an arbitrary env name,
 	// then discard every operational variable before retaining TemplateParams.
 	providerFenceEnv = providerFenceAccountEnv(mergeEnv(providerFenceEnv, env))
-	providerFenceIdentity, err := providerUsageFenceIdentityForCity(p.cityPath, resolved, providerFenceEnv)
+	providerFenceIdentity, err := providerUsageFenceIdentityForCityWithStore(p.cityPath, p.beadStore, resolved, providerFenceEnv)
 	if err != nil {
 		return TemplateParams{}, fmt.Errorf("agent %q provider account identity: %w", qualifiedName, err)
 	}

@@ -1660,6 +1660,12 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			}
 			identity := recordedProviderUsageFenceIdentity(info, "")
 			if identity == "" {
+				// New standalone observations deliberately record an explicit
+				// unscoped marker. They quarantine only their source session and
+				// must never be reinterpreted as a pre-identity global fence.
+				if strings.TrimSpace(info.ProviderFenceIdentity) == unscopedProviderUsageFenceIdentity {
+					continue
+				}
 				identity = legacyProviderUsageFenceIdentity
 			}
 			if until.After(providerUsageFences[identity]) {
@@ -2770,24 +2776,29 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					fmt.Fprintf(stderr, "session reconciler: usage-limit observation for %s no longer matches the observed runtime: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
 					continue
 				}
-				if providerFenceIdentity == "" {
-					providerFenceIdentity = legacyProviderUsageFenceIdentity
-				}
 				until := usageLimitModalQuarantineUntil(clk.Now(), resetAt)
-				if err := sessFront.RecordProviderFence(providerFenceIdentity, until, clk.Now(), sessionHealthReasonUsageLimitModal); err != nil {
-					providerFenceReadFailed = true
-					fmt.Fprintf(stderr, "session reconciler: recording durable provider fence for %s: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
-					continue
-				}
-				if until.After(providerUsageFences[providerFenceIdentity]) {
-					providerUsageFences[providerFenceIdentity] = until
+				recordedIdentity := providerFenceIdentity
+				if recordedIdentity == "" {
+					// A standalone start_command has no stable provider-account
+					// boundary. Keep its quarantine session-local and mark it
+					// explicitly so legacy migration cannot widen it later.
+					recordedIdentity = unscopedProviderUsageFenceIdentity
+				} else {
+					if err := sessFront.RecordProviderFence(recordedIdentity, until, clk.Now(), sessionHealthReasonUsageLimitModal); err != nil {
+						providerFenceReadFailed = true
+						fmt.Fprintf(stderr, "session reconciler: recording durable provider fence for %s: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
+						continue
+					}
+					if until.After(providerUsageFences[recordedIdentity]) {
+						providerUsageFences[recordedIdentity] = until
+					}
 				}
 				// Never kill unless both the provider fence and the fresh-session
 				// handoff are durable. A successful stop followed by a failed
 				// metadata write must not leave a dead session eligible to wake with
 				// its stale conversation identity.
 				wedgePatch := usageLimitModalWedgePatch(clk.Now(), resetAt)
-				wedgePatch["provider_fence_identity"] = providerFenceIdentity
+				wedgePatch["provider_fence_identity"] = recordedIdentity
 				pinned := pinnedConfiguredNamedSessionKillProtected(infoByID[id])
 				if !pinned {
 					// Keep the durable request armed until the restart block records

@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -29,7 +32,10 @@ func TestExecutePreparedStartWaveUsesWorkerBoundaryForKnownSession(t *testing.T)
 		[]preparedStart{{
 			candidate: startCandidate{
 				info: sessiontest.SeedBead(t, bead),
-				tp:   TemplateParams{TemplateName: "worker"},
+				tp: TemplateParams{
+					TemplateName:          "worker",
+					ProviderFenceIdentity: "account:hmac-sha256:test-identity",
+				},
 			},
 			cfg: runtime.Config{
 				Command: "claude --resume seeded-session",
@@ -61,6 +67,9 @@ func TestExecutePreparedStartWaveUsesWorkerBoundaryForKnownSession(t *testing.T)
 	if updatedBead.Metadata["pending_create_claim"] != "true" {
 		t.Fatalf("pending_create_claim = %q, want preserved before commit", updatedBead.Metadata["pending_create_claim"])
 	}
+	if got := updatedBead.Metadata["launch_provider_fence_identity"]; got != "account:hmac-sha256:test-identity" {
+		t.Fatalf("launch_provider_fence_identity = %q, want persisted before provider start returns", got)
+	}
 	if !sp.IsRunning(info.SessionName) {
 		t.Fatal("session should be running after prepared start")
 	}
@@ -68,6 +77,7 @@ func TestExecutePreparedStartWaveUsesWorkerBoundaryForKnownSession(t *testing.T)
 
 func TestStartPreparedStartCandidateUsesWorkerBoundaryForRuntimeOnlyTarget(t *testing.T) {
 	sp := runtime.NewFake()
+	cityPath := t.TempDir()
 
 	usedWorker, err := startPreparedStartCandidate(
 		context.Background(),
@@ -81,7 +91,7 @@ func TestStartPreparedStartCandidateUsesWorkerBoundaryForRuntimeOnlyTarget(t *te
 				WorkDir: t.TempDir(),
 			},
 		},
-		"",
+		cityPath,
 		nil,
 		sp,
 		nil,
@@ -115,5 +125,8 @@ func TestStartPreparedStartCandidateUsesWorkerBoundaryForRuntimeOnlyTarget(t *te
 	}
 	if start.Config.Command != "claude --resume seeded" {
 		t.Fatalf("start command = %q, want claude --resume seeded", start.Config.Command)
+	}
+	if _, err := os.Stat(filepath.Join(cityPath, ".gc", providerFenceIdentityKeyFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("storeless runtime-only start invented durable account identity: %v", err)
 	}
 }

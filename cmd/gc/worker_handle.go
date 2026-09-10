@@ -290,6 +290,27 @@ func newWorkerSessionHandleForResolvedRuntimeWithConfig(
 	if err != nil {
 		return nil, err
 	}
+	// This path can start a newly created managed session before the reconciler
+	// sees it. Persist the same write-ahead account identity that reconciler
+	// starts record before invoking the provider. A genuinely storeless runtime
+	// handle has no durable session boundary and deliberately remains unscoped.
+	if store != nil {
+		identity, identityErr := providerUsageFenceIdentityForCityWithStore(
+			cityPath,
+			store,
+			resolved,
+			providerFenceAccountEnv(sessionCfg.Runtime.SessionEnv),
+		)
+		if identityErr != nil {
+			return nil, fmt.Errorf("provider account identity: %w", identityErr)
+		}
+		if identity != "" {
+			if sessionCfg.Metadata == nil {
+				sessionCfg.Metadata = make(map[string]string)
+			}
+			sessionCfg.Metadata["launch_provider_fence_identity"] = identity
+		}
+	}
 	// Stage provider-overlay hooks on the CLI create path the same way the
 	// reconciler create path does; resolvedWorkerSessionConfigWithConfig builds
 	// runtime.Config directly and never routes through resolveTemplate

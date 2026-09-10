@@ -20,6 +20,7 @@ import (
 type restartRequestTestEnv struct {
 	store        beads.Store
 	sp           *runtime.Fake
+	provider     runtime.Provider
 	dt           *drainTracker
 	clk          *clock.Fake
 	rec          events.Recorder
@@ -31,9 +32,11 @@ type restartRequestTestEnv struct {
 }
 
 func newRestartRequestTestEnv() *restartRequestTestEnv {
+	sp := runtime.NewFake()
 	return &restartRequestTestEnv{
 		store:        beads.NewMemStore(),
-		sp:           runtime.NewFake(),
+		sp:           sp,
+		provider:     sp,
 		dt:           newDrainTracker(),
 		clk:          &clock.Fake{Time: time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC)},
 		rec:          events.Discard,
@@ -91,7 +94,7 @@ func (e *restartRequestTestEnv) reconcileWithPoolDesiredAndDrainOps(sessions []b
 		e.desiredState,
 		cfgNames,
 		e.cfg,
-		e.sp,
+		e.provider,
 		e.store,
 		dops,
 		nil,

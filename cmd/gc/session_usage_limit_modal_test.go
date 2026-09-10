@@ -463,7 +463,7 @@ func newUsageLimitModalScenario(t *testing.T) (*restartRequestTestEnv, beads.Bea
 		"state":                      "active",
 		"session_key":                "wedged-key",
 		"started_config_hash":        "hash-before-wedge",
-		"instance_token":             "wedged-instance",
+		"instance_token":             "0123456789abcdef0123456789abcdef",
 		"provider_fence_identity":    "account:test",
 	})
 	if err := env.sp.Start(context.Background(), sessionName, runtime.Config{Command: "true"}); err != nil {
@@ -472,7 +472,7 @@ func newUsageLimitModalScenario(t *testing.T) (*restartRequestTestEnv, beads.Bea
 	if err := env.sp.SetMeta(sessionName, "GC_SESSION_ID", session.ID); err != nil {
 		t.Fatalf("SetMeta(GC_SESSION_ID): %v", err)
 	}
-	if err := env.sp.SetMeta(sessionName, "GC_INSTANCE_TOKEN", "wedged-instance"); err != nil {
+	if err := env.sp.SetMeta(sessionName, "GC_INSTANCE_TOKEN", "0123456789abcdef0123456789abcdef"); err != nil {
 		t.Fatalf("SetMeta(GC_INSTANCE_TOKEN): %v", err)
 	}
 	env.sp.SetPeekOutput(sessionName, usageLimitModalPane)
@@ -516,6 +516,46 @@ func TestReconcileSessionBeads_UsageLimitModalScoredUnhealthy(t *testing.T) {
 	}
 }
 
+func TestReconcileSessionBeads_IdentitylessStandaloneFenceStaysSessionLocal(t *testing.T) {
+	env, source, _ := newUsageLimitModalScenario(t)
+	name := source.Metadata["session_name"]
+	tp := env.desiredState[name]
+	tp.ProviderFenceIdentity = ""
+	env.desiredState[name] = tp
+	env.setSessionMetadata(&source, map[string]string{
+		"provider_fence_identity":         "",
+		"started_provider_fence_identity": "",
+		"launch_provider_fence_identity":  "",
+	})
+
+	env.reconcile([]beads.Bead{source})
+	refreshed, err := env.store.Get(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := refreshed.Metadata["provider_fence_identity"]; got != unscopedProviderUsageFenceIdentity {
+		t.Fatalf("provider_fence_identity = %q, want explicit session-local marker", got)
+	}
+	fences, err := sessionFrontDoor(env.store).ActiveProviderFences(env.clk.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fences) != 0 {
+		t.Fatalf("identity-less observation created durable account fence: %#v", fences)
+	}
+
+	// A later migration pass must not reinterpret the explicit marker as a
+	// pre-identity legacy row and manufacture the global compatibility fence.
+	env.reconcile([]beads.Bead{refreshed})
+	fences, err = sessionFrontDoor(env.store).ActiveProviderFences(env.clk.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fences) != 0 {
+		t.Fatalf("session-local marker migrated into durable account fence: %#v", fences)
+	}
+}
+
 // TestReconcileSessionBeads_UsageLimitModalRestartsWedgedSession pins the
 // repair. Draining is useless here — a modal-frozen agent never polls
 // drain-check, so it can never drain-ack — so the reconciler stops the runtime
@@ -538,6 +578,32 @@ func TestReconcileSessionBeads_UsageLimitModalRestartsWedgedSession(t *testing.T
 	}
 	if calls := env.sp.CountCalls("StopIfDetached", sessionName); calls != 1 {
 		t.Fatalf("StopIfDetached calls = %d, want 1", calls)
+	}
+	if calls := env.sp.CountCalls("Stop", sessionName); calls != 0 {
+		t.Fatalf("ordinary Stop calls = %d, want 0", calls)
+	}
+}
+
+type providerWithoutConditionalStop struct{ runtime.Provider }
+
+func TestReconcileSessionBeads_UsageLimitModalUnsupportedStopFailsClosed(t *testing.T) {
+	env, source, sessionName := newUsageLimitModalScenario(t)
+	env.provider = providerWithoutConditionalStop{Provider: env.sp}
+
+	env.reconcile([]beads.Bead{source})
+
+	if !env.sp.IsRunning(sessionName) {
+		t.Fatal("runtime without an atomic conditional-stop capability was destroyed")
+	}
+	got, err := env.store.Get(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Metadata[sessionHealthReasonMetadataKey] != sessionHealthReasonUsageLimitModal {
+		t.Fatal("unsupported runtime did not retain visible usage-limit quarantine")
+	}
+	if got.Metadata["restart_requested"] != "true" {
+		t.Fatal("unsupported runtime did not retain a retryable restart request")
 	}
 	if calls := env.sp.CountCalls("Stop", sessionName); calls != 0 {
 		t.Fatalf("ordinary Stop calls = %d, want 0", calls)
@@ -677,7 +743,7 @@ func TestReconcileSessionBeads_UsageLimitModalDoesNotStopReplacementIncarnation(
 
 	env.reconcile([]beads.Bead{session})
 	delete(env.sp.StopErrors, sessionName)
-	if err := env.sp.SetMeta(sessionName, "GC_INSTANCE_TOKEN", "replacement-instance"); err != nil {
+	if err := env.sp.SetMeta(sessionName, "GC_INSTANCE_TOKEN", "fedcba9876543210fedcba9876543210"); err != nil {
 		t.Fatalf("SetMeta replacement token: %v", err)
 	}
 
@@ -742,36 +808,35 @@ func TestReconcileSessionBeads_UsageLimitModalRefusalRestoresHandoffMetadata(t *
 }
 
 func TestUsageLimitRestartHandoffRollbackRestoresEveryDestructiveField(t *testing.T) {
-	info := sessionpkg.Info{
-		SessionKey:                 "old-key",
-		StartedConfigHash:          "old-hash",
-		ContinuationResetPending:   "old-reset-pending",
-		ResetCommittedAt:           "old-reset-time",
-		LastWokeAt:                 "old-wake-time",
-		PendingCreateClaimMetadata: "old-claim",
-		PendingCreateStartedAt:     "old-create-time",
-		PrimedAtMetadata:           "old-prime-time",
-		PrimingAttemptedAtMetadata: "old-attempt-time",
-		PromptHashMetadata:         "old-prompt-hash",
-	}
 	handoff := sessionpkg.RestartRequestPatch("new-key", time.Now())
-	rollback := usageLimitRestartHandoffRollback(info, handoff)
-	want := sessionpkg.MetadataPatch{
-		"session_key":                            "old-key",
-		"started_config_hash":                    "old-hash",
-		"continuation_reset_pending":             "old-reset-pending",
-		sessionpkg.ResetCommittedAtKey:           "old-reset-time",
-		"last_woke_at":                           "old-wake-time",
-		"pending_create_claim":                   "old-claim",
-		"pending_create_started_at":              "old-create-time",
-		sessionpkg.PrimedAtMetadataKey:           "old-prime-time",
-		sessionpkg.PrimingAttemptedAtMetadataKey: "old-attempt-time",
-		sessionpkg.PromptHashMetadataKey:         "old-prompt-hash",
-	}
-	for key, value := range want {
-		if rollback[key] != value {
-			t.Errorf("rollback[%q] = %q, want %q", key, rollback[key], value)
+	original := make(map[string]string, len(handoff))
+	for key := range handoff {
+		if key != "restart_requested" {
+			original[key] = "before-" + key
 		}
+	}
+	mem := beads.NewMemStore()
+	row, err := mem.Create(beads.Bead{
+		Title:    "session",
+		Type:     sessionpkg.BeadType,
+		Metadata: original,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := sessionpkg.NewStore(beads.SessionStore{Store: mem}).Get(row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rollback := usageLimitRestartHandoffRollback(info, handoff)
+	for key, value := range original {
+		if rollback[key] != value {
+			t.Errorf("rollback[%q] = %q, want original %q", key, rollback[key], value)
+		}
+	}
+	if len(rollback) != len(original) {
+		t.Errorf("rollback has %d fields, want %d derived from RestartRequestPatch: %#v", len(rollback), len(original), rollback)
 	}
 	if _, ok := rollback["restart_requested"]; ok {
 		t.Error("rollback must leave restart_requested armed")
@@ -782,7 +847,7 @@ func TestReconcileSessionBeads_UsageLimitModalDoesNotStopReplacementAtConditiona
 	env, session, sessionName := newUsageLimitModalScenario(t)
 	// The ordinary identity pre-check still sees the observed incarnation; the
 	// replacement appears only at the provider's atomic destructive boundary.
-	env.sp.ConditionalStopTokens[sessionName] = "replacement-instance"
+	env.sp.ConditionalStopTokens[sessionName] = "fedcba9876543210fedcba9876543210"
 
 	env.reconcile([]beads.Bead{session})
 

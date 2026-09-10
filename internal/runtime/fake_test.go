@@ -14,6 +14,10 @@ var (
 )
 
 func TestFakeStopIfDetachedFencesInstanceAndAttachmentAtomically(t *testing.T) {
+	const (
+		liveToken        = "0123456789abcdef0123456789abcdef"
+		replacementToken = "fedcba9876543210fedcba9876543210"
+	)
 	for _, tc := range []struct {
 		name      string
 		liveToken string
@@ -22,9 +26,9 @@ func TestFakeStopIfDetachedFencesInstanceAndAttachmentAtomically(t *testing.T) {
 		wantErr   error
 		wantLive  bool
 	}{
-		{name: "matching detached incarnation", liveToken: "live", expected: "live"},
-		{name: "replacement incarnation", liveToken: "replacement", expected: "observed", wantErr: ErrConditionalStopRefused, wantLive: true},
-		{name: "new human attachment", liveToken: "live", expected: "live", attached: true, wantErr: ErrConditionalStopRefused, wantLive: true},
+		{name: "matching detached incarnation", liveToken: liveToken, expected: liveToken},
+		{name: "replacement incarnation", liveToken: replacementToken, expected: liveToken, wantErr: ErrConditionalStopRefused, wantLive: true},
+		{name: "new human attachment", liveToken: liveToken, expected: liveToken, attached: true, wantErr: ErrConditionalStopRefused, wantLive: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := NewFake()
@@ -44,6 +48,24 @@ func TestFakeStopIfDetachedFencesInstanceAndAttachmentAtomically(t *testing.T) {
 				t.Fatalf("IsRunning = %v, want %v", got, tc.wantLive)
 			}
 		})
+	}
+}
+
+func TestFakeStopIfDetachedRejectsLegacyNonProductionToken(t *testing.T) {
+	f := NewFake()
+	if err := f.Start(context.Background(), "worker", Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetMeta("worker", "GC_INSTANCE_TOKEN", "legacy-token"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := f.StopIfDetached("worker", "legacy-token")
+	if err == nil || errors.Is(err, ErrConditionalStopRefused) {
+		t.Fatalf("StopIfDetached legacy token error = %v, want production-format validation error", err)
+	}
+	if !f.IsRunning("worker") {
+		t.Fatal("invalid legacy token must fail closed without stopping the runtime")
 	}
 }
 

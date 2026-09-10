@@ -779,14 +779,12 @@ func (t *Tmux) KillSession(name string) error {
 
 const conditionalStopRefusedMarker = "gc:conditional-stop-refused"
 
-var instanceTokenPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
-
 // conditionalKillSession asks the tmux server to evaluate the incarnation and
 // attachment guards and kill the captured session ID in one command-queue item.
 // Targeting the immutable session ID ensures a same-name replacement cannot be
 // selected even if the observed session disappears before this command runs.
 func (t *Tmux) conditionalKillSession(sessionID, expectedInstanceToken string) error {
-	if !instanceTokenPattern.MatchString(expectedInstanceToken) {
+	if !runtime.ValidInstanceToken(expectedInstanceToken) {
 		return fmt.Errorf("invalid instance token %q", expectedInstanceToken)
 	}
 	condition := fmt.Sprintf(

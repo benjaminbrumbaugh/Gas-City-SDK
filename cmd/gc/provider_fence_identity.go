@@ -13,7 +13,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/session"
@@ -31,6 +33,10 @@ const (
 // provider-family and account-material values participate; commands, env names,
 // model/endpoint settings, and role-local operational values do not.
 func providerUsageFenceIdentityForCity(cityPath string, resolved *config.ResolvedProvider, accountEnv map[string]string) (string, error) {
+	return providerUsageFenceIdentityForCityWithStore(cityPath, nil, resolved, accountEnv)
+}
+
+func providerUsageFenceIdentityForCityWithStore(cityPath string, store beads.Store, resolved *config.ResolvedProvider, accountEnv map[string]string) (string, error) {
 	if resolved == nil {
 		return "", nil
 	}
@@ -46,7 +52,7 @@ func providerUsageFenceIdentityForCity(cityPath string, resolved *config.Resolve
 	if family == "" {
 		return "", nil
 	}
-	key, err := loadOrCreateProviderFenceIdentityKey(cityPath)
+	key, err := loadOrCreateProviderFenceIdentityKeyWithStore(cityPath, store)
 	if err != nil {
 		return "", err
 	}
@@ -116,7 +122,7 @@ func providerFenceAccountEnv(env map[string]string) map[string]string {
 	return accountEnv
 }
 
-func loadOrCreateProviderFenceIdentityKey(cityPath string) ([]byte, error) {
+func loadOrCreateProviderFenceIdentityKeyWithStore(cityPath string, store beads.Store) ([]byte, error) {
 	cityPath = strings.TrimSpace(cityPath)
 	if cityPath == "" {
 		return nil, errors.New("city path is required")
@@ -152,6 +158,17 @@ func loadOrCreateProviderFenceIdentityKey(cityPath string) ([]byte, error) {
 		}
 		if digestFound {
 			return fmt.Errorf("provider fence identity key %q is missing while continuity digest %q exists", path, digestPath)
+		}
+		if store != nil {
+			fences, err := session.NewStore(beads.SessionStore{Store: store}).ActiveProviderFences(time.Now())
+			if err != nil {
+				return fmt.Errorf("checking active provider fence identity continuity: %w", err)
+			}
+			for _, fence := range fences {
+				if strings.HasPrefix(strings.TrimSpace(fence.Identity), "account:hmac-sha256:") {
+					return fmt.Errorf("provider fence identity key %q is missing while active keyed fence metadata remains", path)
+				}
+			}
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return fmt.Errorf("creating provider fence identity directory: %w", err)
