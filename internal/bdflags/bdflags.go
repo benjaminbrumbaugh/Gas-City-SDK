@@ -13,18 +13,24 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
+// Flag coverage was last verified on 2026-09-09 against bd
+// v1.1.1-0.20260808152808-869020c2213d (gascity-compat), by comparing
+// `bd <subcommand> --help` for every key in Subcommands(). Keep this table a
+// superset of the installed CLI so older CI binaries remain supported.
+
 // globalValueFlags are accepted by every bd subcommand and consume the next
 // argument as their value.
 var globalValueFlags = map[string]bool{
-	"--actor": true, "--db": true, "-C": true, "--directory": true,
-	"--dolt-auto-commit": true,
+	"--actor": true, "--database": true, "--db": true, "-C": true,
+	"--directory": true, "--dolt-auto-commit": true, "--mem-profile": true,
 }
 
 // globalBoolFlags are accepted by every bd subcommand and take no value.
 var globalBoolFlags = map[string]bool{
-	"--global": true, "--ignore-schema-skew": true, "--json": true,
-	"--profile": true, "-q": true, "--quiet": true, "--readonly": true,
-	"--sandbox": true, "-v": true, "--verbose": true, "-h": true, "--help": true,
+	"--cpu-profile": true, "--global": true, "--ignore-schema-skew": true,
+	"--json": true, "-q": true, "--quiet": true, "--no-color": true,
+	"--readonly": true, "--sandbox": true, "-v": true, "--verbose": true,
+	"-h": true, "--help": true,
 }
 
 // valueFlagsBySub holds each subcommand's value-consuming flags (beyond the
@@ -42,8 +48,9 @@ var valueFlagsBySub = map[string]map[string]bool{
 		"--id": true, "-l": true, "--labels": true, "--metadata": true,
 		"--mol-type": true, "--notes": true, "--parent": true, "-p": true,
 		"--priority": true, "--repo": true, "--skills": true, "--spec-id": true,
-		"-s": true, "--status": true, "--title": true, "-t": true, "--type": true, "--waits-for": true,
-		"--waits-for-gate": true, "--wisp-type": true,
+		"-s": true, "--status": true, "--storage-class": true, "--title": true,
+		"-t": true, "--type": true, "--waits-for": true, "--waits-for-gate": true,
+		"--wisp-type": true,
 	},
 	"update": {
 		"--acceptance": true, "--add-label": true, "--append-notes": true,
@@ -73,19 +80,21 @@ var valueFlagsBySub = map[string]map[string]bool{
 	"ready": {
 		"-a": true, "--assignee": true, "--exclude-label": true, "--exclude-type": true,
 		"--has-metadata-key": true, "-l": true, "--label": true, "--label-any": true,
-		"-n": true, "--limit": true, "--metadata-field": true, "--mol": true,
+		"--label-pattern": true, "--label-regex": true, "-n": true, "--limit": true,
+		"--max-rows": true, "--metadata-field": true, "--mol": true,
 		"--mol-type": true, "--offset": true, "--parent": true, "-p": true,
 		"--priority": true, "-s": true, "--sort": true, "-t": true, "--type": true,
 	},
 	"list": {
 		"-a": true, "--assignee": true, "--closed-after": true, "--closed-before": true,
 		"--created-after": true, "--created-before": true, "--defer-after": true,
-		"--defer-before": true, "--desc-contains": true, "--due-after": true,
+		"--defer-before": true, "--deps": true, "--desc-contains": true, "--due-after": true,
 		"--due-before": true, "--exclude-label": true, "--exclude-type": true,
-		"--format": true, "--has-metadata-key": true, "--id": true, "-l": true,
+		"--external-contains": true, "--external-ref": true, "--format": true,
+		"--has-metadata-key": true, "--id": true, "-l": true,
 		"--label": true, "--label-any": true, "--label-pattern": true,
 		"--label-regex": true, "-n": true, "--limit": true, "--metadata-field": true,
-		"--mol-type": true, "--notes-contains": true, "--offset": true,
+		"--max-rows": true, "--mol-type": true, "--notes-contains": true, "--offset": true,
 		"--parent": true, "-p": true, "--priority": true, "--priority-max": true,
 		"--priority-min": true, "--sort": true, "--spec": true, "-s": true,
 		"--status": true, "--title": true, "--title-contains": true, "-t": true,
@@ -125,11 +134,13 @@ var valueFlagsBySub = map[string]map[string]bool{
 var boolFlagsBySub = map[string]map[string]bool{
 	"create": {
 		"--dry-run": true, "--ephemeral": true, "--force": true, "--no-history": true,
-		"--no-inherit-labels": true, "--silent": true, "--stdin": true, "--validate": true,
+		"--allow-empty-description": true, "--no-inherit-labels": true,
+		"--silent": true, "--stdin": true, "--validate": true,
 	},
 	"update": {
 		"--allow-empty-description": true, "--claim": true, "--ephemeral": true,
-		"--history": true, "--no-history": true, "--persistent": true, "--stdin": true,
+		"--force": true, "--history": true, "--no-history": true,
+		"--persistent": true, "--stdin": true,
 	},
 	"close": {
 		"--claim-next": true, "--continue": true, "-f": true, "--force": true,

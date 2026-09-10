@@ -20,6 +20,8 @@ func TestSplitGlobalFlagsSkipsGlobalFlagValues(t *testing.T) {
 		{"--actor", []string{"--actor", "bob", "update", "bd-1"}, "update", []string{"bd-1"}},
 		{"-C dir", []string{"-C", "/some/dir", "update", "bd-1"}, "update", []string{"bd-1"}},
 		{"--db", []string{"--db", "/x/y.db", "update", "bd-1"}, "update", []string{"bd-1"}},
+		{"--database", []string{"--database", "beads_alt", "update", "bd-1"}, "update", []string{"bd-1"}},
+		{"--mem-profile", []string{"--mem-profile", "/tmp/bd.mem", "update", "bd-1"}, "update", []string{"bd-1"}},
 		{"--directory", []string{"--directory", "/d", "close", "bd-1"}, "close", []string{"bd-1"}},
 		{"inline form consumes nothing", []string{"--actor=bob", "update", "bd-1"}, "update", []string{"bd-1"}},
 		{"bool global", []string{"--json", "update", "bd-1"}, "update", []string{"bd-1"}},
@@ -45,15 +47,17 @@ func TestSplitGlobalFlagsSkipsGlobalFlagValues(t *testing.T) {
 // bypass below: SplitGlobalFlags would read that flag's value as the verb, and
 // every guard keyed off the verb stops firing — with no test failing.
 //
-// Sourced from `bd --help` (bd 1.1.0). bd declares exactly four persistent
-// flags that consume the next argument; -C and --directory are the two spellings
-// of one of them. Every other persistent flag (--global, --ignore-schema-skew,
-// --json, --profile, -q/--quiet, --readonly, --sandbox, -v/--verbose, -h/--help,
-// -V/--version) is boolean and consumes nothing.
+// Sourced from `bd <subcommand> --help` (bd
+// v1.1.1-0.20260808152808-869020c2213d). bd declares six persistent flags
+// that consume the next argument; -C and --directory are the two spellings of
+// one of them. Every other persistent flag exposed by subcommand help
+// (--cpu-profile, --global, --ignore-schema-skew, --json, -q/--quiet,
+// --no-color, --readonly, --sandbox, -v/--verbose, -h/--help) is boolean and
+// consumes nothing.
 func TestGlobalValueFlagsIsComplete(t *testing.T) {
 	want := map[string]bool{
-		"--actor": true, "--db": true, "-C": true, "--directory": true,
-		"--dolt-auto-commit": true,
+		"--actor": true, "--database": true, "--db": true, "-C": true,
+		"--directory": true, "--dolt-auto-commit": true, "--mem-profile": true,
 	}
 	if got := GlobalValueFlags(); !reflect.DeepEqual(got, want) {
 		t.Errorf("GlobalValueFlags() = %v, want %v; re-check `bd --help` persistent flags", got, want)
@@ -66,12 +70,14 @@ func TestGlobalValueFlagsIsComplete(t *testing.T) {
 // guard has to fall back — reads a flag missing from this table as unknown, and
 // silently takes the ambiguous branch for an ordinary bd invocation.
 //
-// Sourced from `bd --help` (bd 1.1.0), the same pass as the value-flag table.
+// Sourced from `bd <subcommand> --help` (bd
+// v1.1.1-0.20260808152808-869020c2213d), the same pass as the value-flag table.
 func TestGlobalBoolFlagsIsComplete(t *testing.T) {
 	want := map[string]bool{
-		"--global": true, "--ignore-schema-skew": true, "--json": true,
-		"--profile": true, "-q": true, "--quiet": true, "--readonly": true,
-		"--sandbox": true, "-v": true, "--verbose": true, "-h": true, "--help": true,
+		"--cpu-profile": true, "--global": true, "--ignore-schema-skew": true,
+		"--json": true, "-q": true, "--quiet": true, "--no-color": true,
+		"--readonly": true, "--sandbox": true, "-v": true, "--verbose": true,
+		"-h": true, "--help": true,
 	}
 	if got := GlobalBoolFlags(); !reflect.DeepEqual(got, want) {
 		t.Errorf("GlobalBoolFlags() = %v, want %v; re-check `bd --help` persistent flags", got, want)
@@ -92,8 +98,10 @@ func TestRefusalFiresBehindAGlobalFlag(t *testing.T) {
 		{"--actor", "bob"},
 		{"-C", "/some/dir"},
 		{"--db", "/x/y.db"},
+		{"--database", "beads_alt"},
 		{"--directory", "/d"},
 		{"--dolt-auto-commit", "off"},
+		{"--mem-profile", "/tmp/bd.mem"},
 		{"--actor", "bob", "--json", "-C", "/d"},
 	}
 	for _, prefix := range prefixes {
