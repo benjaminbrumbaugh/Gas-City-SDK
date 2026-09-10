@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/clock"
@@ -42,6 +43,9 @@ const lsofScanTimeout = 30 * time.Second
 type SweepConfig struct {
 	// Root is the directory whose direct children are swept, e.g. os.TempDir().
 	Root string
+	// EntryPrefix restricts the sweep to direct children whose names start
+	// with this prefix. An empty prefix preserves the source-agnostic sweep.
+	EntryPrefix string
 	// MinAge overrides DefaultMinAge when positive.
 	MinAge time.Duration
 	// Clock supplies "now" for age comparisons. Defaults to clock.Real{}.
@@ -71,11 +75,13 @@ type SweepResult struct {
 // store directories: mtime older than MinAge, a .dolt marker directory
 // within maxMarkerDepth levels, and not currently held open by any live
 // process per lsof. Candidate selection intentionally does not filter on
-// directory name — the three signals above are what establish
-// abandonment, not any particular naming convention, so this catches
-// leaks "regardless of creation source" (ga-ntbpyb.2 acceptance criterion
-// 2) including directories named by Go's t.TempDir() rather than the
-// bare-mktemp "tmp.*" pattern the heuristic was first observed against.
+// directory name when EntryPrefix is empty — the three signals above are
+// what establish abandonment, not any particular naming convention, so the
+// default catches leaks "regardless of creation source" (ga-ntbpyb.2
+// acceptance criterion 2) including directories named by Go's t.TempDir()
+// rather than the bare-mktemp "tmp.*" pattern the heuristic was first
+// observed against. Callers that own a namespace under a shared root may set
+// EntryPrefix to avoid traversing unrelated directory trees.
 //
 // If the lsof scan itself fails, Sweep fails closed: nothing is removed
 // this pass (an unverifiable "is this held open" check is treated the
@@ -106,6 +112,9 @@ func Sweep(cfg SweepConfig) SweepResult {
 	var candidates []string
 	for _, e := range entries {
 		if !e.IsDir() {
+			continue
+		}
+		if cfg.EntryPrefix != "" && !strings.HasPrefix(e.Name(), cfg.EntryPrefix) {
 			continue
 		}
 		dir := filepath.Join(cfg.Root, e.Name())

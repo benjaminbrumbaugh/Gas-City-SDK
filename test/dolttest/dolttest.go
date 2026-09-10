@@ -82,7 +82,20 @@ func SweepStale(parent, prefix string) {
 // outside any tracked run-root, etc). Call at suite startup, alongside
 // SweepStale, before the run spawns any dolt of its own.
 func SweepOrphanStoreDirs(root string) {
-	result := doltorphan.Sweep(doltorphan.SweepConfig{Root: root})
+	sweepOrphanStoreDirs(root, "")
+}
+
+// SweepOrphanStoreDirsWithPrefix runs the symptom-based fallback sweep over
+// root, restricting candidates to direct children whose names start with
+// entryPrefix. This keeps test cleanup isolated when root is shared with
+// unrelated temporary directories. An empty entryPrefix has the same
+// source-agnostic behavior as SweepOrphanStoreDirs.
+func SweepOrphanStoreDirsWithPrefix(root, entryPrefix string) {
+	sweepOrphanStoreDirs(root, entryPrefix)
+}
+
+func sweepOrphanStoreDirs(root, entryPrefix string) {
+	result := doltorphan.Sweep(doltorphan.SweepConfig{Root: root, EntryPrefix: entryPrefix})
 	for _, dir := range result.Removed {
 		fmt.Fprintf(os.Stderr, "dolttest: startup sweep removed orphaned dolt store dir %s\n", dir)
 	}
