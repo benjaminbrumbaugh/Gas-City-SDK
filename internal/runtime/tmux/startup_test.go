@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -2810,17 +2811,29 @@ func TestRecordStartCrashDisabledWhenNoRuntimeDir(t *testing.T) {
 // clock, so a command that streams for 3x the idle window and exits 0 must
 // succeed.
 func TestRunSetupCommandActivityStreamingSurvivesIdleWindow(t *testing.T) {
-	ops := &tmuxStartOps{tm: &Tmux{}, setupMaxTimeout: 30 * time.Second}
+	synctest.Test(t, func(t *testing.T) {
+		ops := &tmuxStartOps{
+			tm:              &Tmux{},
+			setupMaxTimeout: 30 * time.Second,
+			runSetupCommandProcess: func(ctx context.Context, _ string, _ []string, _ string, stdout, _ io.Writer, _ time.Duration) error {
+				for i := 1; i <= 10; i++ {
+					if _, err := fmt.Fprintf(stdout, "progress %d\n", i); err != nil {
+						return err
+					}
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(100 * time.Millisecond):
+					}
+				}
+				return nil
+			},
+		}
 
-	err := ops.runSetupCommand(
-		context.Background(),
-		"for i in 1 2 3 4 5 6 7 8 9 10; do echo progress $i; sleep 0.1; done; exit 0",
-		map[string]string{},
-		300*time.Millisecond, // idle budget — total runtime (~1s) far exceeds it
-	)
-	if err != nil {
-		t.Fatalf("streaming setup command killed despite visible progress: %v", err)
-	}
+		if err := ops.runSetupCommand(context.Background(), "stream progress", map[string]string{}, 300*time.Millisecond); err != nil {
+			t.Fatalf("streaming setup command killed despite visible progress: %v", err)
+		}
+	})
 }
 
 // TestRunSetupCommandActivityIdleKillsSilentHang proves the hung-command

@@ -836,6 +836,11 @@ type startOps interface {
 	runSetupCommand(ctx context.Context, cmd string, env map[string]string, timeout time.Duration) error
 }
 
+// setupCommandProcess runs a setup command with the same process inputs that
+// the production os/exec path receives. The seam keeps monitor behavior
+// deterministic in tests without replacing the surrounding startup logic.
+type setupCommandProcess func(ctx context.Context, command string, env []string, workDir string, stdout, stderr io.Writer, grace time.Duration) error
+
 // tmuxStartOps adapts [*Tmux] to the [startOps] interface. runtimeDir is the
 // city runtime root under which start-crash diagnostics are persisted; empty
 // disables the durable capture.
@@ -851,6 +856,10 @@ type tmuxStartOps struct {
 	// pane capture and crash artifact this startup produces. Built by
 	// newTmuxStartOps; a zero value simply redacts nothing.
 	secrets []string
+	// runSetupCommandProcess is nil for production, selecting the os/exec
+	// implementation. Tests may inject a process boundary with deterministic
+	// timing while retaining the real monitor and output-tail behavior.
+	runSetupCommandProcess setupCommandProcess
 }
 
 // newTmuxStartOps builds the startup adapter for one session, deriving the
@@ -1030,44 +1039,53 @@ func (o *tmuxStartOps) runSetupCommand(ctx context.Context, cmd string, env map[
 		runCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	c := exec.CommandContext(runCtx, "sh", "-c", cmd)
-	if workDir := strings.TrimSpace(env["GC_DIR"]); workDir != "" {
-		c.Dir = workDir
-	}
-	c.Env = os.Environ()
+	workDir := strings.TrimSpace(env["GC_DIR"])
+	commandEnv := os.Environ()
 	for k, v := range env {
-		c.Env = append(c.Env, k+"="+v)
+		commandEnv = append(commandEnv, k+"="+v)
 	}
 	// Expose the tmux socket name so session_setup scripts can use
 	// "tmux -L $GC_TMUX_SOCKET" to reach the correct server.
 	if o.tm.cfg.SocketName != "" {
-		c.Env = append(c.Env, "GC_TMUX_SOCKET="+o.tm.cfg.SocketName)
+		commandEnv = append(commandEnv, "GC_TMUX_SOCKET="+o.tm.cfg.SocketName)
 	}
 	stdout := newCommandOutputTail(setupCommandOutputLimit)
 	stderr := newCommandOutputTail(setupCommandOutputLimit)
-	c.Stdout = mon.Writer(stdout)
-	c.Stderr = mon.Writer(stderr)
-	// Cooperative cancellation (execgrace.Apply): deadline expiry interrupts
-	// the command's process group first so shell rollback traps — e.g.
-	// worktree-setup.sh restoring content it staged aside — run before the
-	// forced kill. Go's default context-cancel is SIGKILL, which is
-	// untrappable and stranded such staged state. The grace doubles as the
-	// WaitDelay that force-closes the capture pipes after the command exits
-	// or is canceled, even if background descendants still hold them open.
-	execgrace.Apply(c, grace)
-	if err := c.Run(); err != nil {
+	monitoredStdout := mon.Writer(stdout)
+	monitoredStderr := mon.Writer(stderr)
+	var runErr error
+	if o.runSetupCommandProcess != nil {
+		runErr = o.runSetupCommandProcess(runCtx, cmd, commandEnv, workDir, monitoredStdout, monitoredStderr, grace)
+	} else {
+		c := exec.CommandContext(runCtx, "sh", "-c", cmd)
+		c.Dir = workDir
+		c.Env = commandEnv
+		c.Stdout = monitoredStdout
+		c.Stderr = monitoredStderr
+		// Cooperative cancellation (execgrace.Apply): deadline expiry
+		// interrupts the command's process group first so shell rollback traps
+		// — e.g. worktree-setup.sh restoring content it staged aside — run
+		// before the forced kill. Go's default context-cancel is SIGKILL, which
+		// is untrappable and stranded such staged state. The grace doubles as
+		// the WaitDelay that force-closes the capture pipes after the command
+		// exits or is canceled, even if background descendants still hold them
+		// open.
+		execgrace.Apply(c, grace)
+		runErr = c.Run()
+	}
+	if runErr != nil {
 		// ErrWaitDelay means the command itself exited successfully and
 		// only the force-closed pipes ended the wait: a setup command that
 		// daemonizes a child holding inherited stdio and exits 0 succeeded.
-		if errors.Is(err, exec.ErrWaitDelay) {
+		if errors.Is(runErr, exec.ErrWaitDelay) {
 			return nil
 		}
 		// context.Cause surfaces which budget fired (execgrace.ErrIdle,
 		// execgrace.ErrCeiling, or the fixed deadline's DeadlineExceeded).
 		if ctxErr := context.Cause(runCtx); ctxErr != nil && runCtx.Err() != nil {
-			err = fmt.Errorf("%w: %w", ctxErr, err)
+			runErr = fmt.Errorf("%w: %w", ctxErr, runErr)
 		}
-		return setupCommandFailure(err, stdout, stderr, runtime.SetupCommandSecrets(env))
+		return setupCommandFailure(runErr, stdout, stderr, runtime.SetupCommandSecrets(env))
 	}
 	return nil
 }
