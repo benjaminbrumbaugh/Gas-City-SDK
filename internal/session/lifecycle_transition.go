@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -319,14 +320,15 @@ func ConfirmStartedPatch(now time.Time) MetadataPatch {
 // readers (e.g. the pool bead sweep) never observe a transient state
 // where the claim is gone but the post-create marker hasn't landed yet.
 type CommitStartedPatchInput struct {
-	CoreHash                string
-	LiveHash                string
-	ProvisionHash           string
-	LaunchHash              string
-	CoreBreakdown           string
-	ConfirmState            bool
-	ClearSleepReason        bool
-	ClearPendingCreateClaim bool
+	CoreHash                     string
+	LiveHash                     string
+	ProvisionHash                string
+	LaunchHash                   string
+	CoreBreakdown                string
+	StartedProviderFenceIdentity string
+	ConfirmState                 bool
+	ClearSleepReason             bool
+	ClearPendingCreateClaim      bool
 	// StartsAwakeInterval marks a commit that begins a new awake interval (a
 	// first start or a wake from a dormant state), as opposed to a recovery
 	// re-confirmation of an already-running runtime. When true the patch stamps
@@ -382,6 +384,12 @@ func CommitStartedPatch(input CommitStartedPatchInput) MetadataPatch {
 		patch["pending_create_claim"] = ""
 		patch["pending_create_started_at"] = ""
 	}
+	// The launch identity is a write-ahead crash-recovery marker. A successful
+	// start promotes it to the runtime identity and clears the intent in the
+	// same metadata operation, so a restart cannot observe a half-promoted
+	// account boundary.
+	patch["started_provider_fence_identity"] = input.StartedProviderFenceIdentity
+	patch["launch_provider_fence_identity"] = ""
 	// A genuine (re)start opens a new awake interval. Stamp a fresh, immutable
 	// epoch so the compute usage fact for this interval is distinct from any
 	// prior interval on a reused session bead; a recovery re-confirmation of an
@@ -398,6 +406,26 @@ func CommitStartedPatch(input CommitStartedPatchInput) MetadataPatch {
 	if !input.PrimedAt.IsZero() && input.PromptHash != "" {
 		patch[PrimedAtMetadataKey] = input.PrimedAt.UTC().Format(time.RFC3339)
 		patch[PromptHashMetadataKey] = input.PromptHash
+	}
+	return patch
+}
+
+// ClearProviderFenceQuarantinePatch removes only the usage-limit quarantine
+// markers when desired configuration now resolves to a different account.
+// Retry/churn counters and unrelated restart state remain untouched; a
+// provider-account repoint is not a general session reset. The restart marker
+// is included because it is part of the usage-limit handoff and would
+// otherwise kill the healthy replacement account on the next pass.
+func ClearProviderFenceQuarantinePatch(sleepReason string) MetadataPatch {
+	patch := MetadataPatch{
+		"quarantined_until":       "",
+		"session_health":          "healthy",
+		"session_health_reason":   "",
+		"provider_fence_identity": "",
+		"restart_requested":       "",
+	}
+	if SleepReason(strings.TrimSpace(sleepReason)) == SleepReasonRateLimit {
+		patch["sleep_reason"] = ""
 	}
 	return patch
 }

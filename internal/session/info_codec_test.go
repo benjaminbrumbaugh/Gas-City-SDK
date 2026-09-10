@@ -83,11 +83,13 @@ func infoFromPersistedBeadFrozen(b beads.Bead) Info {
 		MCPIdentity:                b.Metadata[MCPIdentityMetadataKey],
 		MCPServersSnapshot:         b.Metadata[MCPServersSnapshotMetadataKey],
 
-		ProviderTerminalError: b.Metadata["provider_terminal_error"],
-		ProviderFenceIdentity: b.Metadata["provider_fence_identity"],
-		HealthState:           b.Metadata["session_health"],
-		HealthReason:          b.Metadata["session_health_reason"],
-		Drainable:             strings.TrimSpace(b.Metadata["session_drainable"]) == "true",
+		ProviderTerminalError:        b.Metadata["provider_terminal_error"],
+		ProviderFenceIdentity:        b.Metadata["provider_fence_identity"],
+		StartedProviderFenceIdentity: b.Metadata["started_provider_fence_identity"],
+		LaunchProviderFenceIdentity:  b.Metadata["launch_provider_fence_identity"],
+		HealthState:                  b.Metadata["session_health"],
+		HealthReason:                 b.Metadata["session_health_reason"],
+		Drainable:                    strings.TrimSpace(b.Metadata["session_drainable"]) == "true",
 
 		TriggerBeadID:       b.Metadata[beadmeta.TriggerBeadIDMetadataKey],
 		TriggerBeadStoreRef: b.Metadata[beadmeta.TriggerBeadStoreRefMetadataKey],

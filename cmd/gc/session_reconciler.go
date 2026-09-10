@@ -1634,25 +1634,42 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 	}
 	phaseStart = time.Now()
 	usageFenceProbeTargets := selectUsageFenceProbeTargets(orderedIDs, dt)
-	// Durable per-session usage-limit records also fence sibling starts on the
-	// same resolved provider preset. Persisting that preset on the source record
-	// keeps the fence effective if the role is removed from desired state before
-	// the provider's reset deadline.
+	// Durable provider-fence records outlive source session rows. A read error
+	// is fail-closed: an unavailable fence store must never look like an empty
+	// store and permit a sibling start into an account known to be limited.
 	providerUsageFences := make(map[string]time.Time)
-	for i := range orderedRows {
-		info := orderedRows[i].Info
-		until, recorded := usageLimitModalFenceUntil(info, clk.Now())
-		if !recorded {
-			continue
-		}
-		identity := strings.TrimSpace(info.ProviderFenceIdentity)
-		if identity == "" {
-			if tp, ok := desiredState[strings.TrimSpace(info.SessionNameMetadata)]; ok && tp.ResolvedProvider != nil {
-				identity = strings.TrimSpace(tp.ResolvedProvider.Name)
+	providerFenceReadFailed := false
+	durableProviderFences, err := sessFront.ActiveProviderFences(clk.Now())
+	if err != nil {
+		providerFenceReadFailed = true
+		fmt.Fprintf(stderr, "session reconciler: reading durable provider fences: %v; provider-fenced starts will remain asleep\n", err) //nolint:errcheck
+	} else {
+		for _, fence := range durableProviderFences {
+			if fence.Until.After(providerUsageFences[fence.Identity]) {
+				providerUsageFences[fence.Identity] = fence.Until
 			}
 		}
-		if identity != "" && until.After(providerUsageFences[identity]) {
-			providerUsageFences[identity] = until
+		// Migrate a legacy session-level fence once, including identityless
+		// records from before account identities were persisted. The migration is
+		// append-only and therefore remains durable after the source row closes.
+		for i := range orderedRows {
+			info := orderedRows[i].Info
+			until, recorded := usageLimitModalFenceUntil(info, clk.Now())
+			if !recorded {
+				continue
+			}
+			identity := recordedProviderUsageFenceIdentity(info, "")
+			if identity == "" {
+				identity = legacyProviderUsageFenceIdentity
+			}
+			if until.After(providerUsageFences[identity]) {
+				if err := sessFront.RecordProviderFence(identity, until, clk.Now(), sessionHealthReasonUsageLimitModal); err != nil {
+					providerFenceReadFailed = true
+					fmt.Fprintf(stderr, "session reconciler: migrating provider fence for %s: %v; provider-fenced starts will remain asleep\n", info.SessionNameMetadata, err) //nolint:errcheck
+					break
+				}
+				providerUsageFences[identity] = until
+			}
 		}
 	}
 	for i := range orderedRows {
@@ -1667,6 +1684,22 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		info := infoByID[id]
 		name := strings.TrimSpace(info.SessionNameMetadata)
 		tp, desired := desiredState[name]
+		// A desired account repoint must not inherit the old session's
+		// provider-fence quarantine or restart handoff. The durable account
+		// fence remains authoritative for the old identity, while this role is
+		// allowed to wake on the newly resolved account.
+		if desired && strings.TrimSpace(info.HealthReason) == sessionHealthReasonUsageLimitModal {
+			currentIdentity := providerUsageFenceIdentity(tp)
+			oldIdentity := strings.TrimSpace(info.ProviderFenceIdentity)
+			if oldIdentity != "" && currentIdentity != "" && oldIdentity != currentIdentity {
+				next, clearErr := sessFront.UpdateMetadataInfo(info, sessionpkg.ClearProviderFenceQuarantinePatch(info.SleepReason))
+				if clearErr != nil {
+					fmt.Fprintf(stderr, "session reconciler: clearing stale provider fence for repointed %s: %v; leaving quarantine in place\n", name, clearErr) //nolint:errcheck
+				} else {
+					info = tick.set(id, next)
+				}
+			}
+		}
 		if shadowTick != nil {
 			// 3a: durable facts from the already-observed coherent typed Info (the
 			// priming + canonical mirrors are projected Info fields). The predicted
@@ -2747,7 +2780,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		// consumes, so running last costs nothing.
 		recordedUntil, usageFenceRecorded := usageLimitModalFenceUntil(infoByID[id], clk.Now())
 		usageFenceRestartValidated := false
-		providerFenceIdentity := providerUsageFenceIdentity(tp)
+		providerFenceIdentity := providerUsageFenceIdentityForRuntime(infoByID[id], tp, alive)
 		recordedFenceIdentity := recordedProviderUsageFenceIdentity(infoByID[id], providerFenceIdentity)
 		if usageFenceRecorded && recordedFenceIdentity != "" && recordedUntil.After(providerUsageFences[recordedFenceIdentity]) {
 			providerUsageFences[recordedFenceIdentity] = recordedUntil
@@ -2802,9 +2835,25 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				},
 			)
 			if wedged && dt.usageFencePaneStable(id, observedPane, clk.Now()) {
+				if providerFenceReadFailed {
+					fmt.Fprintf(stderr, "session reconciler: durable provider fence store unavailable for %s; leaving usage-limit runtime untouched\n", name) //nolint:errcheck
+					continue
+				}
 				if err := usageLimitModalRuntimeMatchesInstance(sp, name, infoByID[id]); err != nil {
 					fmt.Fprintf(stderr, "session reconciler: usage-limit observation for %s no longer matches the observed runtime: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
 					continue
+				}
+				if providerFenceIdentity == "" {
+					providerFenceIdentity = legacyProviderUsageFenceIdentity
+				}
+				until := usageLimitModalQuarantineUntil(clk.Now(), resetAt)
+				if err := sessFront.RecordProviderFence(providerFenceIdentity, until, clk.Now(), sessionHealthReasonUsageLimitModal); err != nil {
+					providerFenceReadFailed = true
+					fmt.Fprintf(stderr, "session reconciler: recording durable provider fence for %s: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
+					continue
+				}
+				if until.After(providerUsageFences[providerFenceIdentity]) {
+					providerUsageFences[providerFenceIdentity] = until
 				}
 				// Never kill unless both the provider fence and the fresh-session
 				// handoff are durable. A successful stop followed by a failed
@@ -2901,11 +2950,37 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					continue
 				}
 				usageLimitRuntimeStopped := false
+				usageLimitRestartHandoffPersisted := false
+				usageLimitRestartSessionKey := ""
+				usageLimitRestartHasCapability := false
 				if runtimeRunning && strings.TrimSpace(infoByID[id].HealthReason) == sessionHealthReasonUsageLimitModal {
 					if err := usageLimitModalRuntimeMatchesInstance(sp, name, infoByID[id]); err != nil {
 						fmt.Fprintf(stderr, "session reconciler: usage-limit restart for %s no longer matches the observed runtime: %v; disarming restart\n", name, err) //nolint:errcheck
 						tick.applyStore(id, sessFront, sessionpkg.MetadataPatch{"restart_requested": ""})
 						continue
+					}
+					// Persist the fresh-conversation handoff before the final
+					// attachment observation and destructive stop. Keep the request
+					// marker armed until Stop succeeds; if a human attaches during
+					// the write, the next tick can safely reconsider it. A wedge
+					// detected earlier this same pass already wrote this handoff;
+					// reuse its key rather than rotating twice.
+					if strings.TrimSpace(infoByID[id].ContinuationResetPending) == "true" && strings.TrimSpace(infoByID[id].StartedConfigHash) == "" {
+						usageLimitRestartSessionKey = infoByID[id].SessionKey
+						usageLimitRestartHasCapability = true
+						usageLimitRestartHandoffPersisted = true
+					} else {
+						usageLimitRestartSessionKey, usageLimitRestartHasCapability = freshRestartSessionKeyInfo(tp, infoByID[id])
+						preStopHandoff := sessionpkg.RestartRequestPatch(usageLimitRestartSessionKey, clk.Now())
+						preStopHandoff["restart_requested"] = "true"
+						if usageLimitRestartHasCapability && usageLimitRestartSessionKey == "" {
+							preStopHandoff["session_key"] = ""
+						}
+						if _, err := sessFront.UpdateMetadataInfo(infoByID[id], preStopHandoff); err != nil {
+							fmt.Fprintf(stderr, "session reconciler: recording restart handoff before usage-limit stop for %s: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
+							continue
+						}
+						usageLimitRestartHandoffPersisted = true
 					}
 					// Keep identity and metadata reads ahead of this final safety
 					// observation so they cannot widen the interval in which a newly
@@ -2951,6 +3026,10 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				// intentional death from crash and churn trackers (both
 				// check last_woke_at first).
 				newSessionKey, hasCapability := freshRestartSessionKeyInfo(tp, infoByID[id])
+				if usageLimitRestartHandoffPersisted {
+					newSessionKey = usageLimitRestartSessionKey
+					hasCapability = usageLimitRestartHasCapability
+				}
 				batch := sessionpkg.RestartRequestPatch(newSessionKey, clk.Now())
 				if hasCapability && newSessionKey == "" {
 					batch["session_key"] = ""
@@ -3978,6 +4057,10 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			// external provider-health gate. The identity includes the provider
 			// family and effective account environment, so aliases can share a
 			// fence without crossing account boundaries.
+			if providerFenceReadFailed && target.tp.ResolvedProvider != nil {
+				fmt.Fprintf(stderr, "session reconciler: durable provider fence store unavailable; skipping respawn for %s\n", name) //nolint:errcheck
+				continue
+			}
 			if fenceIdentity := providerUsageFenceIdentity(target.tp); fenceIdentity != "" {
 				if until, fenced := providerUsageFences[fenceIdentity]; fenced && clk.Now().Before(until) {
 					phProvider := target.tp.ResolvedProvider.Name
@@ -3988,6 +4071,12 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 							"until":    until.UTC().Format(time.RFC3339),
 						})
 					}
+					continue
+				}
+			}
+			if target.tp.ResolvedProvider != nil {
+				if until, fenced := providerUsageFences[legacyProviderUsageFenceIdentity]; fenced && clk.Now().Before(until) {
+					fmt.Fprintf(stderr, "session reconciler: legacy provider account fence active until %s; skipping respawn for %s\n", until.UTC().Format(time.RFC3339), name) //nolint:errcheck
 					continue
 				}
 			}

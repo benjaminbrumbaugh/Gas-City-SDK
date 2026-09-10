@@ -446,9 +446,10 @@ func newUsageLimitModalScenario(t *testing.T) (*restartRequestTestEnv, beads.Bea
 	}
 	sessionName := config.NamedSessionRuntimeName(env.cfg.Workspace.Name, env.cfg.Workspace, "worker")
 	env.desiredState[sessionName] = TemplateParams{
-		Command:      "true",
-		SessionName:  sessionName,
-		TemplateName: "worker",
+		Command:               "true",
+		SessionName:           sessionName,
+		TemplateName:          "worker",
+		ProviderFenceIdentity: "account:test",
 		ResolvedProvider: &config.ResolvedProvider{
 			SessionIDFlag: "--session-id",
 		},
@@ -463,6 +464,7 @@ func newUsageLimitModalScenario(t *testing.T) (*restartRequestTestEnv, beads.Bea
 		"session_key":                "wedged-key",
 		"started_config_hash":        "hash-before-wedge",
 		"instance_token":             "wedged-instance",
+		"provider_fence_identity":    "account:test",
 	})
 	if err := env.sp.Start(context.Background(), sessionName, runtime.Config{Command: "true"}); err != nil {
 		t.Fatalf("start session: %v", err)
@@ -589,6 +591,30 @@ func (s restartHandoffPersistFailStore) Update(id string, opts beads.UpdateOpts)
 		return errors.New("injected restart-handoff persistence failure")
 	}
 	return s.Store.Update(id, opts)
+}
+
+type providerFenceCreateFailStore struct {
+	beads.Store
+}
+
+func (s providerFenceCreateFailStore) Create(b beads.Bead) (beads.Bead, error) {
+	for _, label := range b.Labels {
+		if label == sessionpkg.ProviderFenceBeadLabel {
+			return beads.Bead{}, errors.New("injected durable provider-fence failure")
+		}
+	}
+	return s.Store.Create(b)
+}
+
+func TestReconcileSessionBeads_UsageLimitModalDoesNotKillWhenDurableFenceWriteFails(t *testing.T) {
+	env, session, sessionName := newUsageLimitModalScenario(t)
+	env.store = providerFenceCreateFailStore{Store: env.store}
+
+	env.reconcile([]beads.Bead{session})
+
+	if !env.sp.IsRunning(sessionName) {
+		t.Fatal("runtime was stopped even though the durable provider fence could not be written")
+	}
 }
 
 func TestReconcileSessionBeads_UsageLimitModalDoesNotKillWhenFencePersistenceFails(t *testing.T) {
@@ -798,10 +824,11 @@ func TestReconcileSessionBeads_UsageLimitFenceBlocksProviderSiblingsOnly(t *test
 	makeNamed := func(template, provider string, metadata map[string]string) (beads.Bead, string) {
 		name := config.NamedSessionRuntimeName(env.cfg.Workspace.Name, env.cfg.Workspace, template)
 		env.desiredState[name] = TemplateParams{
-			Command:          "true",
-			SessionName:      name,
-			TemplateName:     template,
-			ResolvedProvider: &config.ResolvedProvider{Name: provider},
+			Command:               "true",
+			SessionName:           name,
+			TemplateName:          template,
+			ProviderFenceIdentity: "account:" + provider,
+			ResolvedProvider:      &config.ResolvedProvider{Name: provider},
 		}
 		bead := env.createSessionBead(name)
 		base := map[string]string{
@@ -818,9 +845,7 @@ func TestReconcileSessionBeads_UsageLimitFenceBlocksProviderSiblingsOnly(t *test
 	}
 
 	providerFence := map[string]string(usageLimitModalWedgePatch(env.clk.Now(), time.Time{}))
-	providerFence["provider_fence_identity"] = providerUsageFenceIdentity(TemplateParams{
-		ResolvedProvider: &config.ResolvedProvider{Name: "provider-preset-a"},
-	})
+	providerFence["provider_fence_identity"] = "account:provider-preset-a"
 	limitedSource, limitedSourceName := makeNamed("limited-source", "provider-preset-a", providerFence)
 	limitedSibling, limitedName := makeNamed("limited-sibling", "provider-preset-a", nil)
 	healthySibling, healthyName := makeNamed("healthy-sibling", "provider-preset-b", nil)
@@ -841,38 +866,33 @@ func TestReconcileSessionBeads_UsageLimitFenceBlocksProviderSiblingsOnly(t *test
 
 func TestProviderUsageFenceIdentityUsesEffectiveAccountBoundary(t *testing.T) {
 	t.Parallel()
-
-	base := TemplateParams{
-		ProviderFenceEnv: map[string]string{"CLAUDE_CONFIG_DIR": "/accounts/personal"},
-		ResolvedProvider: &config.ResolvedProvider{
-			Name:            "claude-personal-max",
-			BuiltinAncestor: "claude",
-		},
+	cityPath := t.TempDir()
+	base, err := providerUsageFenceIdentityForCity(cityPath, &config.ResolvedProvider{
+		Name:            "claude-personal-max",
+		BuiltinAncestor: "claude",
+	}, map[string]string{"ANTHROPIC_API_KEY": "personal-secret"})
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	alias := base
-	alias.ResolvedProvider = &config.ResolvedProvider{
+	alias, err := providerUsageFenceIdentityForCity(cityPath, &config.ResolvedProvider{
 		Name:            "claude-personal-sonnet",
 		BuiltinAncestor: "claude",
+	}, map[string]string{"CUSTOM_AUTH_TOKEN": "personal-secret"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got, want := providerUsageFenceIdentity(alias), providerUsageFenceIdentity(base); got != want {
-		t.Fatalf("same account through provider aliases produced different identities: got %q, want %q", got, want)
+	if alias != base {
+		t.Fatalf("same account through provider aliases produced different identities: got %q, want %q", alias, base)
 	}
-
-	differentAccount := base
-	differentAccount.ResolvedProvider = &config.ResolvedProvider{
-		Name:            base.ResolvedProvider.Name,
+	differentAccount, err := providerUsageFenceIdentityForCity(cityPath, &config.ResolvedProvider{
+		Name:            "claude-personal-max",
 		BuiltinAncestor: "claude",
+	}, map[string]string{"ANTHROPIC_API_KEY": "enterprise-secret"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	differentAccount.ProviderFenceEnv = map[string]string{"CLAUDE_CONFIG_DIR": "/accounts/enterprise"}
-	if got, notWant := providerUsageFenceIdentity(differentAccount), providerUsageFenceIdentity(base); got == notWant {
-		t.Fatalf("same provider preset with different account environment shared identity %q", got)
-	}
-
-	upstreamAlias := base
-	upstreamAlias.Upstream = "alias-for-the-same-account"
-	if got, want := providerUsageFenceIdentity(upstreamAlias), providerUsageFenceIdentity(base); got != want {
-		t.Fatalf("upstream aliases with the same effective account environment produced different identities: got %q, want %q", got, want)
+	if differentAccount == base {
+		t.Fatalf("same provider preset with different account environment shared identity %q", base)
 	}
 }
 

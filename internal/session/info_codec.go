@@ -129,6 +129,8 @@ var infoKeyCodec = []infoKeySpec{
 	{"session_health", func(i *Info, v string) { i.HealthState = v }},
 	{"session_health_reason", func(i *Info, v string) { i.HealthReason = v }},
 	{"provider_fence_identity", func(i *Info, v string) { i.ProviderFenceIdentity = v }},
+	{"started_provider_fence_identity", func(i *Info, v string) { i.StartedProviderFenceIdentity = v }},
+	{"launch_provider_fence_identity", func(i *Info, v string) { i.LaunchProviderFenceIdentity = v }},
 	{"session_drainable", func(i *Info, v string) { i.Drainable = strings.TrimSpace(v) == "true" }},
 
 	// trigger / brain-parent cluster (canonical gc.* keys via beadmeta)

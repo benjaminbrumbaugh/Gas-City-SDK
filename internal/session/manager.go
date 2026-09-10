@@ -196,11 +196,13 @@ type Info struct {
 	// as spent, excluding it from resume and in-flight demand. These mirror the
 	// raw markers so the Info form of that classifier stays byte-identical.
 	// Additive, internal-only (absent from the HTTP wire).
-	ProviderTerminalError string // provider_terminal_error (raw)
-	HealthState           string // session_health (raw)
-	HealthReason          string // session_health_reason (raw)
-	ProviderFenceIdentity string // provider_fence_identity (raw provider preset identity)
-	Drainable             bool   // session_drainable == "true"
+	ProviderTerminalError        string // provider_terminal_error (raw)
+	HealthState                  string // session_health (raw)
+	HealthReason                 string // session_health_reason (raw)
+	ProviderFenceIdentity        string // provider_fence_identity (raw provider account identity)
+	StartedProviderFenceIdentity string // started_provider_fence_identity (runtime account identity)
+	LaunchProviderFenceIdentity  string // launch_provider_fence_identity (write-ahead runtime account identity)
+	Drainable                    bool   // session_drainable == "true"
 
 	// --- trigger / brain-parent cluster (controller read surface) ---
 	//

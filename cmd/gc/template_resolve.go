@@ -65,6 +65,9 @@ type TemplateParams struct {
 	// excluding unrelated role/session settings. Consumers must hash it before
 	// persistence or logging.
 	ProviderFenceEnv map[string]string
+	// ProviderFenceIdentity is the opaque, city-keyed account identity derived
+	// from ProviderFenceEnv after all config layers have been applied.
+	ProviderFenceIdentity string
 	// Upstream is the selected model-serving endpoint name (a key in [upstreams],
 	// Phase C). Carried to runtime.Config.Upstream (launch-half fingerprint) so a
 	// switch relaunches the warm box; the resolved serving env is already merged
@@ -498,6 +501,7 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	if providerFenceEnv == nil {
 		providerFenceEnv = make(map[string]string)
 	}
+	providerFenceMaterialCount := 0
 	env := mergeEnv(passthroughEnv(), expandEnvMap(workspaceEnv), expandEnvMap(resolved.Env), agentEnv)
 	processenv.PrependGCBinDirToPATH(env, env["GC_BIN"])
 	env = convergence.ScrubTokenEnv(env)
@@ -532,10 +536,13 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 			}
 			// Per field, the target env-var name is the upstream's override if set
 			// (for gateway harnesses), else the harness binding, else a hard error.
-			for _, r := range []struct{ value, override, bound, field string }{
-				{spec.BaseURL, spec.BaseURLEnv, binding.BaseURL, "base_url"},
-				{spec.APIKey, spec.APIKeyEnv, binding.APIKey, "api_key"},
-				{spec.AuthToken, spec.AuthTokenEnv, binding.AuthToken, "auth_token"},
+			for _, r := range []struct {
+				value, override, bound, field string
+				accountMaterial               bool
+			}{
+				{spec.BaseURL, spec.BaseURLEnv, binding.BaseURL, "base_url", false},
+				{spec.APIKey, spec.APIKeyEnv, binding.APIKey, "api_key", true},
+				{spec.AuthToken, spec.AuthTokenEnv, binding.AuthToken, "auth_token", true},
 			} {
 				if r.value == "" {
 					continue
@@ -550,6 +557,10 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 				value := processenv.ExpandSessionEnvValue(r.value)
 				env[envName] = value
 				providerFenceEnv[envName] = value
+				if r.accountMaterial {
+					providerFenceEnv[fmt.Sprintf("GC_PROVIDER_FENCE_ACCOUNT_MATERIAL_%d", providerFenceMaterialCount)] = value
+					providerFenceMaterialCount++
+				}
 			}
 		}
 		// Raw env is the harness-specific escape hatch, merged LAST (wins over the
@@ -745,26 +756,32 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		CopyFiles:              copyFiles,
 	}
 
+	providerFenceIdentity, err := providerUsageFenceIdentityForCity(p.cityPath, resolved, providerFenceEnv)
+	if err != nil {
+		return TemplateParams{}, fmt.Errorf("agent %q provider account identity: %w", qualifiedName, err)
+	}
+
 	params := TemplateParams{
-		Command:          command,
-		Prompt:           prompt,
-		Env:              env,
-		ProviderFenceEnv: providerFenceEnv,
-		Upstream:         cfgAgent.Upstream,
-		Hints:            hints,
-		WorkDir:          workDir,
-		SessionName:      sessName,
-		Alias:            qualifiedName,
-		FPExtra:          fpExtra,
-		ResolvedProvider: resolved,
-		TemplateName:     templateNameFor(cfgAgent, qualifiedName),
-		InstanceName:     qualifiedName,
-		RigName:          rigName,
-		RigRoot:          rigRoot,
-		WakeMode:         cfgAgent.WakeMode,
-		IsACP:            sessionTransport == config.SessionTransportACP,
-		HookEnabled:      hasHooks,
-		MCPServers:       mcpServers,
+		Command:               command,
+		Prompt:                prompt,
+		Env:                   env,
+		ProviderFenceEnv:      providerFenceEnv,
+		ProviderFenceIdentity: providerFenceIdentity,
+		Upstream:              cfgAgent.Upstream,
+		Hints:                 hints,
+		WorkDir:               workDir,
+		SessionName:           sessName,
+		Alias:                 qualifiedName,
+		FPExtra:               fpExtra,
+		ResolvedProvider:      resolved,
+		TemplateName:          templateNameFor(cfgAgent, qualifiedName),
+		InstanceName:          qualifiedName,
+		RigName:               rigName,
+		RigRoot:               rigRoot,
+		WakeMode:              cfgAgent.WakeMode,
+		IsACP:                 sessionTransport == config.SessionTransportACP,
+		HookEnabled:           hasHooks,
+		MCPServers:            mcpServers,
 	}
 	params.SessionOverride = cfgAgent.Session
 	params.EffectiveSessionProvider = effectiveSessionProvider(cfgAgent.Session, p.sessionProvider)

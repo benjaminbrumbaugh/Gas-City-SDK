@@ -574,20 +574,22 @@ func TestCommitStartedPatchBuildsAtomicStartMetadata(t *testing.T) {
 	})
 
 	want := MetadataPatch{
-		"started_config_hash":        "core-hash",
-		"live_hash":                  "live-hash",
-		"started_live_hash":          "live-hash",
-		"started_provision_hash":     "provision-hash",
-		"started_launch_hash":        "launch-hash",
-		"continuation_reset_pending": "",
-		ResetCommittedAtKey:          "",
-		"core_hash_breakdown":        `{"command":"core-hash"}`,
-		"state":                      string(StateActive),
-		"state_reason":               "creation_complete",
-		"creation_complete_at":       now.Format(time.RFC3339),
-		"sleep_reason":               "",
-		"pending_create_claim":       "",
-		"pending_create_started_at":  "",
+		"started_config_hash":             "core-hash",
+		"live_hash":                       "live-hash",
+		"started_live_hash":               "live-hash",
+		"started_provision_hash":          "provision-hash",
+		"started_launch_hash":             "launch-hash",
+		"continuation_reset_pending":      "",
+		ResetCommittedAtKey:               "",
+		"core_hash_breakdown":             `{"command":"core-hash"}`,
+		"state":                           string(StateActive),
+		"state_reason":                    "creation_complete",
+		"creation_complete_at":            now.Format(time.RFC3339),
+		"sleep_reason":                    "",
+		"pending_create_claim":            "",
+		"pending_create_started_at":       "",
+		"started_provider_fence_identity": "",
+		"launch_provider_fence_identity":  "",
 	}
 	if !reflect.DeepEqual(patch, want) {
 		t.Fatalf("patch = %#v, want %#v", patch, want)
@@ -668,14 +670,16 @@ func TestCommitStartedPatchCanPersistHashesWithoutRestampingState(t *testing.T) 
 	})
 
 	want := MetadataPatch{
-		"started_config_hash":        "core-hash",
-		"live_hash":                  "live-hash",
-		"started_live_hash":          "live-hash",
-		"started_provision_hash":     "provision-hash",
-		"started_launch_hash":        "launch-hash",
-		"continuation_reset_pending": "",
-		ResetCommittedAtKey:          "",
-		"sleep_reason":               "",
+		"started_config_hash":             "core-hash",
+		"live_hash":                       "live-hash",
+		"started_live_hash":               "live-hash",
+		"started_provision_hash":          "provision-hash",
+		"started_launch_hash":             "launch-hash",
+		"continuation_reset_pending":      "",
+		ResetCommittedAtKey:               "",
+		"sleep_reason":                    "",
+		"started_provider_fence_identity": "",
+		"launch_provider_fence_identity":  "",
 	}
 	if !reflect.DeepEqual(patch, want) {
 		t.Fatalf("patch = %#v, want %#v", patch, want)

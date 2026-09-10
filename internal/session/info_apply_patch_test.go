@@ -29,7 +29,7 @@ var allProjectedMetadataKeys = []string{
 	"pool_alias_conflict", "pool_alias_conflict_count", "pool_alias_conflict_at",
 	MCPIdentityMetadataKey,
 	MCPServersSnapshotMetadataKey, "provider_terminal_error", "provider_fence_identity", "session_health",
-	"session_health_reason", "session_drainable", beadmeta.TriggerBeadIDMetadataKey,
+	"session_health_reason", "started_provider_fence_identity", "launch_provider_fence_identity", "session_drainable", beadmeta.TriggerBeadIDMetadataKey,
 	beadmeta.TriggerBeadStoreRefMetadataKey, beadmeta.BrainParentSIDMetadataKey,
 	beadmeta.PackMetadataKey, beadmeta.PackWorkspaceMetadataKey, beadmeta.WorkDirMetadataKey,
 	beadmeta.WorkerDirMetadataKey,

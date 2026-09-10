@@ -237,6 +237,7 @@ type startResult struct {
 	prepared        preparedStart
 	err             error
 	outcome         TraceOutcomeCode
+	startedFresh    bool
 	started         time.Time
 	finished        time.Time
 	rollbackPending bool
@@ -1521,6 +1522,7 @@ func runPreparedStartCandidate(
 			prepared:        item,
 			err:             nil,
 			outcome:         TraceOutcomeStartErrorConverged,
+			startedFresh:    startedFresh,
 			started:         started,
 			finished:        finished,
 			rollbackPending: false,
@@ -1569,6 +1571,7 @@ func runPreparedStartCandidate(
 		prepared:        item,
 		err:             err,
 		outcome:         outcome,
+		startedFresh:    startedFresh,
 		started:         started,
 		finished:        finished,
 		rollbackPending: rollbackPending,
@@ -1946,6 +1949,15 @@ func startPreparedStartCandidate(
 		}
 		return true, handle.StartResolved(ctx, item.cfg.Command, item.cfg)
 	}
+	// Write the account identity before invoking the provider. If the process
+	// starts and the controller dies before CommitStartedPatch, recovery can
+	// still attribute the live runtime to the account that was actually
+	// launched rather than to a later desired-config repoint.
+	if _, err := sessionFrontDoor(store).UpdateMetadataInfo(item.candidate.info, sessionpkg.MetadataPatch{
+		"launch_provider_fence_identity": strings.TrimSpace(item.candidate.tp.ProviderFenceIdentity),
+	}); err != nil {
+		return true, fmt.Errorf("recording launch provider account identity for %q: %w", name, err)
+	}
 	handle, err := workerHandleForSessionWithStaleKeyDetectionWaiter(cityPath, store, sp, cfg, item.candidate.info.ID, staleKeyDetectionWaiter)
 	if err != nil {
 		return true, err
@@ -2168,15 +2180,20 @@ func commitStartResultTraced(
 		primedAt = clk.Now()
 		promptHash = result.prepared.promptHash
 	}
+	startedProviderFenceIdentity := strings.TrimSpace(info.LaunchProviderFenceIdentity)
+	if result.startedFresh {
+		startedProviderFenceIdentity = strings.TrimSpace(tp.ProviderFenceIdentity)
+	}
 	metadata := sessionpkg.CommitStartedPatch(sessionpkg.CommitStartedPatchInput{
-		CoreHash:                result.prepared.coreHash,
-		LiveHash:                result.prepared.liveHash,
-		ProvisionHash:           result.prepared.provisionHash,
-		LaunchHash:              result.prepared.launchHash,
-		CoreBreakdown:           coreBreakdown,
-		ConfirmState:            confirmPendingStart(info.MetadataState),
-		ClearSleepReason:        info.SleepReason != "",
-		ClearPendingCreateClaim: shouldRollbackPendingCreateInfo(info),
+		CoreHash:                     result.prepared.coreHash,
+		LiveHash:                     result.prepared.liveHash,
+		ProvisionHash:                result.prepared.provisionHash,
+		LaunchHash:                   result.prepared.launchHash,
+		CoreBreakdown:                coreBreakdown,
+		StartedProviderFenceIdentity: startedProviderFenceIdentity,
+		ConfirmState:                 confirmPendingStart(info.MetadataState),
+		ClearSleepReason:             info.SleepReason != "",
+		ClearPendingCreateClaim:      shouldRollbackPendingCreateInfo(info),
 		// A confirmed transition out of a dormant/creating state opens a new
 		// awake interval — stamp a fresh compute-usage epoch for it.
 		StartsAwakeInterval: confirmPendingStart(info.MetadataState),
@@ -2417,12 +2434,17 @@ func recoverRunningPendingCreate(
 		primedAt = now
 		promptHash = prepared.promptHash
 	}
+	startedProviderFenceIdentity := strings.TrimSpace(info.LaunchProviderFenceIdentity)
+	if startedProviderFenceIdentity == "" {
+		startedProviderFenceIdentity = strings.TrimSpace(tp.ProviderFenceIdentity)
+	}
 	metadata := sessionpkg.CommitStartedPatch(sessionpkg.CommitStartedPatchInput{
-		CoreHash:      prepared.coreHash,
-		LiveHash:      prepared.liveHash,
-		ProvisionHash: prepared.provisionHash,
-		LaunchHash:    prepared.launchHash,
-		CoreBreakdown: coreBreakdown,
+		CoreHash:                     prepared.coreHash,
+		LiveHash:                     prepared.liveHash,
+		ProvisionHash:                prepared.provisionHash,
+		LaunchHash:                   prepared.launchHash,
+		CoreBreakdown:                coreBreakdown,
+		StartedProviderFenceIdentity: startedProviderFenceIdentity,
 		// WI-6 R3: state/sleep_reason read off the caller's coherent infoByID
 		// snapshot (Info.MetadataState is the raw state metadata verbatim, so the
 		// confirmPendingStart / StateAwake / sleep_reason checks are byte-identical

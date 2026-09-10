@@ -1,9 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -12,47 +9,41 @@ import (
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
 )
 
-// providerUsageFenceIdentity identifies the effective account boundary used by
-// one provider session without persisting credential-bearing environment
-// values. Provider preset names are not account identities: aliases can share
-// an account, while one preset can be paired with different agent environment
-// or upstream credentials. The provider family plus effective account
-// environment distinguish those cases; only their digest reaches metadata.
+// providerUsageFenceIdentity returns the opaque identity resolved at config
+// time. Runtime reconciliation must never derive identity from commands,
+// provider names, or raw environment maps.
 func providerUsageFenceIdentity(tp TemplateParams) string {
-	resolved := tp.ResolvedProvider
-	if resolved == nil {
-		return ""
+	return strings.TrimSpace(tp.ProviderFenceIdentity)
+}
+
+const legacyProviderUsageFenceIdentity = "legacy:any-provider-account"
+
+// providerUsageFenceIdentityForRuntime attributes a live observation to the
+// account that actually launched the runtime. Desired configuration is the
+// fallback for a dead or not-yet-started session; it must not overwrite the
+// durable launched identity while a runtime is alive.
+func providerUsageFenceIdentityForRuntime(info sessionpkg.Info, tp TemplateParams, alive bool) string {
+	if alive {
+		if identity := strings.TrimSpace(info.StartedProviderFenceIdentity); identity != "" {
+			return identity
+		}
+		if identity := strings.TrimSpace(info.LaunchProviderFenceIdentity); identity != "" {
+			return identity
+		}
 	}
-	family := strings.TrimSpace(resolved.BuiltinAncestor)
-	if family == "" {
-		family = strings.TrimSpace(resolved.Command)
-	}
-	if family == "" {
-		family = strings.TrimSpace(resolved.Name)
-	}
-	if family == "" {
-		return ""
-	}
-	payload, err := json.Marshal(struct {
-		Family string            `json:"family"`
-		Env    map[string]string `json:"env,omitempty"`
-	}{
-		Family: family,
-		Env:    tp.ProviderFenceEnv,
-	})
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(payload)
-	return "account:" + hex.EncodeToString(sum[:])
+	return providerUsageFenceIdentity(tp)
 }
 
 // recordedProviderUsageFenceIdentity keeps an existing fence attached to the
 // account that produced it even if configuration changes while quarantined.
-// The fallback supports records created before account identities were stored.
+// Identity-less legacy usage fences deliberately fall back to a global,
+// fail-closed identity instead of being silently narrowed to current config.
 func recordedProviderUsageFenceIdentity(info sessionpkg.Info, current string) string {
 	if identity := strings.TrimSpace(info.ProviderFenceIdentity); identity != "" {
 		return identity
+	}
+	if strings.TrimSpace(info.HealthReason) == sessionHealthReasonUsageLimitModal {
+		return legacyProviderUsageFenceIdentity
 	}
 	return current
 }
@@ -152,11 +143,16 @@ func detectUsageLimitModalWedge(
 // provider error — a misconfiguration only an operator can repair — from this
 // wedge, which a fresh session clears (see sessionHasProviderTerminalErrorInfo).
 func usageLimitModalWedgePatch(now, resetAt time.Time) sessionpkg.MetadataPatch {
+	until := usageLimitModalQuarantineUntil(now, resetAt)
+	return sessionpkg.ProviderFencePatch(until, sessionHealthReasonUsageLimitModal)
+}
+
+func usageLimitModalQuarantineUntil(now, resetAt time.Time) time.Time {
 	until := now.Add(defaultRateLimitQuarantineDuration)
 	if resetAt.After(now) && resetAt.Sub(now) <= maxUsageLimitQuarantineDuration {
 		until = resetAt
 	}
-	return sessionpkg.ProviderFencePatch(until, sessionHealthReasonUsageLimitModal)
+	return until
 }
 
 // usageLimitModalWedgeRecorded reports whether a session already carries an
