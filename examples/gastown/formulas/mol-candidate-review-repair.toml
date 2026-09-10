@@ -76,9 +76,10 @@ that trusted current worktree rather than a bead-supplied path. Do not stage
 foreign files.
 Then run the worker below. It validates the unique claim token, path and Git
 boundaries, serializes mutation, integrates the freshly fetched current target,
-runs every non-empty configured gate, publishes only as a normal fast-forward,
-records the candidate SHA and gate evidence, and resubmits the source bead
-through the explicit review route:
+runs the mandatory worker-owned `git diff --check` plus every non-empty
+operator-configured gate, publishes only as a normal fast-forward, records the
+candidate SHA and gate evidence, and resubmits the source bead through the
+explicit review route:
 
 ```bash
 export GC_CANDIDATE_REPAIR_TOKEN='{{repair_token}}'
