@@ -17,17 +17,20 @@ loop, not a new SDK primitive. The pack contract is opt-in: only an explicit
 
 1. Add the pack contract and durable state machine.
    - Define exact correction, owner, target/source, route, review route,
-     explicitly-owned residue/landed paths, and attempt-limit metadata.
+     explicitly-owned residue/landed paths, and attempt-limit metadata. Gate
+     commands remain trusted process configuration and are never read from a
+     bead.
    - Define queued, active, failed, exhausted, published, and resubmitted
      lifecycle evidence; preserve human/external/foreign/uncertain holds.
 2. Add the pack order and repair formula.
    - Atomically claim only the source bead snapshot that was inspected.
    - Route one bounded repair formula to the configured owner/route.
-   - Run current-target rebase, explicit cleanup, configured gates, durable
-     push, and review resubmission in one writer's worktree.
+   - Integrate the current target with a normal merge, perform explicit cleanup,
+     run configured gates, publish by normal fast-forward push, and resubmit
+     review in one writer's worktree.
 3. Add deterministic regression coverage.
    - RED: prove actionable holds route once while non-mechanical holds do not.
-   - GREEN: prove the worker repairs only declared paths, rebases against the
+   - GREEN: prove the worker repairs only declared paths, integrates
      current target, records evidence, and resubmits review.
    - Include target movement, duplicate-claim, exhausted-attempt, and foreign
      dirty-worktree cases.
@@ -39,7 +42,9 @@ loop, not a new SDK primitive. The pack contract is opt-in: only an explicit
 - New files live under `examples/gastown/`, the fork-owned Gas Town pack
   surface; no new SDK primitive, Go role branch, or core metadata constant.
 - The order is a city/rig pack mechanism and uses `gc bd update` preconditions
-  as the single-writer claim. It does not use PID/lock/status files.
+  plus a unique claim token. The worker also holds a repository-local atomic
+  lock so a stale session cannot overlap a replacement using the same agent
+  identity.
 - The repair worker is a pack asset. It accepts only validated relative paths,
   requires a clean isolated worktree before agent changes, checks the fetched
   target again before publication, and records lifecycle evidence on the
@@ -51,8 +56,8 @@ loop, not a new SDK primitive. The pack contract is opt-in: only an explicit
   is represented at the pack layer; it does not prove a live controller runs
   them.
 - Script harness with fake `gc` and real temporary git repositories: proves
-  deterministic metadata CAS, routing, path allowlisting, target rebase,
-  force-with-lease publication, and review handoff; it does not prove provider
+  deterministic metadata CAS, routing, path allowlisting, target integration,
+  normal fast-forward publication, and review handoff; it does not prove provider
   sessions or a live Dolt/controller reconcile.
 - Negative cases prove fail-closed preservation for human/external and
   uncertain/foreign work, duplicate writers, target movement, and exhausted
@@ -65,7 +70,7 @@ loop, not a new SDK primitive. The pack contract is opt-in: only an explicit
 - The pack asset comments document the metadata contract, state transitions,
   security/path boundary, and evidence semantics.
 - The formula description documents the exact correction/owner requirement and
-  the configured gate commands. The plan file is the implementation decision
+  operator-configured gate commands. The plan file is the implementation decision
   record; no generic SDK documentation changes are needed.
 - `agent-execution.log` records each completed subtask while this work runs and
   is removed before handoff because it is temporary execution evidence.
@@ -110,8 +115,8 @@ loop, not a new SDK primitive. The pack contract is opt-in: only an explicit
 - Tests: static pack tests alone would be false completion; the real git
   harness must exercise the worker and all fail-closed branches.
 - Support/docs: comments need to say what the harness does not prove.
-- Execution/stability: temporary execution logs must not ship; target movement
-  and remote lease checks must be explicit.
+- Execution/stability: temporary execution logs must not ship; target and
+  candidate remote movement checks must be explicit.
 - Parallel work: review-only candidates are useful, but implementation stays
   serialized at the worktree and bead boundaries.
 
@@ -126,7 +131,7 @@ bounded convergence rather than a repeated multi-hour stall.
 
 ## Roll-up: apply evaluation to critique (counter=1)
 
-Treat pack metadata validation, CAS, target identity, remote lease, and state
+Treat pack metadata validation, CAS, target identity, candidate identity, and state
 transitions as load-bearing implementation requirements. Treat live controller
 and provider execution as explicitly unproved by the local harness and report
 that boundary rather than substituting a proxy claim.
@@ -175,7 +180,7 @@ surface, with the worker recording results, not to untrusted bead metadata.
 The implementation will use a local root order and formula, explicit route
 metadata, a clean-worktree precondition, and formula-provided gate commands.
 The harness will include a published-pending-review retry case and verify no
-second rebase/push occurs.
+second target integration or push occurs.
 
 ## Roll-up: revised plan/tasks/subtasks (counter=2)
 
@@ -244,3 +249,19 @@ explicit-only cleanup, gate rerun, durable remote publication, review
 resubmission, fail-closed human/external holds, foreign-work preservation, and
 durable lifecycle evidence. It also preserved the decision that the correct
 owner is the user-supplied Gas Town pack/formula/prompt rather than generic Go.
+
+## Independent-review remediation
+
+An exact-byte security review blocked the initial implementation. The corrected
+contract rejects control characters before line decoding, rejects symlinked
+path components and nested repository roots, requires distinct valid source and
+target refs, stages only declared paths, and uses a normal fast-forward push.
+Eligibility is checked before mutation; each dispatch first wins a status,
+assignee, and unique-token CAS; every worker write revalidates that token; and a
+repository-local lock fences a revived stale worker from its replacement.
+
+Queued and active attempts become reclaimable only after an explicit stale
+interval, while token mismatch makes an old workflow fail closed. The formula
+has one execution attempt; the order owns the durable attempt budget. At least
+`git diff --check` always runs, and stronger gate commands may come only from
+trusted process environment, never from bead-authored metadata.
