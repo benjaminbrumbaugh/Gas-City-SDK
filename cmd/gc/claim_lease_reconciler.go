@@ -320,10 +320,10 @@ func findClosedClaimLeaseOwner(ctx context.Context, sessionID string, scopes []c
 			}
 			return session.Info{}, false, fmt.Errorf("looking up claim owner %q in %s: %w", sessionID, scope.Name, err)
 		}
-		if !session.IsSessionBeadOrRepairable(row) {
+		info, ok := persistedSessionInfoFromClassRow(row)
+		if !ok {
 			return session.Info{}, false, fmt.Errorf("claim owner %q is not a session row", sessionID)
 		}
-		info := session.InfoFromPersistedBead(row)
 		if !info.Closed {
 			return session.Info{}, false, fmt.Errorf("claim owner %q is open but absent from the complete census", sessionID)
 		}
@@ -456,10 +456,10 @@ func loadCurrentClaimLeaseOwners(ctx context.Context, scopes []claimLeaseScope) 
 			continue
 		}
 		for _, row := range rows {
-			if !session.IsSessionBeadOrRepairable(row) {
+			info, ok := persistedSessionInfoFromClassRow(row)
+			if !ok {
 				continue
 			}
-			info := session.InfoFromPersistedBead(row)
 			if info.ID == "" || info.Closed {
 				return nil, false, fmt.Errorf("claim lease owner census in %s returned invalid open session", scope.Name)
 			}

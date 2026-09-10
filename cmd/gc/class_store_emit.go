@@ -666,6 +666,25 @@ func (s *emittingClassStore) ApplyGraphPlanWithStorage(ctx context.Context, plan
 	return result, err
 }
 
+// GetContext and ListContext preserve deadline-aware reads across the emitting
+// wrapper. The methods are optional on the backing store; callers receive an
+// explicit error rather than silently falling back to an unbounded read.
+func (s *emittingClassStore) GetContext(ctx context.Context, id string) (beads.Bead, error) {
+	reader, ok := s.Store.(beads.ContextStoreReader)
+	if !ok {
+		return beads.Bead{}, fmt.Errorf("context-aware get: %T does not support it", s.Store)
+	}
+	return reader.GetContext(ctx, id)
+}
+
+func (s *emittingClassStore) ListContext(ctx context.Context, query beads.ListQuery) ([]beads.Bead, error) {
+	reader, ok := s.Store.(beads.ContextStoreReader)
+	if !ok {
+		return nil, fmt.Errorf("context-aware list: %T does not support it", s.Store)
+	}
+	return reader.ListContext(ctx, query)
+}
+
 func (s *emittingClassStore) ReadyContext(ctx context.Context, query ...beads.ReadyQuery) ([]beads.Bead, error) {
 	reader, ok := s.Store.(beads.ContextReadyReader)
 	if !ok {

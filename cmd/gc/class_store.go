@@ -27,6 +27,17 @@ import (
 // type assertions (GraphApplyFor, HandlesFor, StorageCreateStore, Counter, ...)
 // keep working.
 
+// persistedSessionInfoFromClassRow is the session-class read edge for callers
+// that already hold a bounded raw row from a cross-store operation. Keep the
+// raw-bead codec at this class-store boundary rather than leaking it into
+// controller reconciliation logic.
+func persistedSessionInfoFromClassRow(row beads.Bead) (session.Info, bool) {
+	if !session.IsSessionBeadOrRepairable(row) {
+		return session.Info{}, false
+	}
+	return session.InfoFromPersistedBead(row), true
+}
+
 // graphBeadStore returns the store that owns graph (workflow/v2) beads. It
 // delegates to the exported GraphBeadStore() accessor so the api.State surface
 // and the controller's own callers share one resolver. Identity to the work
