@@ -799,6 +799,7 @@ func watchConfigTargets(targets []config.WatchTarget, dirty *atomic.Bool, pokeCh
 
 	done := make(chan struct{})
 	eventLoopDone := make(chan struct{})
+	registrationComplete := make(chan struct{}, 1)
 	var registrationWG sync.WaitGroup
 	var enqueueMu sync.Mutex
 	enqueueRecursiveWatch := func(root string, trackRoot bool) {
@@ -818,6 +819,10 @@ func watchConfigTargets(targets []config.WatchTarget, dirty *atomic.Bool, pokeCh
 			defer registrationWG.Done()
 			if ok := registrar.addPath(root, true, done); !ok && trackRoot {
 				registrar.unmarkRecursiveRoot(root)
+			}
+			select {
+			case registrationComplete <- struct{}{}:
+			case <-done:
 			}
 		}()
 	}
@@ -845,8 +850,20 @@ func watchConfigTargets(targets []config.WatchTarget, dirty *atomic.Bool, pokeCh
 				debounce.Stop()
 			}
 		}()
+		scheduleDebounce := func() {
+			// A recursive watch must be fully registered before its dirty signal
+			// is published. Otherwise a consumer can reload on the directory
+			// create and immediately write a nested file before fsnotify watches
+			// that subtree, losing the change under scheduler load.
+			if debounce != nil {
+				debounce.Stop()
+			}
+			debounce = time.AfterFunc(debounceDelay, markDirty)
+		}
 		for {
 			select {
+			case <-registrationComplete:
+				scheduleDebounce()
 			case event, ok := <-watcher.Events:
 				if !ok {
 					return
@@ -854,6 +871,7 @@ func watchConfigTargets(targets []config.WatchTarget, dirty *atomic.Bool, pokeCh
 				if shouldIgnoreConfigWatchEvent(event.Name) {
 					continue
 				}
+				registrationQueued := false
 				if event.Op&(fsnotify.Create|fsnotify.Rename) != 0 {
 					if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
 						// Convention roots may appear after startup, and nested
@@ -861,18 +879,17 @@ func watchConfigTargets(targets []config.WatchTarget, dirty *atomic.Bool, pokeCh
 						// the walk so fsnotify consumption stays fast.
 						if registrar.isConventionRootCreate(event.Name) {
 							enqueueRecursiveWatch(event.Name, true)
+							registrationQueued = true
 						} else if registrar.watchesRecursively(event.Name) {
 							enqueueRecursiveWatch(event.Name, false)
+							registrationQueued = true
 						}
 					}
 				}
-				// Debounce: reset timer on each event, fire after quiet period.
-				if debounce != nil {
-					debounce.Stop()
+				if !registrationQueued {
+					// Debounce: reset timer on each event, fire after quiet period.
+					scheduleDebounce()
 				}
-				debounce = time.AfterFunc(debounceDelay, func() {
-					markDirty()
-				})
 			case _, ok := <-watcher.Errors:
 				if !ok {
 					return
