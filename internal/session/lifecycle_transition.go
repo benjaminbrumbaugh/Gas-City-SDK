@@ -326,9 +326,13 @@ type CommitStartedPatchInput struct {
 	LaunchHash                   string
 	CoreBreakdown                string
 	StartedProviderFenceIdentity string
-	ConfirmState                 bool
-	ClearSleepReason             bool
-	ClearPendingCreateClaim      bool
+	// CommitProviderFenceIdentity makes attribution mutation explicit. Recovery
+	// callers leave it false when they cannot derive an identity, preserving the
+	// last durable attribution instead of silently erasing it.
+	CommitProviderFenceIdentity bool
+	ConfirmState                bool
+	ClearSleepReason            bool
+	ClearPendingCreateClaim     bool
 	// StartsAwakeInterval marks a commit that begins a new awake interval (a
 	// first start or a wake from a dormant state), as opposed to a recovery
 	// re-confirmation of an already-running runtime. When true the patch stamps
@@ -388,8 +392,10 @@ func CommitStartedPatch(input CommitStartedPatchInput) MetadataPatch {
 	// start promotes it to the runtime identity and clears the intent in the
 	// same metadata operation, so a restart cannot observe a half-promoted
 	// account boundary.
-	patch["started_provider_fence_identity"] = input.StartedProviderFenceIdentity
-	patch["launch_provider_fence_identity"] = ""
+	if input.CommitProviderFenceIdentity {
+		patch["started_provider_fence_identity"] = input.StartedProviderFenceIdentity
+		patch["launch_provider_fence_identity"] = ""
+	}
 	// A genuine (re)start opens a new awake interval. Stamp a fresh, immutable
 	// epoch so the compute usage fact for this interval is distinct from any
 	// prior interval on a reused session bead; a recovery re-confirmation of an
@@ -410,19 +416,14 @@ func CommitStartedPatch(input CommitStartedPatchInput) MetadataPatch {
 	return patch
 }
 
-// ClearProviderFenceQuarantinePatch removes only the usage-limit quarantine
-// markers when desired configuration now resolves to a different account.
-// Retry/churn counters and unrelated restart state remain untouched; a
-// provider-account repoint is not a general session reset. The restart marker
-// is included because it is part of the usage-limit handoff and would
-// otherwise kill the healthy replacement account on the next pass.
+// ClearProviderFenceQuarantinePatch clears the time-based usage-limit block when
+// desired configuration now resolves to a different account. It deliberately
+// preserves health reason, old-account attribution, and restart intent until the
+// instance-bound conditional stop consumes them; clearing those markers early
+// would route the old runtime through an unsafe ordinary stop.
 func ClearProviderFenceQuarantinePatch(sleepReason string) MetadataPatch {
 	patch := MetadataPatch{
-		"quarantined_until":       "",
-		"session_health":          "healthy",
-		"session_health_reason":   "",
-		"provider_fence_identity": "",
-		"restart_requested":       "",
+		"quarantined_until": "",
 	}
 	if SleepReason(strings.TrimSpace(sleepReason)) == SleepReasonRateLimit {
 		patch["sleep_reason"] = ""

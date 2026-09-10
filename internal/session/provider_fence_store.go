@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,6 +19,20 @@ const providerFenceBeadKind = "provider_usage_fence"
 
 const maxExpiredProviderFencesClosedPerRead = 100
 
+// Corrupt observations fail closed for longer than any fence the controller
+// can create (the modal path caps valid fences at eight days). After this
+// conservative bound, the store annotates and closes them in bounded batches,
+// returning an error for that final blocked read so the repair is visible in
+// controller logs. Rows without a trustworthy creation time remain blocked and
+// name their bead ID in the error for explicit operator repair.
+const (
+	maxCorruptProviderFenceFailClosedAge    = 9 * 24 * time.Hour
+	maxCorruptProviderFencesClosedPerRead   = 100
+	providerFenceRemediationMetadataKey     = "provider_fence_remediation"
+	providerFenceRemediationAtMetadataKey   = "provider_fence_remediated_at"
+	providerFenceAutoClosedCorruptionReason = "auto_closed_corrupt_after_safety_bound"
+)
+
 // ProviderFence is the typed durable record used by the reconciler to block
 // starts for a provider account until its observed reset deadline.
 type ProviderFence struct {
@@ -29,16 +44,17 @@ type ProviderFence struct {
 
 // ActiveProviderFences reads the durable provider-fence records. The returned
 // slice is folded by identity using the latest deadline; expired records are
-// ignored and a bounded batch is closed while remaining in history. A read error is returned to
-// callers so lifecycle code can fail closed instead of treating an unavailable
-// fence store as an empty store.
+// ignored and a bounded batch is closed while remaining in history. A read error
+// is returned to callers so lifecycle code can fail closed instead of treating
+// an unavailable or corrupt fence store as an empty store.
 func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 	if s == nil || s.store.Store == nil {
 		return nil, fmt.Errorf("provider fence store is unavailable")
 	}
+	// The label is authoritative. Filtering by type would make a labeled row
+	// whose type was damaged disappear and silently fail open.
 	rows, err := s.store.List(beads.ListQuery{
 		Label:         ProviderFenceBeadLabel,
-		Type:          WaitBeadType,
 		Status:        "open",
 		IncludeClosed: false,
 		Sort:          beads.SortCreatedDesc,
@@ -49,17 +65,32 @@ func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 	}
 	byIdentity := make(map[string]ProviderFence)
 	expiredClosed := 0
+	corruptClosed := 0
+	var corruptErrs []error
 	for _, row := range rows {
-		if strings.TrimSpace(row.Metadata["kind"]) != providerFenceBeadKind {
+		identity, until, observedAt, validationErr := decodeProviderFence(row)
+		if validationErr != nil {
+			oldEnough := !row.CreatedAt.IsZero() && !row.CreatedAt.After(now) && now.Sub(row.CreatedAt) >= maxCorruptProviderFenceFailClosedAge
+			if oldEnough && corruptClosed < maxCorruptProviderFencesClosedPerRead {
+				writer, ok := beads.ConditionalWriterFor(s.store.Store)
+				if !ok {
+					corruptErrs = append(corruptErrs, fmt.Errorf("provider fence %q is corrupt and past the %s safety bound, but the store lacks atomic revision-fenced remediation: %w; inspect and close bead %q explicitly after verifying account safety", row.ID, maxCorruptProviderFenceFailClosedAge, validationErr, row.ID))
+					continue
+				}
+				metadata := map[string]string{
+					providerFenceRemediationMetadataKey:   providerFenceAutoClosedCorruptionReason,
+					providerFenceRemediationAtMetadataKey: now.UTC().Format(time.RFC3339),
+				}
+				closed := "closed"
+				if err := writer.UpdateIfMatch(row.ID, row.Revision, beads.UpdateOpts{Status: &closed, Metadata: metadata}); err != nil {
+					return nil, fmt.Errorf("atomically remediating corrupt provider fence %q after safety bound: %w", row.ID, err)
+				}
+				corruptClosed++
+				corruptErrs = append(corruptErrs, fmt.Errorf("provider fence %q was auto-closed after the %s corruption safety bound: %w", row.ID, maxCorruptProviderFenceFailClosedAge, validationErr))
+				continue
+			}
+			corruptErrs = append(corruptErrs, fmt.Errorf("provider fence %q is corrupt and blocks provider starts: %w; inspect and close bead %q explicitly after verifying account safety", row.ID, validationErr, row.ID))
 			continue
-		}
-		identity := strings.TrimSpace(row.Metadata["provider_fence_identity"])
-		until, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(row.Metadata["fenced_until"]))
-		if identity == "" {
-			return nil, fmt.Errorf("provider fence %q has empty identity", row.ID)
-		}
-		if parseErr != nil {
-			return nil, fmt.Errorf("provider fence %q has invalid deadline: %w", row.ID, parseErr)
 		}
 		if !until.After(now) {
 			// Fence rows are immutable append-only observations, so an expired
@@ -74,13 +105,6 @@ func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 			}
 			continue
 		}
-		observedAt := time.Time{}
-		if raw := strings.TrimSpace(row.Metadata["observed_at"]); raw != "" {
-			observedAt, parseErr = time.Parse(time.RFC3339, raw)
-			if parseErr != nil {
-				return nil, fmt.Errorf("provider fence %q has invalid observation time: %w", row.ID, parseErr)
-			}
-		}
 		candidate := ProviderFence{
 			Identity:   identity,
 			Until:      until,
@@ -91,6 +115,9 @@ func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 			byIdentity[identity] = candidate
 		}
 	}
+	if len(corruptErrs) > 0 {
+		return nil, errors.Join(corruptErrs...)
+	}
 	result := make([]ProviderFence, 0, len(byIdentity))
 	for _, fence := range byIdentity {
 		result = append(result, fence)
@@ -98,10 +125,74 @@ func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 	return result, nil
 }
 
+func decodeProviderFence(row beads.Bead) (string, time.Time, time.Time, error) {
+	if strings.TrimSpace(row.Type) != WaitBeadType {
+		return "", time.Time{}, time.Time{}, fmt.Errorf("invalid type %q", row.Type)
+	}
+	if strings.TrimSpace(row.Metadata["kind"]) != providerFenceBeadKind {
+		return "", time.Time{}, time.Time{}, fmt.Errorf("invalid kind %q", row.Metadata["kind"])
+	}
+	identity := strings.TrimSpace(row.Metadata["provider_fence_identity"])
+	if identity == "" {
+		return "", time.Time{}, time.Time{}, fmt.Errorf("empty identity")
+	}
+	until, err := time.Parse(time.RFC3339, strings.TrimSpace(row.Metadata["fenced_until"]))
+	if err != nil {
+		return "", time.Time{}, time.Time{}, fmt.Errorf("invalid deadline: %w", err)
+	}
+	observedAt := time.Time{}
+	if raw := strings.TrimSpace(row.Metadata["observed_at"]); raw != "" {
+		observedAt, err = time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return "", time.Time{}, time.Time{}, fmt.Errorf("invalid observation time: %w", err)
+		}
+	}
+	return identity, until, observedAt, nil
+}
+
+// HasKeyedProviderFenceIdentityHistory reports whether any durable provider
+// fence or session row, open or closed, still references an identity derived by
+// the city key. It is the continuity guard used before creating a replacement
+// key after both key files have disappeared.
+func (s *Store) HasKeyedProviderFenceIdentityHistory() (bool, error) {
+	if s == nil || s.store.Store == nil {
+		return false, fmt.Errorf("provider fence store is unavailable")
+	}
+	fences, err := s.store.List(beads.ListQuery{
+		Label:         ProviderFenceBeadLabel,
+		IncludeClosed: true,
+		Live:          true,
+	})
+	if err != nil {
+		return false, fmt.Errorf("listing durable provider fence history: %w", err)
+	}
+	for _, row := range fences {
+		if isKeyedProviderFenceIdentity(row.Metadata["provider_fence_identity"]) {
+			return true, nil
+		}
+	}
+	sessions, err := ListAllSessionBeads(s.store.Store, beads.ListQuery{IncludeClosed: true, Live: true})
+	if err != nil {
+		return false, fmt.Errorf("listing durable session attribution history: %w", err)
+	}
+	for _, row := range sessions {
+		for _, key := range []string{"provider_fence_identity", "started_provider_fence_identity", "launch_provider_fence_identity"} {
+			if isKeyedProviderFenceIdentity(row.Metadata[key]) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func isKeyedProviderFenceIdentity(identity string) bool {
+	return strings.HasPrefix(strings.TrimSpace(identity), "account:hmac-sha256:")
+}
+
 // RecordProviderFence appends a durable fence record. It is deliberately
 // monotonic at read time: overlapping records may remain open until expiry, and
-// ActiveProviderFences selects the maximum deadline. That avoids an update race where a slower
-// observer could shorten a newer account quarantine.
+// ActiveProviderFences selects the maximum deadline. That avoids an update race
+// where a slower observer could shorten a newer account quarantine.
 func (s *Store) RecordProviderFence(identity string, until, observedAt time.Time, reason string) error {
 	identity = strings.TrimSpace(identity)
 	if identity == "" {

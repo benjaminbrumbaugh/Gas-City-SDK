@@ -1235,7 +1235,11 @@ type noBroadSessionNameLookupStore struct {
 }
 
 func (s noBroadSessionNameLookupStore) List(query beads.ListQuery) ([]beads.Bead, error) {
-	if query.Label == sessionBeadLabel && len(query.Metadata) == 0 {
+	// Identity-key continuity legitimately scans durable session attribution
+	// history (closed + live backing). The session-name lookup itself must remain
+	// targeted.
+	continuityHistoryScan := query.IncludeClosed && query.Live
+	if query.Label == sessionBeadLabel && len(query.Metadata) == 0 && !continuityHistoryScan {
 		s.t.Fatalf("session name lookup used broad session label scan: %+v", query)
 	}
 	return s.MemStore.List(query)

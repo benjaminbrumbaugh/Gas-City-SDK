@@ -537,6 +537,13 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 	if resumeCommand == "" {
 		return fmt.Errorf("%w: %s", ErrResumeRequired, id)
 	}
+	if err := m.prepareProviderFenceStart(id, &b, hints.ProviderFenceIdentity); err != nil {
+		return err
+	}
+	failedStart := func(startErr error) error {
+		_, clearErr := m.clearLaunchProviderFenceIdentityIfDefinitelyAbsent(id, sessName, b.Metadata["launch_provider_fence_identity"])
+		return errors.Join(startErr, clearErr)
+	}
 
 	cfg := hints
 	cfg.Command = resumeCommand
@@ -588,7 +595,7 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 		if errors.Is(err, runtime.ErrSessionDiedDuringStartup) {
 			retried, retryErr := m.retryFreshStartAfterStaleKey(ctx, id, &b, sessName, resumeCommand, cfg, unroute)
 			if retryErr != nil {
-				return retryErr
+				return failedStart(retryErr)
 			}
 			if !retried {
 				// The recovery declined: the command carries no resume shape to
@@ -598,7 +605,7 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 				if unroute != nil {
 					unroute()
 				}
-				return fmt.Errorf("resuming session: %w", err)
+				return failedStart(fmt.Errorf("resuming session: %w", err))
 			}
 			started = retried
 		} else if !errors.Is(err, runtime.ErrSessionExists) || !m.sp.IsRunning(sessName) {
@@ -608,7 +615,7 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 			if unroute != nil {
 				unroute()
 			}
-			return fmt.Errorf("resuming session: %w", err)
+			return failedStart(fmt.Errorf("resuming session: %w", err))
 		}
 	} else {
 		started = true
@@ -645,8 +652,10 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 		return fmt.Errorf("%w: %w", ErrStateSync, err)
 	}
 	if err := m.confirmLiveSessionState(id, &b); err != nil {
-		if started && !errors.Is(err, ErrStateSync) {
-			_ = m.sp.Stop(sessName)
+		if started {
+			if stopErr := m.stopRuntimeIfDetachedAndOwned(sessName, instanceToken); stopErr != nil {
+				return errors.Join(err, fmt.Errorf("conditionally stopping started runtime after metadata failure: %w", stopErr))
+			}
 		}
 		return err
 	}
@@ -661,6 +670,13 @@ func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b bea
 	}
 	if resumeCommand == "" {
 		return fmt.Errorf("%w: %s", ErrResumeRequired, id)
+	}
+	if err := m.prepareProviderFenceStart(id, &b, hints.ProviderFenceIdentity); err != nil {
+		return err
+	}
+	failedStart := func(startErr error) error {
+		_, clearErr := m.clearLaunchProviderFenceIdentityIfDefinitelyAbsent(id, sessName, b.Metadata["launch_provider_fence_identity"])
+		return errors.Join(startErr, clearErr)
 	}
 
 	cfg := hints
@@ -715,7 +731,7 @@ func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b bea
 		case errors.Is(err, runtime.ErrSessionDiedDuringStartup):
 			retried, retryErr := m.retryFreshStartAfterStaleKey(ctx, id, &b, sessName, resumeCommand, cfg, unroute)
 			if retryErr != nil {
-				return retryErr
+				return failedStart(retryErr)
 			}
 			if !retried {
 				// The recovery declined: nothing to strip, so a relaunch would
@@ -723,7 +739,7 @@ func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b bea
 				if unroute != nil {
 					unroute()
 				}
-				return fmt.Errorf("resuming session: %w", err)
+				return failedStart(fmt.Errorf("resuming session: %w", err))
 			}
 			started = retried
 		case errors.Is(err, runtime.ErrSessionExists) && m.sp.IsRunning(sessName):
@@ -732,7 +748,7 @@ func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b bea
 			if unroute != nil {
 				unroute()
 			}
-			return fmt.Errorf("resuming session: %w", err)
+			return failedStart(fmt.Errorf("resuming session: %w", err))
 		}
 	} else {
 		started = true
@@ -767,6 +783,10 @@ func (m *Manager) confirmLiveSessionState(id string, b *beads.Bead) error {
 		batch["pending_create_claim"] = ""
 		batch["pending_create_started_at"] = ""
 	}
+	if launchIdentity := strings.TrimSpace(b.Metadata["launch_provider_fence_identity"]); launchIdentity != "" {
+		batch["started_provider_fence_identity"] = launchIdentity
+		batch["launch_provider_fence_identity"] = ""
+	}
 	if len(batch) == 0 {
 		return nil
 	}
@@ -780,6 +800,89 @@ func (m *Manager) confirmLiveSessionState(id string, b *beads.Bead) error {
 		b.Metadata[k] = v
 	}
 	return nil
+}
+
+func (m *Manager) prepareProviderFenceStart(id string, b *beads.Bead, identity string) error {
+	identity = strings.TrimSpace(identity)
+	if identity == "" || b == nil {
+		return nil
+	}
+	current := strings.TrimSpace(b.Metadata["launch_provider_fence_identity"])
+	fences, err := NewStore(beads.SessionStore{Store: m.store}).ActiveProviderFences(time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("checking provider account fence before session start: %w", err)
+	}
+	for _, fence := range fences {
+		if fence.Identity == identity {
+			return fmt.Errorf("provider account is fenced until %s", fence.Until.UTC().Format(time.RFC3339))
+		}
+	}
+	if current == identity {
+		return nil
+	}
+	if current != "" {
+		absent, err := m.providerSessionDefinitelyAbsent(sessionName(id, *b))
+		if err != nil || !absent {
+			return errors.New("provider account attribution already staged for another identity")
+		}
+		writer, ok := beads.MetadataCASWriterFor(m.store)
+		if !ok {
+			return fmt.Errorf("replacing stale provider account attribution: %w", beads.ErrConditionalWriteUnsupported)
+		}
+		swapped, err := writer.CompareAndSetMetadataKey(id, "launch_provider_fence_identity", current, identity)
+		if err != nil {
+			return fmt.Errorf("replacing stale provider account attribution: %w", err)
+		}
+		if !swapped {
+			return errors.New("replacing stale provider account attribution lost metadata precondition")
+		}
+		b.Metadata["launch_provider_fence_identity"] = identity
+		return nil
+	}
+	if err := m.store.SetMetadata(id, "launch_provider_fence_identity", identity); err != nil {
+		return fmt.Errorf("recording launch provider account identity: %w", err)
+	}
+	if b.Metadata == nil {
+		b.Metadata = make(map[string]string)
+	}
+	b.Metadata["launch_provider_fence_identity"] = identity
+	return nil
+}
+
+func (m *Manager) providerSessionDefinitelyAbsent(name string) (bool, error) {
+	provider, ok := m.sp.(runtime.DefinitiveSessionAbsenceProvider)
+	if !ok {
+		return false, nil
+	}
+	return provider.SessionDefinitelyAbsent(name)
+}
+
+func (m *Manager) clearLaunchProviderFenceIdentityIfDefinitelyAbsent(id, sessionName, identity string) (bool, error) {
+	identity = strings.TrimSpace(identity)
+	absent, err := m.providerSessionDefinitelyAbsent(sessionName)
+	if err != nil || !absent {
+		return false, nil
+	}
+	if identity == "" {
+		return true, nil
+	}
+	writer, ok := beads.MetadataCASWriterFor(m.store)
+	if !ok {
+		return false, fmt.Errorf("clearing failed launch provider account identity: %w", beads.ErrConditionalWriteUnsupported)
+	}
+	swapped, err := writer.CompareAndSetMetadataKey(id, "launch_provider_fence_identity", identity, "")
+	if err != nil {
+		return false, fmt.Errorf("clearing failed launch provider account identity: %w", err)
+	}
+	return swapped, nil
+}
+
+func (m *Manager) stopRuntimeIfDetachedAndOwned(sessionName, instanceToken string) error {
+	conditionalStop, ok := m.sp.(runtime.ConditionalStopProvider)
+	if !ok || !runtime.SupportsConditionalStop(m.sp, sessionName) {
+		return runtime.ErrConditionalStopUnsupported
+	}
+	return conditionalStop.StopIfDetached(sessionName, strings.TrimSpace(instanceToken))
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {

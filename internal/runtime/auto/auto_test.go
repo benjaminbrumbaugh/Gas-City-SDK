@@ -13,6 +13,21 @@ import (
 
 var _ runtime.Provider = (*Provider)(nil)
 
+type providerWithoutConditionalStop struct{ runtime.Provider }
+
+func TestSupportsConditionalStopUsesRoutedBackend(t *testing.T) {
+	supported := runtime.NewFake()
+	unsupported := providerWithoutConditionalStop{Provider: runtime.NewFake()}
+	p := New(supported, unsupported)
+	if !p.SupportsConditionalStop("plain") {
+		t.Fatal("default conditional-stop capability was hidden")
+	}
+	p.RouteACP("acp")
+	if p.SupportsConditionalStop("acp") {
+		t.Fatal("ACP route overstated conditional-stop capability")
+	}
+}
+
 // Relaunch must reach the routed backend (default vs ACP), or the reconciler's
 // RelaunchProvider type-assert would be masked by the auto router and fall back
 // to Stop+Start.

@@ -72,17 +72,18 @@ func TestSessionAttachedRecognizesMultipleClients(t *testing.T) {
 }
 
 func TestConditionalKillSessionChecksTokenAndAttachmentInOneTmuxCommand(t *testing.T) {
-	fe := &fakeExecutor{}
+	token := "0123456789abcdef0123456789abcdef"
+	fe := &fakeExecutor{out: ""}
 	tm := &Tmux{cfg: Config{SocketName: "x"}, exec: fe}
 
-	if err := tm.conditionalKillSession("$7", "0123456789abcdef0123456789abcdef"); err != nil {
+	if err := tm.conditionalKillSession("$7", token); err != nil {
 		t.Fatalf("conditionalKillSession: %v", err)
 	}
 	if len(fe.calls) != 1 {
-		t.Fatalf("tmux calls = %d, want 1", len(fe.calls))
+		t.Fatalf("tmux calls = %d, want one atomic guard-and-stop queue", len(fe.calls))
 	}
 	joined := strings.Join(fe.calls[0], "\x00")
-	for _, want := range []string{"if-shell", "-F", "-t\x00$7", "#{GC_INSTANCE_TOKEN}", "#{session_attached}", "kill-session -t '$7'"} {
+	for _, want := range []string{"set-environment", "-g", conditionalStopSessionGuardEnv, conditionalStopGlobalSentinel, ";", "if-shell", "-F", "-t\x00$7", "#{" + conditionalStopSessionGuardEnv + "}", "#{session_attached}", "kill-session -t '$7'"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("conditional tmux argv %q missing %q", joined, want)
 		}
@@ -90,9 +91,10 @@ func TestConditionalKillSessionChecksTokenAndAttachmentInOneTmuxCommand(t *testi
 }
 
 func TestConditionalKillSessionMapsRefusalMarker(t *testing.T) {
+	token := "0123456789abcdef0123456789abcdef"
 	tm := &Tmux{cfg: DefaultConfig(), exec: &fakeExecutor{out: conditionalStopRefusedMarker}}
 
-	err := tm.conditionalKillSession("$3", "0123456789abcdef0123456789abcdef")
+	err := tm.conditionalKillSession("$3", token)
 	if !errors.Is(err, runtime.ErrConditionalStopRefused) {
 		t.Fatalf("conditionalKillSession error = %v, want ErrConditionalStopRefused", err)
 	}

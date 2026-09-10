@@ -256,6 +256,35 @@ type ConditionalStopProvider interface {
 	StopIfDetached(name, expectedInstanceToken string) error
 }
 
+// ConditionalStopCapabilityProvider is implemented by routing providers whose
+// ConditionalStopProvider surface is present at compile time but whose selected
+// backend may not support the operation. Direct providers do not need it: the
+// ConditionalStopProvider interface itself is their capability declaration.
+type ConditionalStopCapabilityProvider interface {
+	SupportsConditionalStop(name string) bool
+}
+
+// DefinitiveSessionAbsenceProvider bypasses advisory caches when callers must
+// prove that a failed start left no runtime before clearing write-ahead state.
+type DefinitiveSessionAbsenceProvider interface {
+	SessionDefinitelyAbsent(name string) (bool, error)
+}
+
+// SupportsConditionalStop reports whether the backend currently routed for
+// name can enforce both instance and attachment guards at the destructive
+// boundary. Callers must check this before recording durable repair state that
+// requires a conditional stop to consume it.
+func SupportsConditionalStop(provider Provider, name string) bool {
+	if provider == nil {
+		return false
+	}
+	if routed, ok := provider.(ConditionalStopCapabilityProvider); ok {
+		return routed.SupportsConditionalStop(name)
+	}
+	_, ok := provider.(ConditionalStopProvider)
+	return ok
+}
+
 // ValidInstanceToken reports whether token has the exact lowercase 128-bit
 // hexadecimal shape generated for managed runtime incarnations. Conditional
 // stop implementations share this validator so test doubles cannot accept a
@@ -650,6 +679,10 @@ type Config struct {
 
 	// Env is additional environment variables set in the session.
 	Env map[string]string
+
+	// ProviderFenceIdentity is controller-only attribution for the provider
+	// account used by this start. Providers must not export it to the child.
+	ProviderFenceIdentity string
 
 	// MCPServers is the effective ACP session/new MCP server list for this
 	// session. Non-ACP providers ignore it.

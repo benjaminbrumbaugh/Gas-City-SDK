@@ -2,6 +2,8 @@ package main
 
 import (
 	"io"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,17 +85,11 @@ func TestResolveTemplateAgentEnvWinsOverWorkspaceEnv(t *testing.T) {
 	if got := tp.Env["GC_TARGET_BRANCH"]; got != "boylec/special" {
 		t.Errorf("GC_TARGET_BRANCH = %q, want %q (agent env must override workspace env)", got, "boylec/special")
 	}
-	if got := tp.ProviderFenceEnv["CLAUDE_CONFIG_DIR"]; got != "/accounts/mayor" {
-		t.Errorf("ProviderFenceEnv CLAUDE_CONFIG_DIR = %q, want account selector", got)
+	if !strings.HasPrefix(tp.ProviderFenceIdentity, "account:hmac-sha256:") {
+		t.Errorf("ProviderFenceIdentity = %q, want opaque keyed identity", tp.ProviderFenceIdentity)
 	}
-	if got := tp.ProviderFenceEnv["ANTHROPIC_API_KEY"]; got != "workspace-account" {
-		t.Errorf("ProviderFenceEnv ANTHROPIC_API_KEY = %q, want effective workspace credential", got)
-	}
-	if _, included := tp.ProviderFenceEnv["GC_TARGET_BRANCH"]; included {
-		t.Error("ProviderFenceEnv contains unrelated role environment")
-	}
-	if _, inherited := tp.ProviderFenceEnv["FROM_WORKSPACE"]; inherited {
-		t.Error("ProviderFenceEnv contains workspace-wide environment")
+	if _, retained := reflect.TypeOf(tp).FieldByName("ProviderFenceEnv"); retained {
+		t.Fatal("TemplateParams retains plaintext provider-account material after identity derivation")
 	}
 }
 

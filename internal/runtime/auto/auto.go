@@ -173,6 +173,23 @@ func (p *Provider) StopIfDetached(name, expectedInstanceToken string) error {
 	return nil
 }
 
+// SupportsConditionalStop reports the actual routed backend capability. The
+// composite exposes StopIfDetached for routing, so an interface assertion alone
+// would otherwise overstate support for ACP and other backends.
+func (p *Provider) SupportsConditionalStop(name string) bool {
+	return runtime.SupportsConditionalStop(p.route(name), name)
+}
+
+// SessionDefinitelyAbsent delegates to the selected backend when it can make
+// an authoritative cache-bypassing observation.
+func (p *Provider) SessionDefinitelyAbsent(name string) (bool, error) {
+	provider, ok := p.route(name).(runtime.DefinitiveSessionAbsenceProvider)
+	if !ok {
+		return false, runtime.ErrConditionalStopUnsupported
+	}
+	return provider.SessionDefinitelyAbsent(name)
+}
+
 // Interrupt delegates to the routed backend.
 func (p *Provider) Interrupt(name string) error {
 	return p.route(name).Interrupt(name)

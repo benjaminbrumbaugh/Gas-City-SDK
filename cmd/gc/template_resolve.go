@@ -59,14 +59,9 @@ type TemplateParams struct {
 	Prompt string
 	// Env is the merged environment (passthrough + provider + agent + passthrough vars).
 	Env map[string]string
-	// ProviderFenceEnv is the provider/account environment used to correlate
-	// usage-limit observations across roles. It includes provider config,
-	// account-selecting agent overrides, and rendered upstream overrides while
-	// excluding unrelated role/session settings. Consumers must hash it before
-	// persistence or logging.
-	ProviderFenceEnv map[string]string
 	// ProviderFenceIdentity is the opaque, city-keyed account identity derived
-	// from ProviderFenceEnv after all config layers have been applied.
+	// from the effective provider-account environment after all config layers
+	// have been applied. Plaintext account material is not retained here.
 	ProviderFenceIdentity string
 	// Upstream is the selected model-serving endpoint name (a key in [upstreams],
 	// Phase C). Carried to runtime.Config.Upstream (launch-half fingerprint) so a
@@ -771,7 +766,6 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		Command:               command,
 		Prompt:                prompt,
 		Env:                   env,
-		ProviderFenceEnv:      providerFenceEnv,
 		ProviderFenceIdentity: providerFenceIdentity,
 		Upstream:              cfgAgent.Upstream,
 		Hints:                 hints,

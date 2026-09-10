@@ -777,7 +777,11 @@ func (t *Tmux) KillSession(name string) error {
 	return err
 }
 
-const conditionalStopRefusedMarker = "gc:conditional-stop-refused"
+const (
+	conditionalStopRefusedMarker   = "gc:conditional-stop-refused"
+	conditionalStopSessionGuardEnv = "GC_INSTANCE_TOKEN_SESSION_GUARD"
+	conditionalStopGlobalSentinel  = "gc:global-fallback-refused"
+)
 
 // conditionalKillSession asks the tmux server to evaluate the incarnation and
 // attachment guards and kill the captured session ID in one command-queue item.
@@ -787,13 +791,21 @@ func (t *Tmux) conditionalKillSession(sessionID, expectedInstanceToken string) e
 	if !runtime.ValidInstanceToken(expectedInstanceToken) {
 		return fmt.Errorf("invalid instance token %q", expectedInstanceToken)
 	}
+	// tmux format lookup falls back to server-global environment. In one server
+	// command queue, force the private guard's global value to an invalid sentinel
+	// and then test the session-local value. If that local value is absent at the
+	// exact evaluation boundary, fallback cannot authorize the kill.
 	condition := fmt.Sprintf(
-		"#{&&:#{==:#{GC_INSTANCE_TOKEN},%s},#{==:#{session_attached},0}}",
+		"#{&&:#{==:#{%s},%s},#{==:#{session_attached},0}}",
+		conditionalStopSessionGuardEnv,
 		expectedInstanceToken,
 	)
 	killCommand := "kill-session -t " + shellquote.Quote(sessionID)
 	refuseCommand := "display-message -p " + shellquote.Quote(conditionalStopRefusedMarker)
-	out, err := t.run("if-shell", "-F", "-t", sessionID, condition, killCommand, refuseCommand)
+	out, err := t.run(
+		"set-environment", "-g", conditionalStopSessionGuardEnv, conditionalStopGlobalSentinel,
+		";", "if-shell", "-F", "-t", sessionID, condition, killCommand, refuseCommand,
+	)
 	if err != nil {
 		return err
 	}

@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
@@ -38,6 +37,13 @@ func providerUsageFenceIdentityForCity(cityPath string, resolved *config.Resolve
 
 func providerUsageFenceIdentityForCityWithStore(cityPath string, store beads.Store, resolved *config.ResolvedProvider, accountEnv map[string]string) (string, error) {
 	if resolved == nil {
+		return "", nil
+	}
+	// Storeless callers used by city-path discovery can legitimately have no
+	// city yet. There is nowhere safe to persist a continuity key in that state,
+	// so decline to derive a durable identity instead of touching cwd/.gc or
+	// turning discovery into a hard failure loop.
+	if strings.TrimSpace(cityPath) == "" {
 		return "", nil
 	}
 	family := strings.TrimSpace(resolved.BuiltinAncestor)
@@ -149,6 +155,17 @@ func loadOrCreateProviderFenceIdentityKeyWithStore(cityPath string, store beads.
 				return fmt.Errorf("provider fence identity key %q does not match its continuity digest", path)
 			}
 			if !digestFound {
+				if store == nil {
+					key = append([]byte(nil), data...)
+					return nil
+				}
+				hasHistory, historyErr := session.NewStore(beads.SessionStore{Store: store}).HasKeyedProviderFenceIdentityHistory()
+				if historyErr != nil {
+					return fmt.Errorf("checking durable provider fence identity continuity: %w", historyErr)
+				}
+				if hasHistory {
+					return fmt.Errorf("provider fence identity continuity digest %q is missing while durable keyed fence or session attribution metadata remains; refusing to attest the current key", digestPath)
+				}
 				if err := fsys.WriteFileAtomic(fsys.OSFS{}, digestPath, encodedDigest, 0o600); err != nil {
 					return fmt.Errorf("writing provider fence identity continuity digest %q: %w", digestPath, err)
 				}
@@ -160,14 +177,12 @@ func loadOrCreateProviderFenceIdentityKeyWithStore(cityPath string, store beads.
 			return fmt.Errorf("provider fence identity key %q is missing while continuity digest %q exists", path, digestPath)
 		}
 		if store != nil {
-			fences, err := session.NewStore(beads.SessionStore{Store: store}).ActiveProviderFences(time.Now())
+			hasHistory, err := session.NewStore(beads.SessionStore{Store: store}).HasKeyedProviderFenceIdentityHistory()
 			if err != nil {
-				return fmt.Errorf("checking active provider fence identity continuity: %w", err)
+				return fmt.Errorf("checking durable provider fence identity continuity: %w", err)
 			}
-			for _, fence := range fences {
-				if strings.HasPrefix(strings.TrimSpace(fence.Identity), "account:hmac-sha256:") {
-					return fmt.Errorf("provider fence identity key %q is missing while active keyed fence metadata remains", path)
-				}
+			if hasHistory {
+				return fmt.Errorf("provider fence identity key %q is missing while durable keyed fence or session attribution metadata remains", path)
 			}
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

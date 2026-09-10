@@ -130,3 +130,104 @@ func TestStartPreparedStartCandidateUsesWorkerBoundaryForRuntimeOnlyTarget(t *te
 		t.Fatalf("storeless runtime-only start invented durable account identity: %v", err)
 	}
 }
+
+func TestStartPreparedStartCandidateClearsLaunchIdentityWhenStartFailsDead(t *testing.T) {
+	store := beads.NewMemStore()
+	sp := runtime.NewFake()
+	mgr := newSessionManagerWithConfig("", store, sp, nil)
+	info, err := mgr.CreateSession(context.Background(), sessionpkg.CreateOptions{
+		BeadOnly: true,
+		Template: "worker",
+		Title:    "Worker",
+		Command:  "claude",
+		WorkDir:  t.TempDir(),
+		Provider: "claude",
+		ExtraMeta: map[string]string{
+			"started_provider_fence_identity": "account:hmac-sha256:previous",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.StartErrors[info.SessionName] = errors.New("injected start failure")
+	usedWorker, err := startPreparedStartCandidate(
+		context.Background(),
+		preparedStart{
+			candidate: startCandidate{
+				info: info,
+				tp:   TemplateParams{TemplateName: "worker", ProviderFenceIdentity: "account:hmac-sha256:desired"},
+			},
+			cfg: runtime.Config{Command: "claude", WorkDir: info.WorkDir},
+		},
+		"",
+		store,
+		sp,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	if !usedWorker || err == nil {
+		t.Fatalf("start result usedWorker=%v err=%v, want worker failure", usedWorker, err)
+	}
+	row, getErr := store.Get(info.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if got := row.Metadata["launch_provider_fence_identity"]; got != "" {
+		t.Fatalf("failed dead start retained launch identity %q", got)
+	}
+	if got := row.Metadata["started_provider_fence_identity"]; got != "account:hmac-sha256:previous" {
+		t.Fatalf("failed start changed prior attribution to %q", got)
+	}
+}
+
+type providerWithoutDefinitiveAbsence struct {
+	runtime.Provider
+}
+
+func TestStartPreparedStartCandidateRetainsLaunchIdentityWhenFailureAbsenceIsAmbiguous(t *testing.T) {
+	store := beads.NewMemStore()
+	sp := runtime.NewFake()
+	mgr := newSessionManagerWithConfig("", store, sp, nil)
+	info, err := mgr.CreateSession(context.Background(), sessionpkg.CreateOptions{
+		BeadOnly: true,
+		Template: "worker",
+		Title:    "Worker",
+		Command:  "claude",
+		WorkDir:  t.TempDir(),
+		Provider: "claude",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.StartErrors[info.SessionName] = errors.New("ambiguous injected start failure")
+	provider := providerWithoutDefinitiveAbsence{Provider: sp}
+	usedWorker, err := startPreparedStartCandidate(
+		context.Background(),
+		preparedStart{
+			candidate: startCandidate{
+				info: info,
+				tp:   TemplateParams{TemplateName: "worker", ProviderFenceIdentity: "account:hmac-sha256:desired"},
+			},
+			cfg: runtime.Config{Command: "claude", WorkDir: info.WorkDir},
+		},
+		"",
+		store,
+		provider,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	if !usedWorker || err == nil {
+		t.Fatalf("start result usedWorker=%v err=%v, want worker failure", usedWorker, err)
+	}
+	row, getErr := store.Get(info.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if got := row.Metadata["launch_provider_fence_identity"]; got != "account:hmac-sha256:desired" {
+		t.Fatalf("ambiguous failed start launch identity = %q, want retained desired attribution", got)
+	}
+}

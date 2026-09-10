@@ -586,7 +586,7 @@ func TestReconcileSessionBeads_UsageLimitModalRestartsWedgedSession(t *testing.T
 
 type providerWithoutConditionalStop struct{ runtime.Provider }
 
-func TestReconcileSessionBeads_UsageLimitModalUnsupportedStopFailsClosed(t *testing.T) {
+func TestReconcileSessionBeads_UsageLimitModalUnsupportedStopPinsVisibleFence(t *testing.T) {
 	env, source, sessionName := newUsageLimitModalScenario(t)
 	env.provider = providerWithoutConditionalStop{Provider: env.sp}
 
@@ -599,14 +599,21 @@ func TestReconcileSessionBeads_UsageLimitModalUnsupportedStopFailsClosed(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Metadata[sessionHealthReasonMetadataKey] != sessionHealthReasonUsageLimitModal {
-		t.Fatal("unsupported runtime did not retain visible usage-limit quarantine")
+	if got.Metadata[sessionHealthReasonMetadataKey] != sessionHealthReasonUsageLimitModal || got.Metadata["restart_requested"] == "true" {
+		t.Fatalf("unsupported runtime must retain visible expiring quarantine without destructive restart: %#v", got.Metadata)
 	}
-	if got.Metadata["restart_requested"] != "true" {
-		t.Fatal("unsupported runtime did not retain a retryable restart request")
+	rows, err := env.store.List(beads.ListQuery{Label: sessionpkg.ProviderFenceBeadLabel, IncludeClosed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("unsupported runtime durable provider fences = %d, want 1", len(rows))
 	}
 	if calls := env.sp.CountCalls("Stop", sessionName); calls != 0 {
 		t.Fatalf("ordinary Stop calls = %d, want 0", calls)
+	}
+	if calls := env.sp.CountCalls("StopIfDetached", sessionName); calls != 0 {
+		t.Fatalf("StopIfDetached calls = %d, want 0", calls)
 	}
 }
 

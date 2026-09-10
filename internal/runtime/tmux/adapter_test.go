@@ -129,6 +129,27 @@ func TestProvider_StopIfDetachedUsesLiveTmuxGuards(t *testing.T) {
 	if !p.IsRunning(name) {
 		t.Fatal("token-mismatched runtime was stopped")
 	}
+
+	// The conditional format reads a dedicated session-local incarnation guard.
+	// Even if a server-global value is maliciously set to the expected token,
+	// the same queued tmux command first pins that global fallback to a sentinel.
+	if err := p.Tmux().RemoveEnvironment(name, conditionalStopSessionGuardEnv); err != nil {
+		t.Fatalf("remove session-local conditional-stop guard: %v", err)
+	}
+	if _, err := p.Tmux().run("set-environment", "-g", conditionalStopSessionGuardEnv, token); err != nil {
+		t.Fatalf("set matching global fallback guard: %v", err)
+	}
+	t.Cleanup(func() { _, _ = p.Tmux().run("set-environment", "-gu", conditionalStopSessionGuardEnv) })
+	if err := p.StopIfDetached(name, token); !errors.Is(err, runtime.ErrConditionalStopRefused) {
+		t.Fatalf("StopIfDetached(global-only guard) = %v, want ErrConditionalStopRefused", err)
+	}
+	if !p.IsRunning(name) {
+		t.Fatal("global fallback guard authorized a conditional stop")
+	}
+	if err := p.Tmux().SetEnvironment(name, conditionalStopSessionGuardEnv, token); err != nil {
+		t.Fatalf("restore session-local conditional-stop guard: %v", err)
+	}
+
 	if err := p.StopIfDetached(name, token); err != nil {
 		t.Fatalf("StopIfDetached(matching token): %v", err)
 	}

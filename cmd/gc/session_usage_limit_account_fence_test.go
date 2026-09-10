@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,8 +10,23 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/runtime"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
 )
+
+type failProviderFenceClearOnceStore struct {
+	beads.Store
+	failed bool
+}
+
+func (s *failProviderFenceClearOnceStore) Update(id string, opts beads.UpdateOpts) error {
+	value, clearsQuarantine := opts.Metadata["quarantined_until"]
+	if clearsQuarantine && value == "" && !s.failed {
+		s.failed = true
+		return errors.New("injected provider-fence quarantine clear failure")
+	}
+	return s.Store.Update(id, opts)
+}
 
 // This regression traverses the reconciler's provider-fence map after the
 // source row has been closed. The source's session metadata is no longer an
@@ -37,7 +54,6 @@ func TestReconcileSessionBeads_UsageLimitFenceSurvivesClosedSourceRow(t *testing
 		SessionName:           name,
 		TemplateName:          "sibling",
 		ProviderFenceIdentity: "account:a",
-		ProviderFenceEnv:      map[string]string{"CLAUDE_CONFIG_DIR": "/accounts/a"},
 		ResolvedProvider:      &config.ResolvedProvider{Name: "provider-a"},
 	}}
 	sibling := env.createSessionBead(name)
@@ -204,16 +220,117 @@ func TestReconcileSessionBeads_RepointedHealthyAccountClearsOldFence(t *testing.
 		SessionName:           name,
 		TemplateName:          "worker",
 		ProviderFenceIdentity: "account:b",
-		ProviderFenceEnv:      map[string]string{"CLAUDE_CONFIG_DIR": "/accounts/b"},
 		ResolvedProvider:      &config.ResolvedProvider{Name: "provider-b"},
 	}
 	bead := env.createSessionBead(name)
+	const instanceToken = "0123456789abcdef0123456789abcdef"
+	if err := env.sp.Start(context.Background(), name, runtime.Config{Command: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.sp.SetMeta(name, "GC_SESSION_ID", bead.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.sp.SetMeta(name, "GC_INSTANCE_TOKEN", instanceToken); err != nil {
+		t.Fatal(err)
+	}
 	patch := map[string]string(usageLimitModalWedgePatch(env.clk.Now(), env.clk.Now().Add(time.Hour)))
 	patch["provider_fence_identity"] = "account:a"
+	patch["started_provider_fence_identity"] = "account:a"
+	patch["restart_requested"] = "true"
+	patch["instance_token"] = instanceToken
 	env.setSessionMetadata(&bead, patch)
 
 	env.reconcile([]beads.Bead{bead})
+	// The old runtime must actually be replaced; clearing quarantine alone would
+	// leave an account-a process running under account-b desired configuration.
+	if calls := env.sp.CountCalls("StopIfDetached", name); calls != 1 {
+		t.Fatalf("conditional stops = %d, want old-account runtime stopped once", calls)
+	}
+	if env.sp.IsRunning(name) {
+		t.Fatal("old-account runtime remained running after instance-bound stop")
+	}
+	got, err := env.store.Get(bead.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.reconcile([]beads.Bead{got})
 	if !env.sp.IsRunning(name) {
-		t.Fatal("session repointed to a healthy account remained blocked by the old session quarantine")
+		t.Fatal("session repointed to a healthy account was not restarted on the next pass")
+	}
+	got, err = env.store.Get(bead.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity := got.Metadata["started_provider_fence_identity"]; identity != "account:b" {
+		t.Fatalf("repointed runtime attribution = %q, want account:b; calls=%#v metadata=%#v", identity, env.sp.Calls, got.Metadata)
+	}
+}
+
+func TestReconcileSessionBeads_RepointRetriesQuarantineClearAfterSuccessfulStop(t *testing.T) {
+	env := newRestartRequestTestEnv()
+	env.cfg = &config.City{
+		Workspace:     config.Workspace{Name: "test-city"},
+		Agents:        []config.Agent{{Name: "worker", StartCommand: "true"}},
+		NamedSessions: []config.NamedSession{{Template: "worker", Mode: "always"}},
+	}
+	name := config.NamedSessionRuntimeName(env.cfg.Workspace.Name, env.cfg.Workspace, "worker")
+	env.desiredState[name] = TemplateParams{
+		Command:               "true",
+		SessionName:           name,
+		TemplateName:          "worker",
+		ProviderFenceIdentity: "account:b",
+		ResolvedProvider:      &config.ResolvedProvider{Name: "provider-b"},
+	}
+	bead := env.createSessionBead(name)
+	const instanceToken = "0123456789abcdef0123456789abcdef"
+	if err := env.sp.Start(context.Background(), name, runtime.Config{Command: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.sp.SetMeta(name, "GC_SESSION_ID", bead.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.sp.SetMeta(name, "GC_INSTANCE_TOKEN", instanceToken); err != nil {
+		t.Fatal(err)
+	}
+	patch := map[string]string(usageLimitModalWedgePatch(env.clk.Now(), env.clk.Now().Add(time.Hour)))
+	patch["provider_fence_identity"] = "account:a"
+	patch["started_provider_fence_identity"] = "account:a"
+	patch["restart_requested"] = "true"
+	patch["instance_token"] = instanceToken
+	env.setSessionMetadata(&bead, patch)
+
+	failing := &failProviderFenceClearOnceStore{Store: env.store}
+	env.store = failing
+	env.reconcile([]beads.Bead{bead})
+	if calls := env.sp.CountCalls("StopIfDetached", name); calls != 1 {
+		t.Fatalf("conditional stops = %d, want one successful instance-bound stop", calls)
+	}
+	if env.sp.IsRunning(name) {
+		t.Fatal("old-account runtime remained running after conditional stop")
+	}
+	stopped, err := env.store.Get(bead.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.Metadata["quarantined_until"] == "" || stopped.Metadata["restart_requested"] != "true" {
+		t.Fatalf("failed clear did not preserve retryable state: %#v", stopped.Metadata)
+	}
+
+	env.reconcile([]beads.Bead{stopped})
+	if calls := env.sp.CountCalls("StopIfDetached", name); calls != 1 {
+		t.Fatalf("retry issued another conditional stop after runtime was already absent: %d", calls)
+	}
+	if !env.sp.IsRunning(name) {
+		t.Fatal("repointed session did not restart after quarantine-clear retry")
+	}
+	restarted, err := env.store.Get(bead.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted.Metadata["quarantined_until"] != "" || restarted.Metadata["restart_requested"] != "" {
+		t.Fatalf("retry did not consume provider-fence handoff: %#v", restarted.Metadata)
+	}
+	if identity := restarted.Metadata["started_provider_fence_identity"]; identity != "account:b" {
+		t.Fatalf("retried repoint attribution = %q, want account:b", identity)
 	}
 }

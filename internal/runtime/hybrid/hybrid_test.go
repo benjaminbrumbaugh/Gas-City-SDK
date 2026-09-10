@@ -12,6 +12,18 @@ import (
 
 func isRemote(name string) bool { return strings.Contains(name, "remote-agent") }
 
+type providerWithoutConditionalStop struct{ runtime.Provider }
+
+func TestSupportsConditionalStopUsesRoutedBackend(t *testing.T) {
+	h := New(runtime.NewFake(), providerWithoutConditionalStop{Provider: runtime.NewFake()}, isRemote)
+	if !h.SupportsConditionalStop("local-agent") {
+		t.Fatal("local conditional-stop capability was hidden")
+	}
+	if h.SupportsConditionalStop("remote-agent-1") {
+		t.Fatal("remote route overstated conditional-stop capability")
+	}
+}
+
 // Relaunch must reach the routed backend (local vs remote), or the reconciler's
 // RelaunchProvider type-assert would be masked by the hybrid router and fall
 // back to Stop+Start.

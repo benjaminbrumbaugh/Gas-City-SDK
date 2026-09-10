@@ -60,6 +60,20 @@ func (p *Provider) StopIfDetached(name, expectedInstanceToken string) error {
 	return provider.StopIfDetached(name, expectedInstanceToken)
 }
 
+// SupportsConditionalStop reports the actual routed backend capability.
+func (p *Provider) SupportsConditionalStop(name string) bool {
+	return runtime.SupportsConditionalStop(p.route(name), name)
+}
+
+// SessionDefinitelyAbsent delegates to the selected backend when supported.
+func (p *Provider) SessionDefinitelyAbsent(name string) (bool, error) {
+	provider, ok := p.route(name).(runtime.DefinitiveSessionAbsenceProvider)
+	if !ok {
+		return false, runtime.ErrConditionalStopUnsupported
+	}
+	return provider.SessionDefinitelyAbsent(name)
+}
+
 // Interrupt delegates to the routed backend.
 func (p *Provider) Interrupt(name string) error {
 	return p.route(name).Interrupt(name)

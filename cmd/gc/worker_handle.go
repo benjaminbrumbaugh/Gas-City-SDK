@@ -309,6 +309,7 @@ func newWorkerSessionHandleForResolvedRuntimeWithConfig(
 				sessionCfg.Metadata = make(map[string]string)
 			}
 			sessionCfg.Metadata["launch_provider_fence_identity"] = identity
+			sessionCfg.Runtime.Hints.ProviderFenceIdentity = identity
 		}
 	}
 	// Stage provider-overlay hooks on the CLI create path the same way the

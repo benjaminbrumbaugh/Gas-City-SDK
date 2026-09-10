@@ -1953,16 +1953,39 @@ func startPreparedStartCandidate(
 	// starts and the controller dies before CommitStartedPatch, recovery can
 	// still attribute the live runtime to the account that was actually
 	// launched rather than to a later desired-config repoint.
+	launchProviderFenceIdentity := strings.TrimSpace(item.candidate.tp.ProviderFenceIdentity)
 	if _, err := sessionFrontDoor(store).UpdateMetadataInfo(item.candidate.info, sessionpkg.MetadataPatch{
-		"launch_provider_fence_identity": strings.TrimSpace(item.candidate.tp.ProviderFenceIdentity),
+		"launch_provider_fence_identity": launchProviderFenceIdentity,
 	}); err != nil {
 		return true, fmt.Errorf("recording launch provider account identity for %q: %w", name, err)
 	}
 	handle, err := workerHandleForSessionWithStaleKeyDetectionWaiter(cityPath, store, sp, cfg, item.candidate.info.ID, staleKeyDetectionWaiter)
 	if err != nil {
+		if clearErr := clearFailedLaunchProviderFenceIdentity(store, item.candidate.info.ID, launchProviderFenceIdentity); clearErr != nil {
+			return true, errors.Join(err, clearErr)
+		}
 		return true, err
 	}
-	return true, handle.StartResolved(ctx, item.cfg.Command, item.cfg)
+	startErr := handle.StartResolved(ctx, item.cfg.Command, item.cfg)
+	return true, startErr
+}
+
+func clearFailedLaunchProviderFenceIdentity(store beads.Store, id, attemptedIdentity string) error {
+	if store == nil || strings.TrimSpace(id) == "" {
+		return nil
+	}
+	writer, ok := beads.MetadataCASWriterFor(store)
+	if !ok {
+		return fmt.Errorf("clearing failed launch provider account identity for %q: %w", id, beads.ErrConditionalWriteUnsupported)
+	}
+	swapped, err := writer.CompareAndSetMetadataKey(id, "launch_provider_fence_identity", strings.TrimSpace(attemptedIdentity), "")
+	if err != nil {
+		return fmt.Errorf("clearing failed launch provider account identity for %q: %w", id, err)
+	}
+	if !swapped {
+		return fmt.Errorf("clearing failed launch provider account identity for %q lost metadata precondition", id)
+	}
+	return nil
 }
 
 func runtimeObservationLive(obs worker.LiveObservation) bool {
@@ -2205,6 +2228,7 @@ func commitStartResultTraced(
 		LaunchHash:                   result.prepared.launchHash,
 		CoreBreakdown:                coreBreakdown,
 		StartedProviderFenceIdentity: startedProviderFenceIdentity,
+		CommitProviderFenceIdentity:  result.startedFresh || startedProviderFenceIdentity != "",
 		ConfirmState:                 confirmPendingStart(info.MetadataState),
 		ClearSleepReason:             info.SleepReason != "",
 		ClearPendingCreateClaim:      shouldRollbackPendingCreateInfo(info),
@@ -2456,6 +2480,7 @@ func recoverRunningPendingCreate(
 		LaunchHash:                   prepared.launchHash,
 		CoreBreakdown:                coreBreakdown,
 		StartedProviderFenceIdentity: startedProviderFenceIdentity,
+		CommitProviderFenceIdentity:  startedProviderFenceIdentity != "",
 		// WI-6 R3: state/sleep_reason read off the caller's coherent infoByID
 		// snapshot (Info.MetadataState is the raw state metadata verbatim, so the
 		// confirmPendingStart / StateAwake / sleep_reason checks are byte-identical

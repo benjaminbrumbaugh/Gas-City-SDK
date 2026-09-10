@@ -746,8 +746,12 @@ func (m *Manager) routeACPIfNeeded(provider, transport, sessName string) func() 
 	if !ok {
 		return nil
 	}
+	// ACP routing is a durable property of the session, not an operation-scoped
+	// lease. Keep it until the runtime provider's successful Stop removes it;
+	// otherwise an error return can make later liveness or fenced-cleanup checks
+	// inspect the default backend and falsely certify the ACP runtime absent.
 	router.RouteACP(sessName)
-	return func() { router.Unroute(sessName) }
+	return func() {}
 }
 
 // ManagerOption configures an optional Manager capability. It is the single
@@ -845,6 +849,18 @@ func (m *Manager) createStarted(ctx context.Context, spec CreateOptions) (Info, 
 	resume := spec.Resume
 	hints := spec.Hints
 	extraMeta := spec.ExtraMeta
+	launchProviderFenceIdentity := strings.TrimSpace(extraMeta["launch_provider_fence_identity"])
+	if launchProviderFenceIdentity != "" {
+		fences, fenceErr := NewStore(beads.SessionStore{Store: m.store}).ActiveProviderFences(time.Now().UTC())
+		if fenceErr != nil {
+			return Info{}, fmt.Errorf("checking provider account fence before direct start: %w", fenceErr)
+		}
+		for _, fence := range fences {
+			if fence.Identity == launchProviderFenceIdentity {
+				return Info{}, fmt.Errorf("provider account is fenced until %s", fence.Until.UTC().Format(time.RFC3339))
+			}
+		}
+	}
 
 	alias, err := ValidateAlias(alias)
 	if err != nil {
@@ -952,11 +968,8 @@ func (m *Manager) createStarted(ctx context.Context, spec CreateOptions) (Info, 
 			return err
 		}
 
-		unroute := m.routeACPIfNeeded(provider, transport, sessName)
+		_ = m.routeACPIfNeeded(provider, transport, sessName)
 		rollbackFailedCreate := func() error {
-			if unroute != nil {
-				unroute()
-			}
 			if explicitName != "" {
 				if err := m.store.SetMetadata(b.ID, "session_name", ""); err != nil {
 					return fmt.Errorf("clearing session name during rollback: %w", err)
@@ -966,6 +979,20 @@ func (m *Manager) createStarted(ctx context.Context, spec CreateOptions) (Info, 
 				}
 				b.Metadata["session_name"] = ""
 				b.Metadata["session_name_explicit"] = ""
+			}
+			if launchIdentity := strings.TrimSpace(b.Metadata["launch_provider_fence_identity"]); launchIdentity != "" {
+				writer, ok := beads.MetadataCASWriterFor(m.store)
+				if !ok {
+					return fmt.Errorf("clearing launch provider identity during rollback: %w", beads.ErrConditionalWriteUnsupported)
+				}
+				swapped, err := writer.CompareAndSetMetadataKey(b.ID, "launch_provider_fence_identity", launchIdentity, "")
+				if err != nil {
+					return fmt.Errorf("clearing launch provider identity during rollback: %w", err)
+				}
+				if !swapped {
+					return errors.New("clearing launch provider identity during rollback lost metadata precondition")
+				}
+				b.Metadata["launch_provider_fence_identity"] = ""
 			}
 			if err := m.store.Close(b.ID); err != nil {
 				return fmt.Errorf("closing rolled-back session bead: %w", err)
@@ -1018,14 +1045,22 @@ func (m *Manager) createStarted(ctx context.Context, spec CreateOptions) (Info, 
 				}
 				return fmt.Errorf("%w: %q already active in runtime", ErrSessionNameExists, sessName)
 			}
+			absent, clearErr := m.clearLaunchProviderFenceIdentityIfDefinitelyAbsent(b.ID, sessName, b.Metadata["launch_provider_fence_identity"])
+			if clearErr != nil {
+				return errors.Join(fmt.Errorf("starting session: %w", err), clearErr)
+			}
+			if !absent {
+				return fmt.Errorf("starting session: %w (runtime absence not proven; preserving bead %s and launch attribution)", err, b.ID)
+			}
+			b.Metadata["launch_provider_fence_identity"] = ""
 			if rbErr := rollbackFailedCreate(); rbErr != nil {
 				return errors.Join(fmt.Errorf("starting session: %w", err), rbErr)
 			}
 			return fmt.Errorf("starting session: %w", err)
 		}
 		if metaErr := m.confirmStartedRuntimeMetadata(b.ID, &b); metaErr != nil {
-			if stopErr := m.sp.Stop(sessName); stopErr != nil {
-				metaErr = errors.Join(metaErr, fmt.Errorf("stopping runtime after metadata failure: %w", stopErr))
+			if stopErr := m.stopRuntimeIfDetachedAndOwned(sessName, meta["instance_token"]); stopErr != nil {
+				return errors.Join(metaErr, fmt.Errorf("conditionally stopping owned runtime after metadata failure: %w", stopErr))
 			}
 			if rbErr := rollbackFailedCreate(); rbErr != nil {
 				return errors.Join(metaErr, rbErr)
@@ -1044,6 +1079,12 @@ func (m *Manager) createStarted(ctx context.Context, spec CreateOptions) (Info, 
 
 func (m *Manager) confirmStartedRuntimeMetadata(id string, b *beads.Bead) error {
 	metadata := ConfirmStartedPatch(time.Now().UTC())
+	if b != nil {
+		if launchIdentity := strings.TrimSpace(b.Metadata["launch_provider_fence_identity"]); launchIdentity != "" {
+			metadata["started_provider_fence_identity"] = launchIdentity
+			metadata["launch_provider_fence_identity"] = ""
+		}
+	}
 	if err := m.store.SetMetadataBatch(id, metadata); err != nil {
 		return fmt.Errorf("storing started runtime metadata: %w", err)
 	}

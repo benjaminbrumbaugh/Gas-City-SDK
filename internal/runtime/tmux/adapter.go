@@ -138,7 +138,7 @@ func stageStartFiles(cfg runtime.Config, warnings io.Writer) error {
 }
 
 func ensureInstanceToken(env map[string]string) (map[string]string, error) {
-	cloned := make(map[string]string, len(env)+1)
+	cloned := make(map[string]string, len(env)+2)
 	for k, v := range env {
 		cloned[k] = v
 	}
@@ -155,6 +155,7 @@ func ensureInstanceToken(env map[string]string) (map[string]string, error) {
 	// token — a divergent or absent holder token is a silent actor-only downgrade
 	// the template-inspecting gate cannot see (ownership-fencing DESIGN §2.4).
 	cloned["BEADS_HOLDER_TOKEN"] = cloned["GC_INSTANCE_TOKEN"]
+	cloned[conditionalStopSessionGuardEnv] = cloned["GC_INSTANCE_TOKEN"]
 	return cloned, nil
 }
 
@@ -344,6 +345,12 @@ func (p *Provider) Interrupt(name string) error {
 // ObserveLiveness or ProcessAlive when agent-process liveness matters.
 func (p *Provider) IsRunning(name string) bool {
 	return p.cache.IsRunning(name)
+}
+
+// SessionDefinitelyAbsent bypasses the state cache for write-ahead cleanup.
+func (p *Provider) SessionDefinitelyAbsent(name string) (bool, error) {
+	running, err := p.tm.HasSession(name)
+	return !running, err
 }
 
 // IsDeadRuntimeSession reports whether a visible tmux session is a

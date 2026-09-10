@@ -170,8 +170,15 @@ func NewFailFake() *Fake {
 	}
 }
 
-// Start creates a fake session. Returns an error if the name is taken.
-// When broken, always returns an error.
+// SessionDefinitelyAbsent is an authoritative in-memory lookup.
+func (f *Fake) SessionDefinitelyAbsent(name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, running := f.sessions[name]
+	return !running, nil
+}
+
+// Start creates a fake session.
 func (f *Fake) Start(_ context.Context, name string, cfg Config) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

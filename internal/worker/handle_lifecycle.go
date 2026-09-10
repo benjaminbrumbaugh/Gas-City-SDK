@@ -49,6 +49,9 @@ func (h *SessionHandle) StartResolved(ctx context.Context, startCommand string, 
 	if strings.TrimSpace(startHints.Command) == "" {
 		startHints = h.runtimeHints()
 	}
+	if strings.TrimSpace(startHints.ProviderFenceIdentity) == "" {
+		startHints.ProviderFenceIdentity = h.providerFenceIdentity()
+	}
 	err = h.manager.StartRuntimeOnly(ctx, id, command, startHints)
 	return err
 }
@@ -504,7 +507,17 @@ func (h *SessionHandle) historyProvider(info sessionpkg.Info) string {
 func (h *SessionHandle) runtimeHints() runtime.Config {
 	cfg := cloneRuntimeConfig(h.session.Hints)
 	cfg.Env = mergeStringMaps(cfg.Env, h.session.Env)
+	cfg.ProviderFenceIdentity = h.providerFenceIdentity()
 	return cfg
+}
+
+func (h *SessionHandle) providerFenceIdentity() string {
+	for _, key := range []string{"launch_provider_fence_identity", "started_provider_fence_identity", "provider_fence_identity"} {
+		if identity := strings.TrimSpace(h.session.Metadata[key]); identity != "" {
+			return identity
+		}
+	}
+	return ""
 }
 
 func submitIntent(intent DeliveryIntent) sessionpkg.SubmitIntent {

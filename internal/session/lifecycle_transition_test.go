@@ -542,8 +542,9 @@ func TestCommitStartedPatchStampsFreshAwakeEpochOnlyForNewInterval(t *testing.T)
 
 func TestCommitStartedPatchClearsProviderFenceOnFreshStart(t *testing.T) {
 	patch := CommitStartedPatch(CommitStartedPatchInput{
-		StartsAwakeInterval: true,
-		Now:                 time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC),
+		StartsAwakeInterval:         true,
+		CommitProviderFenceIdentity: true,
+		Now:                         time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC),
 	})
 
 	want := MetadataPatch{
@@ -562,15 +563,16 @@ func TestCommitStartedPatchClearsProviderFenceOnFreshStart(t *testing.T) {
 func TestCommitStartedPatchBuildsAtomicStartMetadata(t *testing.T) {
 	now := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
 	patch := CommitStartedPatch(CommitStartedPatchInput{
-		CoreHash:                "core-hash",
-		LiveHash:                "live-hash",
-		ProvisionHash:           "provision-hash",
-		LaunchHash:              "launch-hash",
-		CoreBreakdown:           `{"command":"core-hash"}`,
-		ConfirmState:            true,
-		ClearSleepReason:        true,
-		ClearPendingCreateClaim: true,
-		Now:                     now,
+		CoreHash:                    "core-hash",
+		LiveHash:                    "live-hash",
+		ProvisionHash:               "provision-hash",
+		LaunchHash:                  "launch-hash",
+		CoreBreakdown:               `{"command":"core-hash"}`,
+		ConfirmState:                true,
+		ClearSleepReason:            true,
+		ClearPendingCreateClaim:     true,
+		CommitProviderFenceIdentity: true,
+		Now:                         now,
 	})
 
 	want := MetadataPatch{
@@ -670,16 +672,14 @@ func TestCommitStartedPatchCanPersistHashesWithoutRestampingState(t *testing.T) 
 	})
 
 	want := MetadataPatch{
-		"started_config_hash":             "core-hash",
-		"live_hash":                       "live-hash",
-		"started_live_hash":               "live-hash",
-		"started_provision_hash":          "provision-hash",
-		"started_launch_hash":             "launch-hash",
-		"continuation_reset_pending":      "",
-		ResetCommittedAtKey:               "",
-		"sleep_reason":                    "",
-		"started_provider_fence_identity": "",
-		"launch_provider_fence_identity":  "",
+		"started_config_hash":        "core-hash",
+		"live_hash":                  "live-hash",
+		"started_live_hash":          "live-hash",
+		"started_provision_hash":     "provision-hash",
+		"started_launch_hash":        "launch-hash",
+		"continuation_reset_pending": "",
+		ResetCommittedAtKey:          "",
+		"sleep_reason":               "",
 	}
 	if !reflect.DeepEqual(patch, want) {
 		t.Fatalf("patch = %#v, want %#v", patch, want)

@@ -1634,6 +1634,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 	}
 	phaseStart = time.Now()
 	usageFenceProbeTargets := selectUsageFenceProbeTargets(orderedIDs, dt)
+	providerFenceRepointed := make(map[string]bool)
 	// Durable provider-fence records outlive source session rows. A read error
 	// is fail-closed: an unavailable fence store must never look like an empty
 	// store and permit a sibling start into an account known to be limited.
@@ -1690,20 +1691,13 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		info := infoByID[id]
 		name := strings.TrimSpace(info.SessionNameMetadata)
 		tp, desired := desiredState[name]
-		// A desired account repoint must not inherit the old session's
-		// provider-fence quarantine or restart handoff. The durable account
-		// fence remains authoritative for the old identity, while this role is
-		// allowed to wake on the newly resolved account.
+		// Remember a desired account repoint in this tick, but do not clear its
+		// durable quarantine before the instance-bound stop succeeds.
 		if desired && strings.TrimSpace(info.HealthReason) == sessionHealthReasonUsageLimitModal {
 			currentIdentity := providerUsageFenceIdentity(tp)
 			oldIdentity := strings.TrimSpace(info.ProviderFenceIdentity)
 			if oldIdentity != "" && currentIdentity != "" && oldIdentity != currentIdentity {
-				next, clearErr := sessFront.UpdateMetadataInfo(info, sessionpkg.ClearProviderFenceQuarantinePatch(info.SleepReason))
-				if clearErr != nil {
-					fmt.Fprintf(stderr, "session reconciler: clearing stale provider fence for repointed %s: %v; leaving quarantine in place\n", name, clearErr) //nolint:errcheck
-				} else {
-					info = tick.set(id, next)
-				}
+				providerFenceRepointed[id] = true
 			}
 		}
 		if shadowTick != nil {
@@ -2715,10 +2709,17 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		usageFenceRestartValidated := false
 		providerFenceIdentity := providerUsageFenceIdentityForRuntime(infoByID[id], tp, alive)
 		recordedFenceIdentity := recordedProviderUsageFenceIdentity(infoByID[id], providerFenceIdentity)
+		usageFenceRepairSupported := runtime.SupportsConditionalStop(sp, name)
 		if usageFenceRecorded && recordedFenceIdentity != "" && recordedUntil.After(providerUsageFences[recordedFenceIdentity]) {
 			providerUsageFences[recordedFenceIdentity] = recordedUntil
 		}
-		if alive && usageFenceRecorded && usageFenceProbeTargets[id] {
+		switch {
+		case alive && providerFenceRepointed[id] && infoByID[id].RestartRequested == "true" && usageFenceRepairSupported:
+			// The durable restart was already validated against the old account's
+			// modal before the repoint. Re-probing after configuration changes can
+			// only disarm that required old-runtime teardown.
+			usageFenceRestartValidated = true
+		case alive && usageFenceRecorded && usageFenceProbeTargets[id] && usageFenceRepairSupported:
 			// A prior kill can fail after the durable fence was written. Retry only
 			// after re-observing the full wedge predicate; an old fence alone is not
 			// evidence that a human did not resolve the modal after the failed stop.
@@ -2748,7 +2749,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				// restart now that current runtime evidence no longer proves a wedge.
 				tick.applyStore(id, sessFront, sessionpkg.MetadataPatch{"restart_requested": ""})
 			}
-		} else if alive && usageFenceProbeTargets[id] && sessionActivityReportable(sp, name) {
+		case alive && usageFenceProbeTargets[id] && sessionActivityReportable(sp, name):
 			observedPane := ""
 			resetAt, wedged := detectUsageLimitModalWedge(
 				alive,
@@ -2799,7 +2800,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				// its stale conversation identity.
 				wedgePatch := usageLimitModalWedgePatch(clk.Now(), resetAt)
 				wedgePatch["provider_fence_identity"] = recordedIdentity
-				pinned := pinnedConfiguredNamedSessionKillProtected(infoByID[id])
+				pinned := pinnedConfiguredNamedSessionKillProtected(infoByID[id]) || !usageFenceRepairSupported
 				if !pinned {
 					// Keep the durable request armed until the restart block records
 					// the fresh-conversation handoff immediately before its fenced stop.
@@ -2886,7 +2887,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				usageLimitRestartHasCapability := false
 				if runtimeRunning && strings.TrimSpace(infoByID[id].HealthReason) == sessionHealthReasonUsageLimitModal {
 					conditionalStop, ok := sp.(runtime.ConditionalStopProvider)
-					if !ok {
+					if !ok || !runtime.SupportsConditionalStop(sp, name) {
 						fmt.Fprintf(stderr, "session reconciler: runtime cannot conditionally stop usage-limit session %s; leaving runtime untouched\n", name) //nolint:errcheck
 						continue
 					}
@@ -2921,6 +2922,14 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						continue
 					}
 					usageLimitRuntimeStopped = true
+				}
+				if providerFenceRepointed[id] && (!runtimeRunning || usageLimitRuntimeStopped) {
+					next, clearErr := sessFront.UpdateMetadataInfo(infoByID[id], sessionpkg.ClearProviderFenceQuarantinePatch(infoByID[id].SleepReason))
+					if clearErr != nil {
+						fmt.Fprintf(stderr, "session reconciler: clearing provider fence after stopped repoint for %s: %v\n", name, clearErr) //nolint:errcheck
+						continue
+					}
+					infoByID[id] = tick.set(id, next)
 				}
 				if runtimeRunning && !usageLimitRuntimeStopped {
 					if err := workerKillSessionTargetWithConfig("", store, sp, cfg, name); err != nil {
