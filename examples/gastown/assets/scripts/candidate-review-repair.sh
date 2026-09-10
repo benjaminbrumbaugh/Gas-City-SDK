@@ -35,6 +35,68 @@ read_meta() {
     printf '%s' "$bead_json" | jq -r --arg key "$key" '.metadata[$key] // empty'
 }
 
+new_claim_nonce() {
+    local nonce
+    nonce="$(od -An -N16 -tx1 /dev/urandom | tr -d '[:space:]')" || return 1
+    [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] || return 1
+    printf '%s' "$nonce"
+}
+
+has_valid_path_contract() {
+    local bead_json="$1"
+    printf '%s' "$bead_json" | jq -e '
+        def decode_path_list:
+            if type == "array" then .
+            elif type == "string" then (try fromjson catch null)
+            else null
+            end;
+        .metadata as $metadata |
+        ($metadata["gc.candidate_review_residue"]? // null | decode_path_list) as $residue |
+        ($metadata["gc.candidate_review_landed"]? // null | decode_path_list) as $landed |
+        ($residue | type == "array" and all(.[];
+            type == "string" and length > 0 and
+            (explode | all(.[]; . >= 32 and . != 127)) and
+            (startswith("/") | not) and
+            (endswith("/") | not) and
+            ((split("/")) as $parts | all($parts[]; . != "" and . != "." and . != "..")) and
+            . != ".git" and (startswith(".git/") | not)
+        )) and
+        ($landed | type == "array" and all(.[];
+            type == "string" and length > 0 and
+            (explode | all(.[]; . >= 32 and . != 127)) and
+            (startswith("/") | not) and
+            (endswith("/") | not) and
+            ((split("/")) as $parts | all($parts[]; . != "" and . != "." and . != "..")) and
+            . != ".git" and (startswith(".git/") | not)
+        )) and
+        ((($residue + $landed) | unique | length) == (($residue + $landed) | length))
+    ' >/dev/null 2>&1
+}
+
+claim_still_owns_contract() {
+    local before="$1" after="$2" token="$3" expected_state="${4:-queued}"
+    jq -n -e --arg token "$token" --arg expected_state "$expected_state" \
+        --argjson before "$before" --argjson after "$after" '
+        ($after.id == $before.id) and
+        ($after.status == "in_progress") and
+        ($after.assignee == $token) and
+        ($after.metadata["gc.candidate_review_hold_class"] == "mechanical") and
+        ($after.metadata["gc.candidate_review_state"] == $expected_state) and
+        ($after.metadata["gc.candidate_review_token"] == $token) and
+        ([
+            "gc.candidate_review_correction",
+            "gc.candidate_review_owner",
+            "gc.candidate_review_repair_route",
+            "gc.candidate_review_repair_workflow",
+            "gc.candidate_review_review_route",
+            "gc.candidate_review_target",
+            "gc.candidate_review_source",
+            "gc.candidate_review_residue",
+            "gc.candidate_review_landed"
+        ] | all(.[]; $after.metadata[.] == $before.metadata[.]))
+    ' >/dev/null 2>&1
+}
+
 is_stale() {
     local timestamp="$1" max_age="${GC_CANDIDATE_REPAIR_STALE_SECONDS:-900}"
     [[ "$max_age" =~ ^[1-9][0-9]*$ ]] || return 1
@@ -47,12 +109,21 @@ is_stale() {
 fresh_guarded_update() {
     local id="$1" token="$2"
     shift 2
-    local fresh fresh_token status assignee
+    local fresh fresh_token status assignee hold_class state
     fresh="$(gc bd show "$id" --json)" || return 1
     fresh_token="$(printf '%s' "$fresh" | jq -r '.[0].metadata["gc.candidate_review_token"] // empty')"
     [ "$fresh_token" = "$token" ] || return 13
     status="$(printf '%s' "$fresh" | jq -r '.[0].status // empty')"
     assignee="$(printf '%s' "$fresh" | jq -r '.[0].assignee // empty')"
+    hold_class="$(printf '%s' "$fresh" | jq -r '.[0].metadata["gc.candidate_review_hold_class"] // empty')"
+    state="$(printf '%s' "$fresh" | jq -r '.[0].metadata["gc.candidate_review_state"] // empty')"
+    [ "$status" != "closed" ] || return 13
+    [ -n "$assignee" ] || return 13
+    [ "$hold_class" = "mechanical" ] || return 13
+    case "$state" in
+        queued|active|review_queued|published_pending_review) ;;
+        *) return 13 ;;
+    esac
     gc bd update "$id" --if-status "$status" --if-assignee "$assignee" "$@"
 }
 
@@ -78,7 +149,12 @@ route_review() {
             ;;
     esac
 
-    claim_token="candidate-review:$id:$(date -u +%Y%m%dT%H%M%SZ):$$:$RANDOM"
+    local nonce
+    nonce="$(new_claim_nonce)" || {
+        echo "candidate-review-repair: unable to create a unique review claim for $id" >&2
+        return 1
+    }
+    claim_token="candidate-review:$id:$(date -u +%Y%m%dT%H%M%SZ):$nonce"
     if gc bd update "$id" --if-status "$status" --if-assignee "$assignee" \
         --status in_progress --assignee "$claim_token" \
         --set-metadata gc.candidate_review_state=review_queued \
@@ -90,6 +166,13 @@ route_review() {
         [ "$rc" -eq 13 ] && return 0
         echo "candidate-review-repair: failed to claim review handoff for $id (exit $rc)" >&2
         return 1
+    fi
+    local claimed
+    if ! claimed="$(gc bd show "$id" --json)" || ! claim_still_owns_contract \
+        "$(printf '%s' "$bead_json" | jq -c '.')" \
+        "$(printf '%s' "$claimed" | jq -c '.[0]')" "$claim_token" review_queued; then
+        echo "candidate-review-repair: review claim for $id changed before dispatch" >&2
+        return 0
     fi
     if ! output="$(gc sling "$route" "$id" --no-formula --reassign 2>&1)"; then
         fresh_guarded_update "$id" "$claim_token" \
@@ -135,6 +218,10 @@ route_repair() {
     [ "$status" = "open" ] || [ "$status" = "in_progress" ] || [ "$status" = "blocked" ] || return 0
     [ -n "$id" ] && [ -n "$assignee" ] || return 0
     [ "$(read_meta "$bead_json" gc.candidate_review_hold_class)" = "mechanical" ] || return 0
+    if ! has_valid_path_contract "$bead_json"; then
+        echo "candidate-review-repair: $id has malformed or unsafe declared paths; preserving hold" >&2
+        return 0
+    fi
 
     owner="$(read_meta "$bead_json" gc.candidate_review_owner)"
     correction="$(read_meta "$bead_json" gc.candidate_review_correction)"
@@ -180,7 +267,11 @@ route_repair() {
         return 0
     fi
     next=$((attempt + 1))
-    claim_token="candidate-repair:$id:$next:$(date -u +%Y%m%dT%H%M%SZ):$$:$RANDOM"
+    nonce="$(new_claim_nonce)" || {
+        echo "candidate-review-repair: unable to create a unique repair claim for $id" >&2
+        return 1
+    }
+    claim_token="candidate-repair:$id:$next:$(date -u +%Y%m%dT%H%M%SZ):$nonce"
 
     if gc bd update "$id" --if-status "$status" --if-assignee "$assignee" \
         --status in_progress --assignee "$claim_token" \
@@ -195,6 +286,14 @@ route_repair() {
         [ "$rc" -eq 13 ] && return 0
         echo "candidate-review-repair: failed to claim $id (exit $rc)" >&2
         return 1
+    fi
+
+    local claimed
+    if ! claimed="$(gc bd show "$id" --json)" || ! claim_still_owns_contract \
+        "$(printf '%s' "$bead_json" | jq -c '.')" \
+        "$(printf '%s' "$claimed" | jq -c '.[0]')" "$claim_token"; then
+        echo "candidate-review-repair: repair claim for $id changed before dispatch" >&2
+        return 0
     fi
 
     if ! output="$(gc sling "$route" "$id" --on "$workflow" --reassign \
@@ -212,6 +311,7 @@ route_repair() {
     echo "candidate-review-repair: queued $id attempt $next via $route ($workflow)"
 }
 
+BEAD_LINES="$(printf '%s' "$BEADS_JSON" | jq -c '.[]')"
 while IFS= read -r bead_json; do
     [ -n "$bead_json" ] || continue
     state="$(read_meta "$bead_json" gc.candidate_review_state)"
@@ -219,4 +319,4 @@ while IFS= read -r bead_json; do
         published_pending_review|review_queued) route_review "$bead_json" ;;
         *) route_repair "$bead_json" ;;
     esac
-done < <(printf '%s' "$BEADS_JSON" | jq -c '.[]')
+done <<< "$BEAD_LINES"

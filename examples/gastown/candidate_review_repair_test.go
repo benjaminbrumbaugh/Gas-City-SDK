@@ -121,15 +121,19 @@ func TestCandidateReviewRepairOrderRoutesOnlyExplicitMechanicalHolds(t *testing.
 		t.Fatal(err)
 	}
 	logFile := filepath.Join(t.TempDir(), "gc.log")
+	claimStateFile := filepath.Join(t.TempDir(), "claim-state")
 	env := append(os.Environ(),
 		"PATH="+filepath.Dir(fakeGC)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GC_QUERY="+queryFile,
 		"FAKE_GC_LOG="+logFile,
+		"FAKE_GC_SHOW="+queryFile,
+		"FAKE_GC_CLAIM_STATE="+claimStateFile,
 		"GC_PACK_STATE_DIR="+t.TempDir(),
 		"PACK_DIR="+root,
 	)
-	if out, err := runCmdWithEnv(t, "", env, "bash", orderScript); err != nil {
-		t.Fatalf("candidate repair order: %v\n%s", err, out)
+	orderOutput, err := runCmdWithEnv(t, "", env, "bash", orderScript)
+	if err != nil {
+		t.Fatalf("candidate repair order: %v\n%s", err, orderOutput)
 	}
 	logData, err := os.ReadFile(logFile)
 	if err != nil {
@@ -155,7 +159,7 @@ func TestCandidateReviewRepairOrderRoutesOnlyExplicitMechanicalHolds(t *testing.
 		t.Fatalf("exhausted hold was dispatched again; log:\n%s", log)
 	}
 	if strings.Count(log, "sling rig/repairer stale-queued-1") != 1 {
-		t.Fatalf("stale queued hold was not recovered exactly once; log:\n%s", log)
+		t.Fatalf("stale queued hold was not recovered exactly once; log:\n%s\ntrace:\n%s", log, orderOutput)
 	}
 	if strings.Contains(log, "fresh-active-1") {
 		t.Fatalf("fresh active hold was disturbed; log:\n%s", log)
@@ -271,6 +275,89 @@ func TestCandidateReviewRepairWorkerPublishesCurrentTargetCandidate(t *testing.T
 	}
 }
 
+func TestCandidateReviewRepairWorkerRejectsTargetSymlinkBeforeMutation(t *testing.T) {
+	root := exampleDir()
+	worker := filepath.Join(root, "assets", "scripts", "candidate-review-repair-worker.sh")
+	fakeGC := writeCandidateRepairFakeGC(t)
+	temp := t.TempDir()
+	remote := filepath.Join(temp, "origin.git")
+	seed := filepath.Join(temp, "seed")
+	work := filepath.Join(temp, "work")
+	outside := filepath.Join(temp, "outside")
+	runCandidateRepairGit(t, "init", "--bare", remote)
+	runCandidateRepairGit(t, "init", "-b", "main", seed)
+	runCandidateRepairGit(t, "-C", seed, "config", "user.email", "test@example.invalid")
+	runCandidateRepairGit(t, "-C", seed, "config", "user.name", "Candidate Repair Test")
+	if err := os.Mkdir(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outsideFile := filepath.Join(outside, "preserve.txt")
+	writeCandidateRepairFile(t, outsideFile, "preserve\n")
+	if err := os.Symlink(outside, filepath.Join(seed, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	runCandidateRepairGit(t, "-C", seed, "add", "linked")
+	runCandidateRepairGit(t, "-C", seed, "commit", "-m", "target symlink")
+	runCandidateRepairGit(t, "-C", seed, "remote", "add", "origin", remote)
+	runCandidateRepairGit(t, "-C", seed, "push", "origin", "main")
+	runCandidateRepairGit(t, "clone", remote, work)
+	runCandidateRepairGit(t, "-C", work, "config", "user.email", "test@example.invalid")
+	runCandidateRepairGit(t, "-C", work, "config", "user.name", "Candidate Repair Test")
+	runCandidateRepairGit(t, "-C", work, "switch", "-c", "candidate")
+	runCandidateRepairGit(t, "-C", work, "rm", "linked")
+	runCandidateRepairGit(t, "-C", work, "commit", "-m", "remove target symlink")
+	writeCandidateRepairFile(t, filepath.Join(work, "fix.txt"), "fixed\n")
+	runCandidateRepairGit(t, "-C", work, "add", "fix.txt")
+	runCandidateRepairGit(t, "-C", work, "commit", "-m", "candidate")
+	runCandidateRepairGit(t, "-C", work, "push", "origin", "candidate")
+
+	beadFile := filepath.Join(temp, "bead.json")
+	bead := map[string]any{"id": "target-symlink", "status": "in_progress", "assignee": "rig/repairer", "metadata": map[string]string{
+		"gc.candidate_review_state":          "queued",
+		"gc.candidate_review_hold_class":     "mechanical",
+		"gc.candidate_review_owner":          "rig/repairer",
+		"gc.candidate_review_repair_route":   "rig/repairer",
+		"gc.candidate_review_review_route":   "rig/reviewer",
+		"gc.candidate_review_target":         "main",
+		"gc.candidate_review_source":         "candidate",
+		"gc.candidate_review_residue":        "[]",
+		"gc.candidate_review_landed":         `["linked"]`,
+		"gc.candidate_review_token":          "repair-token-symlink",
+		"gc.candidate_review_repair_attempt": "1",
+		"gc.candidate_review_max_attempts":   "3",
+	}}
+	beadJSON, err := json.Marshal([]any{bead})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(beadFile, beadJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logFile := filepath.Join(temp, "gc.log")
+	env := append(os.Environ(),
+		"PATH="+filepath.Dir(fakeGC)+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FAKE_GC_BEAD="+beadFile,
+		"FAKE_GC_LOG="+logFile,
+		"GC_AGENT=rig/repairer",
+		"GC_CANDIDATE_REPAIR_TOKEN=repair-token-symlink",
+		"GC_CANDIDATE_REPAIR_WORK_DIR="+work,
+	)
+	out, err := runCmdWithEnv(t, work, env, "bash", worker, "target-symlink")
+	if err == nil || !strings.Contains(string(out), "target path is a symlink") {
+		t.Fatalf("worker accepted target symlink: err=%v output=%s", err, out)
+	}
+	logData, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logData), "bd update") || strings.Contains(string(logData), "sling ") {
+		t.Fatalf("target symlink caused mutation or routing; log:\n%s", logData)
+	}
+	if got := string(readCandidateRepairFile(t, outsideFile)); got != "preserve\n" {
+		t.Fatalf("target symlink escape target changed: %q", got)
+	}
+}
+
 func TestCandidateReviewRepairOrderDoesNotDispatchAfterLosingClaimCAS(t *testing.T) {
 	root := exampleDir()
 	fakeGC := writeCandidateRepairFakeGC(t)
@@ -333,6 +420,19 @@ func TestCandidateReviewRepairWorkerPreservesUncertainWork(t *testing.T) {
 		work := t.TempDir()
 		runCandidateRepairGit(t, "init", "-b", "candidate", work)
 		assertCandidateRepairWorkerFailsClosed(t, work, "candidate", `["safe\n/var/tmp/outside"]`, "control-character", "")
+	})
+	t.Run("NUL path", func(t *testing.T) {
+		work := t.TempDir()
+		runCandidateRepairGit(t, "init", "-b", "candidate", work)
+		assertCandidateRepairWorkerFailsClosed(t, work, "candidate", `["safe\u0000.txt"]`, "control-character", "")
+	})
+	t.Run("declared directory", func(t *testing.T) {
+		work := t.TempDir()
+		runCandidateRepairGit(t, "init", "-b", "candidate", work)
+		if err := os.Mkdir(filepath.Join(work, "directory"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		assertCandidateRepairWorkerFailsClosed(t, work, "candidate", `["directory"]`, "directory", "")
 	})
 	t.Run("nested work directory", func(t *testing.T) {
 		work := t.TempDir()
@@ -479,6 +579,9 @@ func assertCandidateRepairWorkerFailsClosed(t *testing.T, work, source, residue,
 	if strings.Contains(string(logData), "sling ") {
 		t.Fatalf("unsafe candidate was routed after fail-closed check; log:\n%s", logData)
 	}
+	if strings.Contains(string(logData), "bd update") {
+		t.Fatalf("unsafe candidate was mutated before fail-closed check; log:\n%s", logData)
+	}
 }
 
 func writeCandidateRepairFakeGC(t *testing.T) string {
@@ -494,11 +597,28 @@ if [ "$1" = "bd" ] && [ "$2" = "query" ]; then
   exit 0
 fi
 if [ "$1" = "bd" ] && [ "$2" = "show" ]; then
-  cat "${FAKE_GC_BEAD:?}"
+  show_file="${FAKE_GC_BEAD:-${FAKE_GC_SHOW:?}}"
+  if [ -n "${FAKE_GC_CLAIM_STATE:-}" ] && [ -s "$FAKE_GC_CLAIM_STATE" ]; then
+    token=$(cat "$FAKE_GC_CLAIM_STATE")
+    jq --arg id "$3" --arg token "$token" \
+      'map(select(.id == $id)) | .[0].status = "in_progress" | .[0].assignee = $token | .[0].metadata["gc.candidate_review_state"] = "queued" | .[0].metadata["gc.candidate_review_token"] = $token' \
+      "$show_file"
+  else
+    cat "$show_file"
+  fi
   exit 0
 fi
 if [ "$1" = "bd" ] && [ "$2" = "update" ] && [ -n "${FAKE_GC_UPDATE_EXIT:-}" ]; then
   exit "$FAKE_GC_UPDATE_EXIT"
+fi
+if [ "$1" = "bd" ] && [ "$2" = "update" ] && [ -n "${FAKE_GC_CLAIM_STATE:-}" ]; then
+  previous=""
+  for arg in "$@"; do
+    if [ "$previous" = "--assignee" ]; then
+      printf '%s' "$arg" > "$FAKE_GC_CLAIM_STATE"
+    fi
+    previous="$arg"
+  done
 fi
 exit 0
 `
