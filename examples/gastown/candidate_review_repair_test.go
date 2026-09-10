@@ -140,7 +140,11 @@ func TestCandidateReviewRepairWorkerPublishesCurrentTargetCandidate(t *testing.T
 	runCandidateRepairGit(t, "-C", seed, "commit", "-m", "target")
 	runCandidateRepairGit(t, "-C", seed, "remote", "add", "origin", remote)
 	runCandidateRepairGit(t, "-C", seed, "push", "origin", "main")
-	runCandidateRepairGit(t, "clone", remote, work)
+	// The bare remote's default HEAD is still the Git default branch, while
+	// this fixture intentionally publishes only main and candidate. Clone the
+	// intended base explicitly so candidate is a descendant of main rather
+	// than an unrelated root that a real repair must reject.
+	runCandidateRepairGit(t, "clone", "--branch", "main", remote, work)
 	runCandidateRepairGit(t, "-C", work, "config", "user.email", "test@example.invalid")
 	runCandidateRepairGit(t, "-C", work, "config", "user.name", "Candidate Repair Test")
 	runCandidateRepairGit(t, "-C", work, "switch", "-c", "candidate")
