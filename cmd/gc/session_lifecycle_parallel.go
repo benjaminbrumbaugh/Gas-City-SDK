@@ -2132,6 +2132,23 @@ func confirmPendingStart(currentState string) bool {
 	return sessionpkg.StateConfirmsPendingStart(sessionpkg.State(strings.TrimSpace(currentState)))
 }
 
+// startedProviderFenceIdentityForCommit preserves the account identity of an
+// already-running runtime when a warm reuse or recovery confirmation commits
+// refreshed metadata. The desired identity is authoritative only for a fresh
+// start (or for legacy rows that have no launch/runtime identity yet).
+func startedProviderFenceIdentityForCommit(info sessionpkg.Info, tp TemplateParams, startedFresh bool) string {
+	if startedFresh {
+		return strings.TrimSpace(tp.ProviderFenceIdentity)
+	}
+	if identity := strings.TrimSpace(info.LaunchProviderFenceIdentity); identity != "" {
+		return identity
+	}
+	if identity := strings.TrimSpace(info.StartedProviderFenceIdentity); identity != "" {
+		return identity
+	}
+	return strings.TrimSpace(tp.ProviderFenceIdentity)
+}
+
 func commitStartResultTraced(
 	result startResult,
 	sessFront *sessionpkg.Store,
@@ -2180,10 +2197,7 @@ func commitStartResultTraced(
 		primedAt = clk.Now()
 		promptHash = result.prepared.promptHash
 	}
-	startedProviderFenceIdentity := strings.TrimSpace(info.LaunchProviderFenceIdentity)
-	if result.startedFresh {
-		startedProviderFenceIdentity = strings.TrimSpace(tp.ProviderFenceIdentity)
-	}
+	startedProviderFenceIdentity := startedProviderFenceIdentityForCommit(info, tp, result.startedFresh)
 	metadata := sessionpkg.CommitStartedPatch(sessionpkg.CommitStartedPatchInput{
 		CoreHash:                     result.prepared.coreHash,
 		LiveHash:                     result.prepared.liveHash,
@@ -2434,10 +2448,7 @@ func recoverRunningPendingCreate(
 		primedAt = now
 		promptHash = prepared.promptHash
 	}
-	startedProviderFenceIdentity := strings.TrimSpace(info.LaunchProviderFenceIdentity)
-	if startedProviderFenceIdentity == "" {
-		startedProviderFenceIdentity = strings.TrimSpace(tp.ProviderFenceIdentity)
-	}
+	startedProviderFenceIdentity := startedProviderFenceIdentityForCommit(info, tp, false)
 	metadata := sessionpkg.CommitStartedPatch(sessionpkg.CommitStartedPatchInput{
 		CoreHash:                     prepared.coreHash,
 		LiveHash:                     prepared.liveHash,

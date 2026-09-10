@@ -152,6 +152,45 @@ func TestProviderUsageFenceIdentityForRuntimePrefersLaunchedAccount(t *testing.T
 	}
 }
 
+func TestStartedProviderFenceIdentityForCommitPreservesRunningAccount(t *testing.T) {
+	tp := TemplateParams{ProviderFenceIdentity: "account:desired"}
+	tests := []struct {
+		name         string
+		info         sessionpkg.Info
+		startedFresh bool
+		want         string
+	}{
+		{
+			name:         "fresh start uses desired account",
+			info:         sessionpkg.Info{StartedProviderFenceIdentity: "account:old", LaunchProviderFenceIdentity: "account:launch"},
+			startedFresh: true,
+			want:         "account:desired",
+		},
+		{
+			name: "warm reuse preserves running account",
+			info: sessionpkg.Info{StartedProviderFenceIdentity: "account:running"},
+			want: "account:running",
+		},
+		{
+			name: "recovery promotes write-ahead account",
+			info: sessionpkg.Info{StartedProviderFenceIdentity: "account:old", LaunchProviderFenceIdentity: "account:launch"},
+			want: "account:launch",
+		},
+		{
+			name: "legacy row falls back to desired account",
+			want: "account:desired",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := startedProviderFenceIdentityForCommit(test.info, tp, test.startedFresh); got != test.want {
+				t.Fatalf("started identity = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestReconcileSessionBeads_RepointedHealthyAccountClearsOldFence(t *testing.T) {
 	env := newRestartRequestTestEnv()
 	env.cfg = &config.City{
