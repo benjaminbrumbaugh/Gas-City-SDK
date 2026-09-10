@@ -497,12 +497,13 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	if err != nil {
 		return TemplateParams{}, fmt.Errorf("agent %q provider account environment: %w", qualifiedName, err)
 	}
-	providerFenceEnv := mergeEnv(expandEnvMap(providerLayer.Env), providerFenceAgentEnv(cfgAgent.Env))
+	passthrough := passthroughEnv()
+	providerFenceEnv := mergeEnv(passthrough, expandEnvMap(providerLayer.Env), providerFenceAgentEnv(cfgAgent.Env))
 	if providerFenceEnv == nil {
 		providerFenceEnv = make(map[string]string)
 	}
 	providerFenceMaterialCount := 0
-	env := mergeEnv(passthroughEnv(), expandEnvMap(workspaceEnv), expandEnvMap(resolved.Env), agentEnv)
+	env := mergeEnv(passthrough, expandEnvMap(workspaceEnv), expandEnvMap(resolved.Env), agentEnv)
 	processenv.PrependGCBinDirToPATH(env, env["GC_BIN"])
 	env = convergence.ScrubTokenEnv(env)
 
@@ -756,6 +757,11 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		CopyFiles:              copyFiles,
 	}
 
+	// Derive identity from the effective launch environment, after all normal
+	// precedence and upstream writes. Preserve synthetic account-material
+	// entries used when an upstream binds credentials to an arbitrary env name,
+	// then discard every operational variable before retaining TemplateParams.
+	providerFenceEnv = providerFenceAccountEnv(mergeEnv(providerFenceEnv, env))
 	providerFenceIdentity, err := providerUsageFenceIdentityForCity(p.cityPath, resolved, providerFenceEnv)
 	if err != nil {
 		return TemplateParams{}, fmt.Errorf("agent %q provider account identity: %w", qualifiedName, err)

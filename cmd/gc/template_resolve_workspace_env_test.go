@@ -46,6 +46,7 @@ func TestResolveTemplateMergesWorkspaceEnv(t *testing.T) {
 }
 
 func TestResolveTemplateAgentEnvWinsOverWorkspaceEnv(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "ambient-account")
 	cityPath := t.TempDir()
 	writeTemplateResolveCityConfig(t, cityPath, "file")
 
@@ -55,8 +56,9 @@ func TestResolveTemplateAgentEnvWinsOverWorkspaceEnv(t *testing.T) {
 		workspace: &config.Workspace{
 			Provider: "test",
 			Env: map[string]string{
-				"GC_TARGET_BRANCH": "boylec/develop",
-				"FROM_WORKSPACE":   "shared",
+				"GC_TARGET_BRANCH":  "boylec/develop",
+				"FROM_WORKSPACE":    "shared",
+				"ANTHROPIC_API_KEY": "workspace-account",
 			},
 		},
 		providers:  map[string]config.ProviderSpec{"test": {Command: "echo", PromptMode: "none"}},
@@ -83,6 +85,9 @@ func TestResolveTemplateAgentEnvWinsOverWorkspaceEnv(t *testing.T) {
 	}
 	if got := tp.ProviderFenceEnv["CLAUDE_CONFIG_DIR"]; got != "/accounts/mayor" {
 		t.Errorf("ProviderFenceEnv CLAUDE_CONFIG_DIR = %q, want account selector", got)
+	}
+	if got := tp.ProviderFenceEnv["ANTHROPIC_API_KEY"]; got != "workspace-account" {
+		t.Errorf("ProviderFenceEnv ANTHROPIC_API_KEY = %q, want effective workspace credential", got)
 	}
 	if _, included := tp.ProviderFenceEnv["GC_TARGET_BRANCH"]; included {
 		t.Error("ProviderFenceEnv contains unrelated role environment")

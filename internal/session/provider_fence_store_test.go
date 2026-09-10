@@ -48,3 +48,31 @@ func TestProviderFenceStoreDoesNotReturnExpiredRecords(t *testing.T) {
 		t.Fatalf("expired fences = %#v, want none", got)
 	}
 }
+
+func TestProviderFenceStoreFailsClosedWhenUnavailable(t *testing.T) {
+	var store *Store
+	if _, err := store.ActiveProviderFences(time.Now()); err == nil {
+		t.Fatal("nil provider fence store returned an empty fence set")
+	}
+}
+
+func TestProviderFenceStoreFailsClosedOnMalformedActiveRecord(t *testing.T) {
+	mem := beads.NewMemStore()
+	store := NewStore(beads.SessionStore{Store: mem})
+	if _, err := mem.Create(beads.Bead{
+		Title:  "provider usage fence",
+		Status: "open",
+		Type:   WaitBeadType,
+		Labels: []string{ProviderFenceBeadLabel},
+		Metadata: map[string]string{
+			"kind":                    providerFenceBeadKind,
+			"provider_fence_identity": "account:a",
+			"fenced_until":            "not-a-time",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ActiveProviderFences(time.Now()); err == nil {
+		t.Fatal("malformed durable provider fence was treated as absent")
+	}
+}

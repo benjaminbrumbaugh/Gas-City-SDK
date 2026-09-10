@@ -32,7 +32,7 @@ type ProviderFence struct {
 // fence store as an empty store.
 func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 	if s == nil || s.store.Store == nil {
-		return nil, nil
+		return nil, fmt.Errorf("provider fence store is unavailable")
 	}
 	rows, err := s.store.List(beads.ListQuery{
 		Label:         ProviderFenceBeadLabel,
@@ -51,10 +51,22 @@ func (s *Store) ActiveProviderFences(now time.Time) ([]ProviderFence, error) {
 		}
 		identity := strings.TrimSpace(row.Metadata["provider_fence_identity"])
 		until, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(row.Metadata["fenced_until"]))
-		if identity == "" || parseErr != nil || !until.After(now) {
+		if identity == "" {
+			return nil, fmt.Errorf("provider fence %q has empty identity", row.ID)
+		}
+		if parseErr != nil {
+			return nil, fmt.Errorf("provider fence %q has invalid deadline: %w", row.ID, parseErr)
+		}
+		if !until.After(now) {
 			continue
 		}
-		observedAt, _ := time.Parse(time.RFC3339, strings.TrimSpace(row.Metadata["observed_at"]))
+		observedAt := time.Time{}
+		if raw := strings.TrimSpace(row.Metadata["observed_at"]); raw != "" {
+			observedAt, parseErr = time.Parse(time.RFC3339, raw)
+			if parseErr != nil {
+				return nil, fmt.Errorf("provider fence %q has invalid observation time: %w", row.ID, parseErr)
+			}
+		}
 		candidate := ProviderFence{
 			Identity:   identity,
 			Until:      until,

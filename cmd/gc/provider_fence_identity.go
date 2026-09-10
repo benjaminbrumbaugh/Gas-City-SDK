@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	providerFenceIdentityKeyFile = "provider-fence-identity.key"
-	providerFenceIdentityKeySize = 32
+	providerFenceIdentityKeyFile       = "provider-fence-identity.key"
+	providerFenceIdentityKeyDigestFile = "provider-fence-identity.key.sha256"
+	providerFenceIdentityKeySize       = 32
 )
 
 // providerUsageFenceIdentityForCity derives the opaque account identity used
@@ -105,15 +106,30 @@ func isProviderFenceAccountEnv(name string) bool {
 	return false
 }
 
+func providerFenceAccountEnv(env map[string]string) map[string]string {
+	accountEnv := make(map[string]string)
+	for name, value := range env {
+		if isProviderFenceAccountEnv(name) {
+			accountEnv[name] = value
+		}
+	}
+	return accountEnv
+}
+
 func loadOrCreateProviderFenceIdentityKey(cityPath string) ([]byte, error) {
 	cityPath = strings.TrimSpace(cityPath)
 	if cityPath == "" {
 		return nil, errors.New("city path is required")
 	}
 	path := filepath.Join(cityPath, ".gc", providerFenceIdentityKeyFile)
+	digestPath := filepath.Join(cityPath, ".gc", providerFenceIdentityKeyDigestFile)
 	var key []byte
 	err := session.WithCitySessionIdentifierLocks(cityPath, []string{"internal:provider-fence-identity-key"}, func() error {
 		data, found, err := readProviderFenceIdentityKey(path)
+		if err != nil {
+			return err
+		}
+		digestData, digestFound, err := readProviderFenceIdentityKey(digestPath)
 		if err != nil {
 			return err
 		}
@@ -121,8 +137,21 @@ func loadOrCreateProviderFenceIdentityKey(cityPath string) ([]byte, error) {
 			if len(data) != providerFenceIdentityKeySize {
 				return fmt.Errorf("provider fence identity key %q has invalid length %d", path, len(data))
 			}
+			digest := sha256.Sum256(data)
+			encodedDigest := []byte(hex.EncodeToString(digest[:]))
+			if digestFound && !hmac.Equal([]byte(strings.TrimSpace(string(digestData))), encodedDigest) {
+				return fmt.Errorf("provider fence identity key %q does not match its continuity digest", path)
+			}
+			if !digestFound {
+				if err := fsys.WriteFileAtomic(fsys.OSFS{}, digestPath, encodedDigest, 0o600); err != nil {
+					return fmt.Errorf("writing provider fence identity continuity digest %q: %w", digestPath, err)
+				}
+			}
 			key = append([]byte(nil), data...)
 			return nil
+		}
+		if digestFound {
+			return fmt.Errorf("provider fence identity key %q is missing while continuity digest %q exists", path, digestPath)
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return fmt.Errorf("creating provider fence identity directory: %w", err)
@@ -143,6 +172,10 @@ func loadOrCreateProviderFenceIdentityKey(cityPath string) ([]byte, error) {
 		}
 		if err := fsys.WriteFileAtomic(fsys.OSFS{}, path, data, 0o600); err != nil {
 			return fmt.Errorf("writing provider fence identity key %q: %w", path, err)
+		}
+		digest := sha256.Sum256(data)
+		if err := fsys.WriteFileAtomic(fsys.OSFS{}, digestPath, []byte(hex.EncodeToString(digest[:])), 0o600); err != nil {
+			return fmt.Errorf("writing provider fence identity continuity digest %q: %w", digestPath, err)
 		}
 		key = append([]byte(nil), data...)
 		return nil

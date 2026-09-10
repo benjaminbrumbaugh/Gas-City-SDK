@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -103,6 +105,35 @@ func TestProviderUsageFenceIdentityKeepsDistinctLiteralAccountsSeparate(t *testi
 	}
 	if second == first {
 		t.Fatalf("distinct literal account identities collapsed to %q", second)
+	}
+}
+
+func TestProviderUsageFenceIdentityKeyDeletionFailsClosed(t *testing.T) {
+	cityPath := t.TempDir()
+	provider := &config.ResolvedProvider{Name: "claude", BuiltinAncestor: "claude"}
+	if _, err := providerUsageFenceIdentityForCity(cityPath, provider, map[string]string{"ANTHROPIC_API_KEY": "account-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(cityPath, ".gc", providerFenceIdentityKeyFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := providerUsageFenceIdentityForCity(cityPath, provider, map[string]string{"ANTHROPIC_API_KEY": "account-a"}); err == nil {
+		t.Fatal("deleted identity key was silently regenerated")
+	}
+}
+
+func TestProviderUsageFenceIdentityKeyReplacementFailsClosed(t *testing.T) {
+	cityPath := t.TempDir()
+	provider := &config.ResolvedProvider{Name: "claude", BuiltinAncestor: "claude"}
+	if _, err := providerUsageFenceIdentityForCity(cityPath, provider, map[string]string{"ANTHROPIC_API_KEY": "account-a"}); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(cityPath, ".gc", providerFenceIdentityKeyFile)
+	if err := os.WriteFile(keyPath, []byte("replacement-key-material-0000000"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := providerUsageFenceIdentityForCity(cityPath, provider, map[string]string{"ANTHROPIC_API_KEY": "account-a"}); err == nil {
+		t.Fatal("replaced identity key was silently accepted")
 	}
 }
 
