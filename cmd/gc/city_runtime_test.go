@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
@@ -722,22 +723,23 @@ func TestTickDebouncer_RearmsAfterFire(t *testing.T) {
 }
 
 func TestTickDebouncer_IndependentInstances(t *testing.T) {
-	a := newTickDebouncer()
-	b := newTickDebouncer()
-	debounce := 20 * time.Millisecond
-	a.arm(debounce)
-	b.arm(debounce)
-	if got := drainFiredCount(a, debounce+50*time.Millisecond); got != 1 {
-		t.Fatalf("a fired count = %d, want 1", got)
-	}
-	if got := drainFiredCount(b, 5*time.Millisecond); got != 1 {
-		t.Fatalf("b fired count = %d, want 1 (independent timer state)", got)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		a := newTickDebouncer()
+		b := newTickDebouncer()
+		debounce := 20 * time.Millisecond
+		a.arm(debounce)
+		b.arm(debounce)
+		if got := drainFiredCount(a, debounce+50*time.Millisecond); got != 1 {
+			t.Fatalf("a fired count = %d, want 1", got)
+		}
+		if got := drainFiredCount(b, 5*time.Millisecond); got != 1 {
+			t.Fatalf("b fired count = %d, want 1 (independent timer state)", got)
+		}
+	})
 }
 
 // drainFiredCount counts how many fires are available on the debouncer's
-// channel within window. It returns once window elapses with no further
-// fires for at least a short tail, so the count is stable.
+// channel before the observation window elapses.
 func drainFiredCount(d *tickDebouncer, window time.Duration) int {
 	deadline := time.After(window)
 	count := 0
