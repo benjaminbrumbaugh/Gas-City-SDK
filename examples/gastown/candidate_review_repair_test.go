@@ -196,6 +196,15 @@ func TestCandidateReviewRepairWorkerPublishesCurrentTargetCandidate(t *testing.T
 	runCandidateRepairGit(t, "-C", work, "add", "fix.txt", "agent-plan.md", "overlap.md")
 	runCandidateRepairGit(t, "-C", work, "commit", "-m", "candidate")
 	runCandidateRepairGit(t, "-C", work, "push", "origin", "candidate")
+	lockRoot := filepath.Join(work, ".git", "gc-candidate-review-locks")
+	if err := os.MkdirAll(lockRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCandidateRepairFile(t, filepath.Join(lockRoot, "writer"), host+"\n99999999\nstale-token\n")
 	writeCandidateRepairFile(t, filepath.Join(seed, "new-target.txt"), "current target\n")
 	runCandidateRepairGit(t, "-C", seed, "add", "new-target.txt")
 	runCandidateRepairGit(t, "-C", seed, "commit", "-m", "advance target")
@@ -339,6 +348,20 @@ func TestCandidateReviewRepairWorkerPreservesUncertainWork(t *testing.T) {
 		work := t.TempDir()
 		runCandidateRepairGit(t, "init", "-b", "main", work)
 		assertCandidateRepairWorkerFailsClosed(t, work, "main", `[]`, "source and target must be distinct", "")
+	})
+	t.Run("live repository writer lock", func(t *testing.T) {
+		work := t.TempDir()
+		runCandidateRepairGit(t, "init", "-b", "candidate", work)
+		lockRoot := filepath.Join(work, ".git", "gc-candidate-review-locks")
+		if err := os.MkdirAll(lockRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		host, err := os.Hostname()
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeCandidateRepairFile(t, filepath.Join(lockRoot, "writer"), fmt.Sprintf("%s\n%d\nlive-token\n", host, os.Getpid()))
+		assertCandidateRepairWorkerFailsClosed(t, work, "candidate", `[]`, "another repair writer owns", "")
 	})
 	t.Run("symlink parent escape", func(t *testing.T) {
 		work := t.TempDir()
