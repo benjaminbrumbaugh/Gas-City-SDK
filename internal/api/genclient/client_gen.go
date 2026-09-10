@@ -2940,17 +2940,17 @@ type OKWithIDResponseBody struct {
 
 // Observation defines model for Observation.
 type Observation struct {
-	City               string                `json:"city"`
-	ClaimLeases        ClaimLeaseObservation `json:"claim_leases"`
-	Completeness       Completeness          `json:"completeness"`
-	Cycle              Cycle                 `json:"cycle"`
-	Generation         Generation            `json:"generation"`
-	SchemaVersion      int64                 `json:"schema_version"`
-	TemplateCount      int64                 `json:"template_count"`
-	Templates          *[]TemplateRow        `json:"templates"`
-	TemplatesTruncated bool                  `json:"templates_truncated"`
-	Totals             Totals                `json:"totals"`
-	Trace              TraceState            `json:"trace"`
+	City               string                 `json:"city"`
+	ClaimLeases        *ClaimLeaseObservation `json:"claim_leases,omitempty"`
+	Completeness       Completeness           `json:"completeness"`
+	Cycle              Cycle                  `json:"cycle"`
+	Generation         Generation             `json:"generation"`
+	SchemaVersion      int64                  `json:"schema_version"`
+	TemplateCount      int64                  `json:"template_count"`
+	Templates          *[]TemplateRow         `json:"templates"`
+	TemplatesTruncated bool                   `json:"templates_truncated"`
+	Totals             Totals                 `json:"totals"`
+	Trace              TraceState             `json:"trace"`
 }
 
 // OptionChoiceDTO defines model for OptionChoiceDTO.

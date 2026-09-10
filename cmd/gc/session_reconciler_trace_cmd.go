@@ -240,18 +240,18 @@ func writeReconciliationSnapshotJSON(stdout, stderr io.Writer, obs *reconcileobs
 // observation. The CLI's common string schema version is deliberately separate
 // from the API model's integer schema version.
 type reconciliationSnapshotJSON struct {
-	SchemaVersion      string                                     `json:"schema_version"`
-	OK                 bool                                       `json:"ok"`
-	City               string                                     `json:"city"`
-	Generation         reconcileobservation.Generation            `json:"generation"`
-	Cycle              reconcileobservation.Cycle                 `json:"cycle"`
-	Completeness       reconcileobservation.Completeness          `json:"completeness"`
-	Totals             reconcileobservation.Totals                `json:"totals"`
-	Templates          []reconcileobservation.TemplateRow         `json:"templates"`
-	TemplatesTruncated bool                                       `json:"templates_truncated"`
-	TemplateCount      int                                        `json:"template_count"`
-	Trace              reconcileobservation.TraceState            `json:"trace"`
-	ClaimLeases        reconcileobservation.ClaimLeaseObservation `json:"claim_leases"`
+	SchemaVersion      string                                      `json:"schema_version"`
+	OK                 bool                                        `json:"ok"`
+	City               string                                      `json:"city"`
+	Generation         reconcileobservation.Generation             `json:"generation"`
+	Cycle              reconcileobservation.Cycle                  `json:"cycle"`
+	Completeness       reconcileobservation.Completeness           `json:"completeness"`
+	Totals             reconcileobservation.Totals                 `json:"totals"`
+	Templates          []reconcileobservation.TemplateRow          `json:"templates"`
+	TemplatesTruncated bool                                        `json:"templates_truncated"`
+	TemplateCount      int                                         `json:"template_count"`
+	Trace              reconcileobservation.TraceState             `json:"trace"`
+	ClaimLeases        *reconcileobservation.ClaimLeaseObservation `json:"claim_leases,omitempty"`
 }
 
 func newTraceStartCmd(stdout, stderr io.Writer) *cobra.Command {

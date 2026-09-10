@@ -4013,7 +4013,7 @@ export const zTraceState = z.object({
 
 export const zObservation = z.object({
     city: z.string(),
-    claim_leases: zClaimLeaseObservation,
+    claim_leases: zClaimLeaseObservation.optional(),
     completeness: zCompleteness,
     cycle: zCycle,
     generation: zGeneration,

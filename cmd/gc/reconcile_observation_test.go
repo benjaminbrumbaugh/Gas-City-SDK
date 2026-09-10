@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"reflect"
@@ -28,6 +29,16 @@ func runCycle(cr *CityRuntime, trigger string, completion TraceCompletionStatus,
 		fill()
 	}
 	cr.publishReconcileObservation(completion, nil, time.Now())
+}
+
+func TestReconcileObservationSchemaV1OmitsAbsentClaimLeases(t *testing.T) {
+	payload, err := json.Marshal(reconcileobservation.Observation{SchemaVersion: reconcileobservation.SchemaVersion})
+	if err != nil {
+		t.Fatalf("marshal legacy-compatible observation: %v", err)
+	}
+	if strings.Contains(string(payload), `"claim_leases"`) {
+		t.Fatalf("schema-v1 zero observation unexpectedly requires claim_leases: %s", payload)
+	}
 }
 
 // --- 1. every completion publishes, including the ones that went wrong ------
@@ -117,6 +128,9 @@ func TestReconcileObservationPublishesClaimLeaseDiagnostics(t *testing.T) {
 
 	runCycle(cr, "patrol", TraceCompletionCompleted, nil)
 	got := cr.ReconciliationObservation()
+	if got.ClaimLeases == nil {
+		t.Fatal("claim lease observation is nil")
+	}
 	if !got.ClaimLeases.LastAttemptAt.Equal(attempt) || !got.ClaimLeases.LastSuccessfulAt.Equal(success) {
 		t.Fatalf("claim lease timestamps = %#v, want controller result", got.ClaimLeases)
 	}

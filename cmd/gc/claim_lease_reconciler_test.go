@@ -37,14 +37,6 @@ type claimLeaseTestStore struct {
 	leaseExpiresAt   time.Time
 }
 
-type claimLeaseListErrorProvider struct {
-	runtime.Provider
-}
-
-func (p claimLeaseListErrorProvider) ListRunning(string) ([]string, error) {
-	return nil, errors.New("runtime inventory unavailable")
-}
-
 type concurrentClaimLeaseTestStore struct {
 	*claimLeaseTestStore
 	active  atomic.Int32
@@ -224,34 +216,22 @@ func TestReconcileClaimLeasesRenewsExpiredActiveRigBeforeReclaimGrace(t *testing
 	}
 }
 
-func TestReconcileClaimLeasesRejectsRecycledNamesTokensDrainingAndProviderFence(t *testing.T) {
+func TestReconcileClaimLeasesRejectsIncompleteIdentityAndDrainingOwners(t *testing.T) {
 	tests := []struct {
-		name          string
-		info          session.Info
-		start         bool
-		providerID    string
-		providerToken string
-		wantCalls     int
+		name string
+		info session.Info
 	}{
 		{
-			name:  "recycled runtime name is fenced by session identity",
-			info:  session.Info{ID: "old-session", State: session.StateActive, MetadataState: string(session.StateActive), SessionName: "recycled", SessionNameMetadata: "recycled", InstanceToken: "old-token"},
-			start: true, providerID: "replacement-session", providerToken: "new-token", wantCalls: 0,
+			name: "missing persisted session name",
+			info: session.Info{ID: "session", State: session.StateActive, MetadataState: string(session.StateActive), SessionName: "worker", InstanceToken: "token"},
 		},
 		{
-			name:  "replaced token is fenced",
-			info:  session.Info{ID: "session", State: session.StateActive, MetadataState: string(session.StateActive), SessionName: "worker", SessionNameMetadata: "worker", InstanceToken: "old-token"},
-			start: true, providerToken: "new-token", wantCalls: 0,
+			name: "missing persisted instance token",
+			info: session.Info{ID: "session", State: session.StateActive, MetadataState: string(session.StateActive), SessionName: "worker", SessionNameMetadata: "worker"},
 		},
 		{
-			name:  "draining owner is not renewed",
-			info:  session.Info{ID: "session", State: session.StateDraining, MetadataState: string(session.StateDraining), SessionName: "worker", SessionNameMetadata: "worker", InstanceToken: "token"},
-			start: true, providerToken: "token", wantCalls: 0,
-		},
-		{
-			name:  "provider fence without a live runtime",
-			info:  session.Info{ID: "session", State: session.StateActive, MetadataState: string(session.StateActive), SessionName: "worker", SessionNameMetadata: "worker", InstanceToken: "token"},
-			start: false, providerToken: "", wantCalls: 0,
+			name: "draining owner is not renewed",
+			info: session.Info{ID: "session", State: session.StateDraining, MetadataState: string(session.StateDraining), SessionName: "worker", SessionNameMetadata: "worker", InstanceToken: "token"},
 		},
 	}
 
@@ -261,29 +241,13 @@ func TestReconcileClaimLeasesRejectsRecycledNamesTokensDrainingAndProviderFence(
 				ID: "claim", Status: "in_progress", Assignee: tc.info.SessionName,
 				Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: tc.info.ID},
 			})
-			provider := runtime.NewFake()
-			if tc.start {
-				if err := provider.Start(context.Background(), tc.info.SessionName, runtime.Config{}); err != nil {
-					t.Fatal(err)
-				}
-				if err := provider.SetMeta(tc.info.SessionName, "GC_INSTANCE_TOKEN", tc.providerToken); err != nil {
-					t.Fatal(err)
-				}
-				providerID := tc.providerID
-				if providerID == "" {
-					providerID = tc.info.ID
-				}
-				if err := provider.SetMeta(tc.info.SessionName, "GC_SESSION_ID", providerID); err != nil {
-					t.Fatal(err)
-				}
-			}
-			got := reconcileClaimLeases(context.Background(), provider, []session.Info{tc.info}, []claimLeaseScope{
+			got := reconcileClaimLeases(context.Background(), nil, []session.Info{tc.info}, []claimLeaseScope{
 				{Name: "city", Store: store, Lease: store},
 			}, time.Now())
-			if len(store.heartbeats) != tc.wantCalls {
-				t.Fatalf("heartbeats = %#v, want %d", store.heartbeats, tc.wantCalls)
+			if len(store.heartbeats) != 0 || len(store.reclaimCalls) != 0 {
+				t.Fatalf("fenced operations = heartbeats:%#v reclaim:%#v, want none", store.heartbeats, store.reclaimCalls)
 			}
-			if got.Stores[0].Errors == 0 && tc.wantCalls == 0 {
+			if got.Stores[0].Errors == 0 {
 				t.Fatal("identity rejection must remain visible in diagnostics")
 			}
 		})
@@ -315,54 +279,59 @@ func TestReconcileClaimLeasesDoesNotReclaimDrainingExactOwner(t *testing.T) {
 	}
 }
 
-func TestReconcileClaimLeasesDoesNotReclaimLiveProviderWithoutSessionIdentity(t *testing.T) {
-	const (
-		sessionID   = "persisted-session"
-		sessionName = "worker"
-		token       = "instance-token"
-	)
+func TestReconcileClaimLeasesUsesCompleteCensusWithoutProviderObservation(t *testing.T) {
+	const sessionID, sessionName, token = "persisted-session", "worker", "instance-token"
 	store := newClaimLeaseTestStore(t, beads.Bead{
-		ID: "identity-missing-claim", Status: "in_progress", Assignee: sessionName,
+		ID: "claim", Status: "in_progress", Assignee: sessionName,
 		Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: sessionID},
 	})
-	provider := runtime.NewFake()
-	if err := provider.Start(context.Background(), sessionName, runtime.Config{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := provider.SetMeta(sessionName, "GC_INSTANCE_TOKEN", token); err != nil {
-		t.Fatal(err)
-	}
-	// A running provider with no session ID is fenced, not proven abandoned.
-	got := reconcileClaimLeases(context.Background(), provider, []session.Info{{
+	got := reconcileClaimLeases(context.Background(), nil, []session.Info{{
 		ID: sessionID, State: session.StateActive, MetadataState: string(session.StateActive),
 		SessionName: sessionName, SessionNameMetadata: sessionName, InstanceToken: token,
 	}}, []claimLeaseScope{{Name: "city", Store: store, Lease: store}}, time.Now())
 
-	if len(store.heartbeats) != 0 || len(store.reclaimCalls) != 0 {
-		t.Fatalf("missing provider identity operations = heartbeats:%v reclaim:%v, want none", store.heartbeats, store.reclaimCalls)
+	if len(store.heartbeats) != 1 || len(store.reclaimCalls) != 1 {
+		t.Fatalf("census-owned operations = heartbeats:%v reclaim:%v, want one each", store.heartbeats, store.reclaimCalls)
 	}
-	if got.Stores[0].Errors == 0 || !got.LastSuccessfulAt.IsZero() {
-		t.Fatalf("missing provider identity diagnostics = %#v, want fenced error and no success", got)
+	if got.Stores[0].Errors != 0 || got.LastSuccessfulAt.IsZero() {
+		t.Fatalf("census-owned diagnostics = %#v, want success", got)
 	}
 }
 
-func TestReconcileClaimLeasesFailsClosedWhenRuntimeInventoryFails(t *testing.T) {
+func TestReconcileClaimLeasesReclaimsOnlyTerminallyClosedOwner(t *testing.T) {
+	store := newClaimLeaseTestStore(t,
+		beads.Bead{
+			ID: "claim", Status: "in_progress", Assignee: "worker",
+			Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: "session"},
+		},
+		beads.Bead{
+			ID: "session", Type: session.BeadType, Status: "closed", Labels: []string{session.LabelSession},
+		},
+	)
+	// Closed history is not part of the current-cycle open census. Reclaim is
+	// authorized by the bounded exact-ID fallback against the active stores.
+	got := reconcileClaimLeases(context.Background(), nil, nil, []claimLeaseScope{{Name: "city", Store: store, Lease: store}}, time.Now())
+
+	if len(store.heartbeats) != 0 || len(store.reclaimCalls) != 1 {
+		t.Fatalf("closed-owner operations = heartbeats:%v reclaim:%v, want reclaim only", store.heartbeats, store.reclaimCalls)
+	}
+	if got.Stores[0].Errors != 0 || got.LastSuccessfulAt.IsZero() {
+		t.Fatalf("closed-owner diagnostics = %#v, want success", got)
+	}
+}
+
+func TestReconcileClaimLeasesDoesNotReclaimWhenRecordedOwnerIsMissing(t *testing.T) {
 	store := newClaimLeaseTestStore(t, beads.Bead{
 		ID: "claim", Status: "in_progress", Assignee: "worker",
-		Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: "session"},
+		Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: "missing-session"},
 	})
-	provider := liveLeaseProvider(t, "session", "worker", "token")
-
-	got := reconcileClaimLeases(context.Background(), claimLeaseListErrorProvider{Provider: provider}, []session.Info{{
-		ID: "session", State: session.StateActive, MetadataState: string(session.StateActive),
-		SessionName: "worker", SessionNameMetadata: "worker", InstanceToken: "token",
-	}}, []claimLeaseScope{{Name: "city", Store: store, Lease: store}}, time.Now())
+	got := reconcileClaimLeases(context.Background(), nil, nil, []claimLeaseScope{{Name: "city", Store: store, Lease: store}}, time.Now())
 
 	if len(store.heartbeats) != 0 || len(store.reclaimCalls) != 0 {
-		t.Fatalf("inventory failure operations = heartbeats:%v reclaim:%v, want none", store.heartbeats, store.reclaimCalls)
+		t.Fatalf("missing-owner operations = heartbeats:%v reclaim:%v, want none", store.heartbeats, store.reclaimCalls)
 	}
 	if got.Stores[0].Errors == 0 || !got.LastSuccessfulAt.IsZero() {
-		t.Fatalf("inventory failure diagnostics = %#v, want fail-closed error", got)
+		t.Fatalf("missing-owner diagnostics = %#v, want fail-closed error", got)
 	}
 }
 
@@ -690,6 +659,55 @@ func TestClaimLeaseScopesFailClosedWhenSuspensionStateIsUnreadable(t *testing.T)
 	if scopes, err := cr.claimLeaseScopes(); err == nil || scopes != nil {
 		t.Fatalf("claimLeaseScopes() = (%#v, %v), want nil error-gated scopes", scopes, err)
 	}
+}
+
+func TestClaimLeaseScopesSnapshotsOneStandaloneReloadGeneration(t *testing.T) {
+	cityPath := t.TempDir()
+	cityStore := newClaimLeaseTestStore(t)
+	trigA, trigB := newClaimLeaseTestStore(t), newClaimLeaseTestStore(t)
+	cfgA := &config.City{Rigs: []config.Rig{{Name: "a", Path: t.TempDir()}}}
+	cfgB := &config.City{Rigs: []config.Rig{{Name: "b", Path: t.TempDir()}}}
+	cr := &CityRuntime{cityPath: cityPath, cityName: "city"}
+
+	setGeneration := func(cfg *config.City, name string, store beads.Store) {
+		cr.serviceStateMu.Lock()
+		cr.cfg = cfg
+		cr.standaloneCityStore = cityStore
+		cr.standaloneRigStores = map[string]beads.Store{name: store}
+		cr.serviceStateMu.Unlock()
+	}
+	setGeneration(cfgA, "a", trigA)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 500 {
+			setGeneration(cfgB, "b", trigB)
+			setGeneration(cfgA, "a", trigA)
+		}
+	}()
+	for range 500 {
+		scopes, err := cr.claimLeaseScopes()
+		if err != nil {
+			t.Fatalf("claimLeaseScopes() error = %v", err)
+		}
+		if len(scopes) != 2 {
+			t.Fatalf("lease scopes = %#v, want one complete city+rig generation", scopes)
+		}
+		switch scopes[1].Name {
+		case "a":
+			if scopes[1].Store != trigA {
+				t.Fatalf("rig a paired with store %#v, want generation-a store", scopes[1].Store)
+			}
+		case "b":
+			if scopes[1].Store != trigB {
+				t.Fatalf("rig b paired with store %#v, want generation-b store", scopes[1].Store)
+			}
+		default:
+			t.Fatalf("lease scopes = %#v, want generation a or b", scopes)
+		}
+	}
+	<-done
 }
 
 func TestApplyBdLeaseHolderClearsAmbientIdentityForReclaim(t *testing.T) {

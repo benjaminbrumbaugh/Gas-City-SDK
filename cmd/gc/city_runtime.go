@@ -2301,10 +2301,33 @@ func (cr *CityRuntime) reloadConfigTraced(
 		fmt.Fprintf(cr.stderr, "%s: orders reloaded: %s\n", cr.logPrefix, orderSummary) //nolint:errcheck // best-effort stderr
 	}
 
+	var nextStandaloneCityStore beads.Store
+	var nextStandaloneRigStores map[string]beads.Store
+	if cr.cs == nil {
+		cr.serviceStateMu.RLock()
+		nextStandaloneCityStore = cr.standaloneCityStore
+		cr.serviceStateMu.RUnlock()
+		// Refresh standalone stores before publishing the new service-state
+		// generation. Lease reconciliation snapshots config and stores under the
+		// same lock, so it can never combine routes from two reload generations.
+		if s, err := openCityStoreAt(cityRoot); err != nil {
+			if nextStandaloneCityStore != nil {
+				appendWarning(fmt.Sprintf("city bead store reload: %v", err))
+			}
+		} else {
+			nextStandaloneCityStore = s
+		}
+		nextStandaloneRigStores = buildStandaloneRigStores(nextCfg, cr.cityPath, cr.stderr)
+	}
+
 	cr.serviceStateMu.Lock()
 	cr.cfg = nextCfg
 	cr.sp = nextSp
 	cr.dops = nextDops
+	if cr.cs == nil {
+		cr.standaloneCityStore = nextStandaloneCityStore
+		cr.standaloneRigStores = nextStandaloneRigStores
+	}
 	cr.serviceStateMu.Unlock()
 	cr.demandSnapshot = nil
 
@@ -2315,19 +2338,6 @@ func (cr *CityRuntime) reloadConfigTraced(
 		if err := cr.svc.Reload(); err != nil {
 			appendWarning(fmt.Sprintf("service reload: %v", err))
 		}
-	}
-
-	if cr.cs == nil {
-		// Refresh standalone city store for auto-suspend.
-		// Also recovers from nil → non-nil when bd becomes available after startup.
-		if s, err := openCityStoreAt(cityRoot); err != nil {
-			if cr.standaloneCityStore != nil {
-				appendWarning(fmt.Sprintf("city bead store reload: %v", err))
-			}
-		} else {
-			cr.standaloneCityStore = s
-		}
-		cr.standaloneRigStores = buildStandaloneRigStores(nextCfg, cr.cityPath, cr.stderr)
 	}
 
 	// Rebuild convergence scopes against the reloaded config so rigs added,

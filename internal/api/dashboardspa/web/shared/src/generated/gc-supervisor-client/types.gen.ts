@@ -2262,7 +2262,7 @@ export type OkWithIdResponseBody = {
 
 export type Observation = {
     city: string;
-    claim_leases: ClaimLeaseObservation;
+    claim_leases?: ClaimLeaseObservation;
     completeness: Completeness;
     cycle: Cycle;
     generation: Generation;

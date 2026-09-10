@@ -5816,8 +5816,7 @@
           "templates",
           "templates_truncated",
           "template_count",
-          "trace",
-          "claim_leases"
+          "trace"
         ],
         "type": "object"
       },

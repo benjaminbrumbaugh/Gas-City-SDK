@@ -450,7 +450,7 @@ func bdLeaseCommandRunnerForCity(cityPath string) beads.LeaseCommandRunner {
 			}
 			return runContextBoundLeaseCommand(ctx, cityPath, dir, env, args)
 		}
-		env, err := bdRuntimeEnvWithError(cityPath)
+		env, err := bdRuntimeEnvWithErrorRecoveryContext(ctx, cityPath, false)
 		if env == nil {
 			env = map[string]string{}
 		}
@@ -465,7 +465,7 @@ func bdLeaseCommandRunnerForCity(cityPath string) beads.LeaseCommandRunner {
 
 func bdLeaseCommandRunnerForRig(cityPath string, cfg *config.City, rigDir string) beads.LeaseCommandRunner {
 	return func(ctx context.Context, dir, holder string, args ...string) ([]byte, error) {
-		env, err := bdRuntimeEnvForRigWithError(cityPath, cfg, rigDir)
+		env, err := bdRuntimeEnvForRigWithErrorRecoveryContext(ctx, cityPath, cfg, rigDir, false)
 		if env == nil {
 			env = map[string]string{}
 		}

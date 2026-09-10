@@ -57,8 +57,8 @@ type Observation struct {
 	// is larger than len(Templates) exactly when TemplatesTruncated is set.
 	TemplateCount int `json:"template_count"`
 
-	Trace       TraceState            `json:"trace"`
-	ClaimLeases ClaimLeaseObservation `json:"claim_leases"`
+	Trace       TraceState             `json:"trace"`
+	ClaimLeases *ClaimLeaseObservation `json:"claim_leases,omitempty"`
 }
 
 // Deliberately absent, and each omission is load-bearing:
