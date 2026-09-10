@@ -58,10 +58,16 @@ func TestCandidateReviewRepairOrderRoutesOnlyExplicitMechanicalHolds(t *testing.
 			"gc.candidate_review_source":          "candidate",
 			"gc.candidate_review_residue":         "[]",
 			"gc.candidate_review_landed":          "[]",
+			"gc.candidate_review_test_command":    "echo bead-injected-gate",
 		}},
 		{"id": "human-1", "status": "open", "assignee": "human", "metadata": map[string]string{
 			"gc.candidate_review_state":      "actionable",
 			"gc.candidate_review_hold_class": "human",
+		}},
+		{"id": "human-review-1", "status": "in_progress", "assignee": "human", "metadata": map[string]string{
+			"gc.candidate_review_state":        "published_pending_review",
+			"gc.candidate_review_hold_class":   "human",
+			"gc.candidate_review_review_route": "rig/reviewer",
 		}},
 		{"id": "foreign-1", "status": "open", "assignee": "other/worker", "metadata": map[string]string{
 			"gc.candidate_review_state":      "actionable",
@@ -81,6 +87,30 @@ func TestCandidateReviewRepairOrderRoutesOnlyExplicitMechanicalHolds(t *testing.
 			"gc.candidate_review_landed":          "[]",
 			"gc.candidate_review_repair_attempt":  "2",
 			"gc.candidate_review_max_attempts":    "2",
+			"gc.candidate_review_test_command":    "git diff --check",
+		}},
+		{"id": "stale-queued-1", "status": "in_progress", "assignee": "dead/repairer", "metadata": map[string]string{
+			"gc.candidate_review_state":            "queued",
+			"gc.candidate_review_hold_class":       "mechanical",
+			"gc.candidate_review_correction":       "resume the exact correction",
+			"gc.candidate_review_owner":            "rig/repairer",
+			"gc.candidate_review_repair_route":     "rig/repairer",
+			"gc.candidate_review_repair_workflow":  "mol-candidate-review-repair",
+			"gc.candidate_review_review_route":     "rig/reviewer",
+			"gc.candidate_review_target":           "main",
+			"gc.candidate_review_source":           "candidate",
+			"gc.candidate_review_residue":          "[]",
+			"gc.candidate_review_landed":           "[]",
+			"gc.candidate_review_test_command":     "git diff --check",
+			"gc.candidate_review_repair_attempt":   "1",
+			"gc.candidate_review_max_attempts":     "3",
+			"gc.candidate_review_repair_queued_at": "2000-01-01T00:00:00Z",
+		}},
+		{"id": "fresh-active-1", "status": "in_progress", "assignee": "live/repairer", "metadata": map[string]string{
+			"gc.candidate_review_state":          "active",
+			"gc.candidate_review_hold_class":     "mechanical",
+			"gc.candidate_review_started_at":     "2999-01-01T00:00:00Z",
+			"gc.candidate_review_repair_attempt": "1",
 		}},
 	}
 	queryJSON, err := json.Marshal(query)
@@ -111,11 +141,23 @@ func TestCandidateReviewRepairOrderRoutesOnlyExplicitMechanicalHolds(t *testing.
 	if strings.Count(log, "sling rig/repairer mechanical-1") != 1 {
 		t.Fatalf("mechanical hold was not routed exactly once; log:\n%s", log)
 	}
-	if strings.Contains(log, "human-1") || strings.Contains(log, "foreign-1") {
+	if !strings.Contains(log, "--var test_command=git diff --check") {
+		t.Fatalf("configured gate was not passed to the repair formula; log:\n%s", log)
+	}
+	if strings.Contains(log, "bead-injected-gate") {
+		t.Fatalf("bead metadata injected an unattended gate command; log:\n%s", log)
+	}
+	if strings.Contains(log, "human-1") || strings.Contains(log, "human-review-1") || strings.Contains(log, "foreign-1") {
 		t.Fatalf("non-mechanical holds were mutated; log:\n%s", log)
 	}
 	if strings.Contains(log, "sling rig/repairer exhausted-1") {
 		t.Fatalf("exhausted hold was dispatched again; log:\n%s", log)
+	}
+	if strings.Count(log, "sling rig/repairer stale-queued-1") != 1 {
+		t.Fatalf("stale queued hold was not recovered exactly once; log:\n%s", log)
+	}
+	if strings.Contains(log, "fresh-active-1") {
+		t.Fatalf("fresh active hold was disturbed; log:\n%s", log)
 	}
 	if !strings.Contains(log, "exhausted-1") {
 		t.Fatalf("exhausted hold did not record bounded terminal evidence; log:\n%s", log)
@@ -161,18 +203,21 @@ func TestCandidateReviewRepairWorkerPublishesCurrentTargetCandidate(t *testing.T
 	target := strings.TrimSpace(runCandidateRepairGit(t, "-C", seed, "rev-parse", "HEAD"))
 	beadFile := filepath.Join(temp, "bead.json")
 	bead := map[string]any{"id": "candidate-1", "status": "in_progress", "assignee": "rig/repairer", "metadata": map[string]string{
-		"gc.candidate_review_state":        "queued",
-		"gc.candidate_review_hold_class":   "mechanical",
-		"gc.candidate_review_correction":   "apply the requested correction before invoking the worker",
-		"gc.candidate_review_owner":        "rig/repairer",
-		"gc.candidate_review_repair_route": "rig/repairer",
-		"gc.candidate_review_target":       "main",
-		"gc.candidate_review_source":       "candidate",
-		"gc.candidate_review_residue":      `["agent-plan.md"]`,
-		"gc.candidate_review_landed":       `["overlap.md"]`,
-		"gc.candidate_review_review_route": "rig/reviewer",
-		"gc.work_dir":                      work,
-		"gc.work_branch":                   "candidate",
+		"gc.candidate_review_state":          "queued",
+		"gc.candidate_review_hold_class":     "mechanical",
+		"gc.candidate_review_correction":     "apply the requested correction before invoking the worker",
+		"gc.candidate_review_owner":          "rig/repairer",
+		"gc.candidate_review_repair_route":   "rig/repairer",
+		"gc.candidate_review_target":         "main",
+		"gc.candidate_review_source":         "candidate",
+		"gc.candidate_review_residue":        `["agent-plan.md"]`,
+		"gc.candidate_review_landed":         `["overlap.md"]`,
+		"gc.candidate_review_review_route":   "rig/reviewer",
+		"gc.candidate_review_token":          "repair-token-1",
+		"gc.candidate_review_repair_attempt": "1",
+		"gc.candidate_review_max_attempts":   "3",
+		"gc.work_dir":                        filepath.Join(temp, "untrusted-bead-work-dir"),
+		"gc.work_branch":                     "candidate",
 	}}
 	beadJSON, err := json.Marshal([]any{bead})
 	if err != nil {
@@ -188,6 +233,8 @@ func TestCandidateReviewRepairWorkerPublishesCurrentTargetCandidate(t *testing.T
 		"FAKE_GC_BEAD="+beadFile,
 		"FAKE_GC_LOG="+logFile,
 		"GC_AGENT=rig/repairer",
+		"GC_CANDIDATE_REPAIR_TOKEN=repair-token-1",
+		"GC_CANDIDATE_REPAIR_WORK_DIR="+work,
 		"GC_CANDIDATE_REPAIR_TEST_COMMAND=git diff --check",
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -215,37 +262,164 @@ func TestCandidateReviewRepairWorkerPublishesCurrentTargetCandidate(t *testing.T
 	}
 }
 
+func TestCandidateReviewRepairOrderDoesNotDispatchAfterLosingClaimCAS(t *testing.T) {
+	root := exampleDir()
+	fakeGC := writeCandidateRepairFakeGC(t)
+	query := []map[string]any{{"id": "race-1", "status": "open", "assignee": "rig/reviewer", "metadata": map[string]string{
+		"gc.candidate_review_state":           "actionable",
+		"gc.candidate_review_hold_class":      "mechanical",
+		"gc.candidate_review_correction":      "exact correction",
+		"gc.candidate_review_owner":           "rig/repairer",
+		"gc.candidate_review_repair_route":    "rig/repairer",
+		"gc.candidate_review_repair_workflow": "mol-candidate-review-repair",
+		"gc.candidate_review_review_route":    "rig/reviewer",
+		"gc.candidate_review_target":          "main",
+		"gc.candidate_review_source":          "candidate",
+		"gc.candidate_review_residue":         "[]",
+		"gc.candidate_review_landed":          "[]",
+		"gc.candidate_review_test_command":    "git diff --check",
+	}}}
+	queryJSON, err := json.Marshal(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryFile := filepath.Join(t.TempDir(), "query.json")
+	logFile := filepath.Join(t.TempDir(), "gc.log")
+	if err := os.WriteFile(queryFile, queryJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.Join(root, "assets", "scripts", "candidate-review-repair.sh"))
+	cmd.Env = append(os.Environ(),
+		"PATH="+filepath.Dir(fakeGC)+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FAKE_GC_QUERY="+queryFile,
+		"FAKE_GC_LOG="+logFile,
+		"FAKE_GC_UPDATE_EXIT=13",
+		"GC_PACK_STATE_DIR="+t.TempDir(),
+		"PACK_DIR="+root,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("losing a claim race should be a clean no-op: %v\n%s", err, out)
+	}
+	logData, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logData), "sling ") {
+		t.Fatalf("losing CAS contender dispatched duplicate work; log:\n%s", logData)
+	}
+}
+
 func TestCandidateReviewRepairWorkerPreservesUncertainWork(t *testing.T) {
 	t.Run("dirty worktree", func(t *testing.T) {
 		work := t.TempDir()
-		runCandidateRepairGit(t, "init", "-b", "main", work)
+		runCandidateRepairGit(t, "init", "-b", "candidate", work)
 		writeCandidateRepairFile(t, filepath.Join(work, "foreign.txt"), "do not touch\n")
-		assertCandidateRepairWorkerFailsClosed(t, work, `["foreign.txt"]`, "worktree is dirty", "foreign.txt")
+		assertCandidateRepairWorkerFailsClosed(t, work, "candidate", `["foreign.txt"]`, "worktree is dirty", "foreign.txt")
 	})
 	t.Run("path traversal", func(t *testing.T) {
 		work := t.TempDir()
+		runCandidateRepairGit(t, "init", "-b", "candidate", work)
+		assertCandidateRepairWorkerFailsClosed(t, work, "candidate", `["../outside.txt"]`, "invalid", "")
+	})
+	t.Run("newline path splitting", func(t *testing.T) {
+		work := t.TempDir()
+		runCandidateRepairGit(t, "init", "-b", "candidate", work)
+		assertCandidateRepairWorkerFailsClosed(t, work, "candidate", `["safe\n/var/tmp/outside"]`, "control-character", "")
+	})
+	t.Run("nested work directory", func(t *testing.T) {
+		work := t.TempDir()
+		runCandidateRepairGit(t, "init", "-b", "candidate", work)
+		nested := filepath.Join(work, "nested")
+		if err := os.Mkdir(nested, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		assertCandidateRepairWorkerFailsClosed(t, nested, "candidate", `[]`, "Git top-level", "")
+	})
+	t.Run("source equals target", func(t *testing.T) {
+		work := t.TempDir()
 		runCandidateRepairGit(t, "init", "-b", "main", work)
-		assertCandidateRepairWorkerFailsClosed(t, work, `["../outside.txt"]`, "invalid absolute", "")
+		assertCandidateRepairWorkerFailsClosed(t, work, "main", `[]`, "source and target must be distinct", "")
+	})
+	t.Run("symlink parent escape", func(t *testing.T) {
+		work := t.TempDir()
+		outside := t.TempDir()
+		runCandidateRepairGit(t, "init", "-b", "candidate", work)
+		runCandidateRepairGit(t, "-C", work, "config", "user.email", "test@example.invalid")
+		runCandidateRepairGit(t, "-C", work, "config", "user.name", "Candidate Repair Test")
+		if err := os.Symlink(outside, filepath.Join(work, "escape")); err != nil {
+			t.Fatal(err)
+		}
+		runCandidateRepairGit(t, "-C", work, "add", "escape")
+		runCandidateRepairGit(t, "-C", work, "commit", "-m", "tracked symlink")
+		outsideFile := filepath.Join(outside, "outside.txt")
+		writeCandidateRepairFile(t, outsideFile, "preserve\n")
+		assertCandidateRepairWorkerFailsClosed(t, work, "candidate", `["escape/outside.txt"]`, "symlink", "")
+		if got := string(readCandidateRepairFile(t, outsideFile)); got != "preserve\n" {
+			t.Fatalf("symlink escape target changed: %q", got)
+		}
 	})
 }
 
-func assertCandidateRepairWorkerFailsClosed(t *testing.T, work, residue, wantError, preservePath string) {
+func TestCandidateReviewRepairWorkerDoesNotMutateReclassifiedHold(t *testing.T) {
+	root := exampleDir()
+	fakeGC := writeCandidateRepairFakeGC(t)
+	temp := t.TempDir()
+	beadFile := filepath.Join(temp, "bead.json")
+	beadJSON, err := json.Marshal([]any{map[string]any{
+		"id": "human-1", "status": "in_progress", "assignee": "rig/repairer",
+		"metadata": map[string]string{
+			"gc.candidate_review_state":      "queued",
+			"gc.candidate_review_hold_class": "human",
+			"gc.candidate_review_token":      "repair-token-human",
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(beadFile, beadJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logFile := filepath.Join(temp, "gc.log")
+	cmd := exec.Command("bash", filepath.Join(root, "assets", "scripts", "candidate-review-repair-worker.sh"), "human-1")
+	cmd.Env = append(os.Environ(),
+		"PATH="+filepath.Dir(fakeGC)+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FAKE_GC_BEAD="+beadFile,
+		"FAKE_GC_LOG="+logFile,
+		"GC_AGENT=rig/repairer",
+		"GC_CANDIDATE_REPAIR_TOKEN=repair-token-human",
+	)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("worker accepted a reclassified human hold; output:\n%s", out)
+	}
+	logData, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logData), "bd update") || strings.Contains(string(logData), "sling ") {
+		t.Fatalf("worker mutated or routed a reclassified hold; log:\n%s", logData)
+	}
+}
+
+func assertCandidateRepairWorkerFailsClosed(t *testing.T, work, source, residue, want, dirtyPath string) {
 	t.Helper()
 	worker := filepath.Join(exampleDir(), "assets", "scripts", "candidate-review-repair-worker.sh")
 	fakeGC := writeCandidateRepairFakeGC(t)
 	temp := t.TempDir()
 	beadFile := filepath.Join(temp, "bead.json")
 	metadata := map[string]string{
-		"gc.candidate_review_state":        "queued",
-		"gc.candidate_review_hold_class":   "mechanical",
-		"gc.candidate_review_owner":        "rig/repairer",
-		"gc.candidate_review_repair_route": "rig/repairer",
-		"gc.candidate_review_review_route": "rig/reviewer",
-		"gc.candidate_review_target":       "main",
-		"gc.candidate_review_source":       "candidate",
-		"gc.candidate_review_residue":      residue,
-		"gc.candidate_review_landed":       "[]",
-		"gc.work_dir":                      work,
+		"gc.candidate_review_state":          "queued",
+		"gc.candidate_review_hold_class":     "mechanical",
+		"gc.candidate_review_owner":          "rig/repairer",
+		"gc.candidate_review_repair_route":   "rig/repairer",
+		"gc.candidate_review_review_route":   "rig/reviewer",
+		"gc.candidate_review_target":         "main",
+		"gc.candidate_review_source":         source,
+		"gc.candidate_review_residue":        residue,
+		"gc.candidate_review_landed":         "[]",
+		"gc.candidate_review_token":          "repair-token-fail",
+		"gc.candidate_review_repair_attempt": "1",
+		"gc.candidate_review_max_attempts":   "3",
+		"gc.work_dir":                        work,
 	}
 	beadJSON, err := json.Marshal([]any{map[string]any{
 		"id": "candidate-fail-closed", "status": "in_progress", "assignee": "rig/repairer", "metadata": metadata,
@@ -263,16 +437,18 @@ func assertCandidateRepairWorkerFailsClosed(t *testing.T, work, residue, wantErr
 		"FAKE_GC_BEAD="+beadFile,
 		"FAKE_GC_LOG="+logFile,
 		"GC_AGENT=rig/repairer",
+		"GC_CANDIDATE_REPAIR_TOKEN=repair-token-fail",
+		"GC_CANDIDATE_REPAIR_WORK_DIR="+work,
 	)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("worker succeeded for unsafe candidate; output=%s", out)
 	}
-	if !strings.Contains(string(out), wantError) {
-		t.Fatalf("worker error = %q, want %q", out, wantError)
+	if !strings.Contains(string(out), want) {
+		t.Fatalf("worker error = %q, want %q", out, want)
 	}
-	if preservePath != "" {
-		if _, err := os.Stat(filepath.Join(work, preservePath)); err != nil {
+	if dirtyPath != "" {
+		if _, err := os.Stat(filepath.Join(work, dirtyPath)); err != nil {
 			t.Fatalf("foreign work was removed: %v", err)
 		}
 	}
@@ -300,6 +476,9 @@ fi
 if [ "$1" = "bd" ] && [ "$2" = "show" ]; then
   cat "${FAKE_GC_BEAD:?}"
   exit 0
+fi
+if [ "$1" = "bd" ] && [ "$2" = "update" ] && [ -n "${FAKE_GC_UPDATE_EXIT:-}" ]; then
+  exit "$FAKE_GC_UPDATE_EXIT"
 fi
 exit 0
 `
