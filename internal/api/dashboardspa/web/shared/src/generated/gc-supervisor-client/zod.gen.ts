@@ -263,6 +263,19 @@ export const zCityUnregisterSucceededPayload = z.object({
     request_id: z.string()
 });
 
+export const zClaimLeaseStoreObservation = z.object({
+    errors: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    reclaimed: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    renewed: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    store: z.string()
+});
+
+export const zClaimLeaseObservation = z.object({
+    last_attempt_at: z.iso.datetime().optional(),
+    last_successful_at: z.iso.datetime().optional(),
+    stores: z.array(zClaimLeaseStoreObservation).nullable()
+});
+
 export const zCompleteness = z.object({
     continuation_claim_query_partial: z.boolean(),
     named_scale_check_partial_templates: z.array(z.string()).nullish(),
@@ -4000,6 +4013,7 @@ export const zTraceState = z.object({
 
 export const zObservation = z.object({
     city: z.string(),
+    claim_leases: zClaimLeaseObservation.optional(),
     completeness: zCompleteness,
     cycle: zCycle,
     generation: zGeneration,

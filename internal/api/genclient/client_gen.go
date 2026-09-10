@@ -1503,6 +1503,21 @@ type CityUnregisterSucceededPayload struct {
 	RequestId string `json:"request_id"`
 }
 
+// ClaimLeaseObservation defines model for ClaimLeaseObservation.
+type ClaimLeaseObservation struct {
+	LastAttemptAt    *time.Time                    `json:"last_attempt_at,omitempty"`
+	LastSuccessfulAt *time.Time                    `json:"last_successful_at,omitempty"`
+	Stores           *[]ClaimLeaseStoreObservation `json:"stores"`
+}
+
+// ClaimLeaseStoreObservation defines model for ClaimLeaseStoreObservation.
+type ClaimLeaseStoreObservation struct {
+	Errors    int64  `json:"errors"`
+	Reclaimed int64  `json:"reclaimed"`
+	Renewed   int64  `json:"renewed"`
+	Store     string `json:"store"`
+}
+
 // Completeness defines model for Completeness.
 type Completeness struct {
 	ContinuationClaimQueryPartial   bool      `json:"continuation_claim_query_partial"`
@@ -2925,16 +2940,17 @@ type OKWithIDResponseBody struct {
 
 // Observation defines model for Observation.
 type Observation struct {
-	City               string         `json:"city"`
-	Completeness       Completeness   `json:"completeness"`
-	Cycle              Cycle          `json:"cycle"`
-	Generation         Generation     `json:"generation"`
-	SchemaVersion      int64          `json:"schema_version"`
-	TemplateCount      int64          `json:"template_count"`
-	Templates          *[]TemplateRow `json:"templates"`
-	TemplatesTruncated bool           `json:"templates_truncated"`
-	Totals             Totals         `json:"totals"`
-	Trace              TraceState     `json:"trace"`
+	City               string                 `json:"city"`
+	ClaimLeases        *ClaimLeaseObservation `json:"claim_leases,omitempty"`
+	Completeness       Completeness           `json:"completeness"`
+	Cycle              Cycle                  `json:"cycle"`
+	Generation         Generation             `json:"generation"`
+	SchemaVersion      int64                  `json:"schema_version"`
+	TemplateCount      int64                  `json:"template_count"`
+	Templates          *[]TemplateRow         `json:"templates"`
+	TemplatesTruncated bool                   `json:"templates_truncated"`
+	Totals             Totals                 `json:"totals"`
+	Trace              TraceState             `json:"trace"`
 }
 
 // OptionChoiceDTO defines model for OptionChoiceDTO.

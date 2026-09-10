@@ -1647,6 +1647,59 @@
         ],
         "type": "object"
       },
+      "ClaimLeaseObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "last_attempt_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "last_successful_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "stores": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimLeaseStoreObservation"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "stores"
+        ],
+        "type": "object"
+      },
+      "ClaimLeaseStoreObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "errors": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "reclaimed": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "renewed": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "store": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "store",
+          "renewed",
+          "reclaimed",
+          "errors"
+        ],
+        "type": "object"
+      },
       "Completeness": {
         "additionalProperties": false,
         "properties": {
@@ -5713,6 +5766,9 @@
         "properties": {
           "city": {
             "type": "string"
+          },
+          "claim_leases": {
+            "$ref": "#/components/schemas/ClaimLeaseObservation"
           },
           "completeness": {
             "$ref": "#/components/schemas/Completeness"

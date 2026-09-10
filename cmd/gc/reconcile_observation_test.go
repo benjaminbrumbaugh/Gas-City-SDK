@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"reflect"
@@ -28,6 +29,16 @@ func runCycle(cr *CityRuntime, trigger string, completion TraceCompletionStatus,
 		fill()
 	}
 	cr.publishReconcileObservation(completion, nil, time.Now())
+}
+
+func TestReconcileObservationSchemaV1OmitsAbsentClaimLeases(t *testing.T) {
+	payload, err := json.Marshal(reconcileobservation.Observation{SchemaVersion: reconcileobservation.SchemaVersion})
+	if err != nil {
+		t.Fatalf("marshal legacy-compatible observation: %v", err)
+	}
+	if strings.Contains(string(payload), `"claim_leases"`) {
+		t.Fatalf("schema-v1 zero observation unexpectedly requires claim_leases: %s", payload)
+	}
 }
 
 // --- 1. every completion publishes, including the ones that went wrong ------
@@ -100,6 +111,32 @@ func TestReconcileObservationPublishedWithoutTrace(t *testing.T) {
 	}
 	if !got.Cycle.Reconciled || got.Totals.OpenSessionCount != 1 {
 		t.Fatalf("inputs were not observed without a trace: %+v", got)
+	}
+}
+
+func TestReconcileObservationPublishesClaimLeaseDiagnostics(t *testing.T) {
+	cr := newObservationRuntime(t)
+	attempt := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
+	success := attempt.Add(time.Second)
+	cr.claimLeaseMu.Lock()
+	cr.claimLeaseResult = claimLeaseReconcileResult{
+		LastAttemptAt:    attempt,
+		LastSuccessfulAt: success,
+		Stores:           []claimLeaseStoreReport{{Name: "city", Renewed: 2, Reclaimed: 1, Errors: 0}},
+	}
+	cr.claimLeaseMu.Unlock()
+
+	runCycle(cr, "patrol", TraceCompletionCompleted, nil)
+	got := cr.ReconciliationObservation()
+	if got.ClaimLeases == nil {
+		t.Fatal("claim lease observation is nil")
+	}
+	if !got.ClaimLeases.LastAttemptAt.Equal(attempt) || !got.ClaimLeases.LastSuccessfulAt.Equal(success) {
+		t.Fatalf("claim lease timestamps = %#v, want controller result", got.ClaimLeases)
+	}
+	if len(got.ClaimLeases.Stores) != 1 || got.ClaimLeases.Stores[0].Store != "city" ||
+		got.ClaimLeases.Stores[0].Renewed != 2 || got.ClaimLeases.Stores[0].Reclaimed != 1 {
+		t.Fatalf("claim lease store diagnostics = %#v, want typed counters", got.ClaimLeases.Stores)
 	}
 }
 

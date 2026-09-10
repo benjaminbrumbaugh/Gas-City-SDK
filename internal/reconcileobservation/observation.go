@@ -57,7 +57,8 @@ type Observation struct {
 	// is larger than len(Templates) exactly when TemplatesTruncated is set.
 	TemplateCount int `json:"template_count"`
 
-	Trace TraceState `json:"trace"`
+	Trace       TraceState             `json:"trace"`
+	ClaimLeases *ClaimLeaseObservation `json:"claim_leases,omitempty"`
 }
 
 // Deliberately absent, and each omission is load-bearing:
@@ -236,4 +237,25 @@ type TraceState struct {
 	Enabled            bool `json:"enabled"`
 	DroppedRecordCount int  `json:"dropped_record_count,omitempty"`
 	DroppedBatchCount  int  `json:"dropped_batch_count,omitempty"`
+}
+
+// ClaimLeaseObservation reports the controller's native claim-lease work for
+// the most recent attempt. Timestamps are instants rather than computed ages;
+// a zero LastSuccessfulAt means this process has not completed a fully
+// successful pass yet. Store rows are bounded by the configured city and rig
+// set, and counts describe only operations this controller observed.
+type ClaimLeaseObservation struct {
+	LastAttemptAt    time.Time                    `json:"last_attempt_at,omitempty"`
+	LastSuccessfulAt time.Time                    `json:"last_successful_at,omitempty"`
+	Stores           []ClaimLeaseStoreObservation `json:"stores"`
+}
+
+// ClaimLeaseStoreObservation reports native lease operations for one named
+// store. Errors count failed reads or native operations; a fenced, draining,
+// or otherwise non-renewable owner contributes no renewal count.
+type ClaimLeaseStoreObservation struct {
+	Store     string `json:"store"`
+	Renewed   int    `json:"renewed"`
+	Reclaimed int    `json:"reclaimed"`
+	Errors    int    `json:"errors"`
 }

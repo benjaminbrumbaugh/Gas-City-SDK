@@ -489,6 +489,11 @@ type BdStore struct {
 	inlineDeps inlineDependencyProjection
 
 	localStrings *localSidecar // clone-local data; see Store.SetLocalString
+	// leaseRunner is separate from runner because native claim leases require
+	// BEADS_ACTOR per owner. A store's ordinary command runner is shared across
+	// callers, while a lease command must receive the exact assignee that owns
+	// the live claim being renewed.
+	leaseRunner LeaseCommandRunner
 }
 
 const (

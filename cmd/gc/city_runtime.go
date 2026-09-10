@@ -143,6 +143,14 @@ type CityRuntime struct {
 	// whenever tracing is off, and this must not be. See reconcile_observation.go.
 	reconcileObs reconcileObservationState
 
+	// claimLeaseMu guards the last native lease reconciliation result. Lease
+	// state is node-local to bd, so this controller-owned observation is kept
+	// separate from bead metadata and published with the cycle facts.
+	claimLeaseMu          sync.RWMutex
+	claimLeaseLastAttempt time.Time
+	claimLeaseInFlight    bool
+	claimLeaseResult      claimLeaseReconcileResult
+
 	// routeRecovery is the route-repair lane: an event-fed delta pass in the
 	// tick and a cadenced authoritative scan behind it. Created on first use so
 	// a directly-constructed runtime needs no wiring.
@@ -2293,10 +2301,33 @@ func (cr *CityRuntime) reloadConfigTraced(
 		fmt.Fprintf(cr.stderr, "%s: orders reloaded: %s\n", cr.logPrefix, orderSummary) //nolint:errcheck // best-effort stderr
 	}
 
+	var nextStandaloneCityStore beads.Store
+	var nextStandaloneRigStores map[string]beads.Store
+	if cr.cs == nil {
+		cr.serviceStateMu.RLock()
+		nextStandaloneCityStore = cr.standaloneCityStore
+		cr.serviceStateMu.RUnlock()
+		// Refresh standalone stores before publishing the new service-state
+		// generation. Lease reconciliation snapshots config and stores under the
+		// same lock, so it can never combine routes from two reload generations.
+		if s, err := openCityStoreAt(cityRoot); err != nil {
+			if nextStandaloneCityStore != nil {
+				appendWarning(fmt.Sprintf("city bead store reload: %v", err))
+			}
+		} else {
+			nextStandaloneCityStore = s
+		}
+		nextStandaloneRigStores = buildStandaloneRigStores(nextCfg, cr.cityPath, cr.stderr)
+	}
+
 	cr.serviceStateMu.Lock()
 	cr.cfg = nextCfg
 	cr.sp = nextSp
 	cr.dops = nextDops
+	if cr.cs == nil {
+		cr.standaloneCityStore = nextStandaloneCityStore
+		cr.standaloneRigStores = nextStandaloneRigStores
+	}
 	cr.serviceStateMu.Unlock()
 	cr.demandSnapshot = nil
 
@@ -2307,19 +2338,6 @@ func (cr *CityRuntime) reloadConfigTraced(
 		if err := cr.svc.Reload(); err != nil {
 			appendWarning(fmt.Sprintf("service reload: %v", err))
 		}
-	}
-
-	if cr.cs == nil {
-		// Refresh standalone city store for auto-suspend.
-		// Also recovers from nil → non-nil when bd becomes available after startup.
-		if s, err := openCityStoreAt(cityRoot); err != nil {
-			if cr.standaloneCityStore != nil {
-				appendWarning(fmt.Sprintf("city bead store reload: %v", err))
-			}
-		} else {
-			cr.standaloneCityStore = s
-		}
-		cr.standaloneRigStores = buildStandaloneRigStores(nextCfg, cr.cityPath, cr.stderr)
 	}
 
 	// Rebuild convergence scopes against the reloaded config so rigs added,
@@ -2484,6 +2502,7 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 		recordPhase(TraceSiteSessionSnapshot, "bead_reconcile.load_session_snapshot", phaseStart, traceSessionSnapshotFields(sessionBeads))
 		result.SessionQueryPartial = result.SessionQueryPartial || sessionQueryPartial
 	}
+	cr.startClaimLeaseReconcileIfDue(ctx, time.Now())
 	// Emit any due compute usage facts by reusing the open-session snapshot this
 	// tick already loaded, rather than issuing a second redundant store scan. The
 	// boot pass covers the whole fleet at once on the readiness path, so it takes

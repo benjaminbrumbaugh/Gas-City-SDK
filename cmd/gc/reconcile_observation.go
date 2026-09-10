@@ -236,6 +236,8 @@ func (cr *CityRuntime) publishReconcileObservation(completion TraceCompletionSta
 	obs.Cycle.DurationMS = obs.Cycle.EndedAt.Sub(obs.Cycle.StartedAt).Milliseconds()
 	obs.Cycle.Completion = reconcileObservationCompletion(completion)
 	obs.Trace = reconcileObservationTraceState(traceCycle)
+	claimLeases := cr.claimLeaseObservationWire()
+	obs.ClaimLeases = &claimLeases
 	if obs.Templates == nil {
 		// A nil slice serializes as JSON null and an empty one as []. The
 		// difference is visible to every consumer, and "no rows" is the honest
@@ -244,6 +246,24 @@ func (cr *CityRuntime) publishReconcileObservation(completion TraceCompletionSta
 		obs.Templates = []reconcileobservation.TemplateRow{}
 	}
 	cr.reconcileObs.published.Store(obs)
+}
+
+func (cr *CityRuntime) claimLeaseObservationWire() reconcileobservation.ClaimLeaseObservation {
+	result := cr.claimLeaseReconciliation()
+	observation := reconcileobservation.ClaimLeaseObservation{
+		LastAttemptAt:    result.LastAttemptAt,
+		LastSuccessfulAt: result.LastSuccessfulAt,
+		Stores:           make([]reconcileobservation.ClaimLeaseStoreObservation, 0, len(result.Stores)),
+	}
+	for _, store := range result.Stores {
+		observation.Stores = append(observation.Stores, reconcileobservation.ClaimLeaseStoreObservation{
+			Store:     store.Name,
+			Renewed:   store.Renewed,
+			Reclaimed: store.Reclaimed,
+			Errors:    store.Errors,
+		})
+	}
+	return observation
 }
 
 func reconcileObservationCompletion(completion TraceCompletionStatus) reconcileobservation.CycleCompletion {
