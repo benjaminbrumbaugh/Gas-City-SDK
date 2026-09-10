@@ -193,6 +193,8 @@ jobs:
           go-version-file: go.mod
       - name: CI workflow policy
         run: make test-ci-policy
+      - name: Install native static-check dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libicu-dev
       - name: Classify static-analysis scope
         id: static-scope
         env:

@@ -20,10 +20,10 @@ const (
 	// policy review, while workflow, job, step, and input descriptions remain
 	// free to change. A failure prints the projection and candidate digest.
 	expectedCITriggersHash       = "d1a8bcd089019589658d8f154af9c26a70877285d84a384c2dcea299efc9554a"
-	expectedCIExecutionHash      = "ecc52469d29ef0c375f54ac9b575a1c5032d5715ada2d72d1b5c15eb3d6df2d4"
+	expectedCIExecutionHash      = "68238e5f5072e18b0266e2291e764d7b2d814675d2cb3606947a785a29f03596"
 	expectedNightlyTriggersHash  = "0a4400a09ac567e90adf8be1232eef1f14e36efd8dba3e143aa6e36f5b7a36f5"
 	expectedNightlyExecutionHash = "afea27aba44b76454ea0f57f73ccc8dba8afd2b19c548346e363cae9d2b56aaa"
-	expectedSetupActionHash      = "8f2d6b3a57f11d4f33a41211b1d3d5362d1437ba40c7b6db068abb98e731e5ac"
+	expectedSetupActionHash      = "d8f5bee1a2ff1a63ae5ae13226c759ba9c9fb75d4c0159ca1ded1b0c92740798"
 )
 
 var requiredFilterPaths = map[string][]string{

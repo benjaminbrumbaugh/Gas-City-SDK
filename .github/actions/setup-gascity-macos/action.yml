@@ -90,7 +90,7 @@ runs:
         # its caches on an exotic failure).
         lock_file="${RUNNER_TOOL_CACHE:-$HOME/.local}/gascity-brew.lock"
         mkdir -p "$(dirname "$lock_file")"
-        pkgs=(tmux jq flock)
+        pkgs=(tmux jq flock icu4c)
         install_missing() {
           local missing=()
           for pkg in "${pkgs[@]}"; do
