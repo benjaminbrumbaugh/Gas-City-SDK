@@ -43,6 +43,13 @@ func TestNewEnvInheritsClaudeGatewayVariables(t *testing.T) {
 	}
 }
 
+func TestNewEnvOptsOutOfServiceManager(t *testing.T) {
+	env := NewEnv("", t.TempDir(), t.TempDir())
+	if got := env.Get(supervisorServiceManagerEnv); got != "none" {
+		t.Fatalf("NewEnv() %s = %q, want %q", supervisorServiceManagerEnv, got, "none")
+	}
+}
+
 func TestNewEnvDefaultsBeadsProviderToFile(t *testing.T) {
 	t.Setenv("GC_ACCEPTANCE_BEADS_PROVIDER", "")
 

@@ -502,6 +502,23 @@ lifecycle path; gc never silently falls back to the default unit.
 Setting `GC_SUPERVISOR_SYSTEMD_UNIT` on a non-Linux platform is the
 same kind of hard error — delegation is a systemd contract.
 
+## Running the Supervisor Without a Service Manager
+
+Hermetic test harnesses, CI jobs, and containers can run the supervisor as a
+bare child while keeping their isolated `GC_HOME` out of the host's launchd or
+systemd registry:
+
+```bash
+export GC_SUPERVISOR_SERVICE_MANAGER=none
+```
+
+With this setting, `gc init` and `gc start` skip service-file installation and
+start the supervisor directly when one is not already running. The calling
+environment owns its lifetime; no platform service manager restarts it.
+
+Only the exact value `none` is recognized, ignoring case and surrounding
+whitespace. Other values preserve the normal platform service-manager path.
+
 ## JSONL Archive Push Failures
 
 The core pack runs `jsonl-export` every 15 minutes to dump each bead
