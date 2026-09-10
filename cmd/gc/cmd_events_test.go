@@ -992,7 +992,10 @@ func TestDoEventsWatchTimesOutWithoutMatch(t *testing.T) {
 	defer server.Close()
 
 	var stdout, stderr bytes.Buffer
-	code := doEventsWatch(eventsAPIScope{apiURL: server.URL, cityName: "mc-city"}, "bead.closed", nil, 0, "", 30*time.Millisecond, &stdout, &stderr)
+	// The watch deadline covers the initial head probe as well as the SSE
+	// connection. Keep setup headroom on a contended test host; this test
+	// verifies timeout classification, not a 30ms end-to-end latency SLA.
+	code := doEventsWatch(eventsAPIScope{apiURL: server.URL, cityName: "mc-city"}, "bead.closed", nil, 0, "", 100*time.Millisecond, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("doEventsWatch = %d, want 0; stderr=%s", code, stderr.String())
 	}
