@@ -228,6 +228,21 @@ func sortClaimLeaseReports(reports []claimLeaseStoreReport) {
 }
 
 func (cr *CityRuntime) reconcileClaimLeasesIfDue(ctx context.Context, snapshot *sessionBeadSnapshot, now time.Time) {
+	ownerInfos, ownerSnapshotComplete := claimLeaseOwnerInfos(DesiredStateResult{}, snapshot)
+	cr.reconcileClaimLeasesIfDueWithOwnerInfos(ctx, ownerInfos, ownerSnapshotComplete, now)
+}
+
+// reconcileClaimLeasesIfDueWithOwnerInfos runs the bounded lease pass using the
+// owner census from the same desired-state build as the reconciliation tick.
+// The full census includes session beads in the sessions binding, city store,
+// and active rig stores; an incomplete census is a safety boundary and cannot
+// authorize lease mutation.
+func (cr *CityRuntime) reconcileClaimLeasesIfDueWithOwnerInfos(
+	ctx context.Context,
+	ownerInfos []session.Info,
+	ownerSnapshotComplete bool,
+	now time.Time,
+) {
 	cr.claimLeaseMu.Lock()
 	if !cr.claimLeaseLastAttempt.IsZero() && now.Before(cr.claimLeaseLastAttempt.Add(claimLeaseReconcileInterval)) {
 		cr.claimLeaseMu.Unlock()
@@ -237,7 +252,7 @@ func (cr *CityRuntime) reconcileClaimLeasesIfDue(ctx context.Context, snapshot *
 	cr.claimLeaseMu.Unlock()
 
 	scopes := cr.claimLeaseScopes()
-	if snapshot == nil || snapshot.LoadError() != nil {
+	if !ownerSnapshotComplete {
 		result := claimLeaseReconcileResult{LastAttemptAt: now.UTC()}
 		for _, scope := range scopes {
 			result.Stores = append(result.Stores, claimLeaseStoreReport{Name: scope.Name, Errors: 1})
@@ -247,9 +262,30 @@ func (cr *CityRuntime) reconcileClaimLeasesIfDue(ctx context.Context, snapshot *
 		return
 	}
 
-	result := reconcileClaimLeases(ctx, cr.sp, snapshot.OpenInfos(), scopes, now)
+	result := reconcileClaimLeases(ctx, cr.sp, ownerInfos, scopes, now)
 	sortClaimLeaseReports(result.Stores)
 	cr.publishClaimLeaseResult(result)
+}
+
+// claimLeaseOwnerInfos selects the strongest owner evidence available for a
+// controller tick. DesiredStateResult.SessionOccupancyInfos is the complete
+// cross-store census when present; the primary snapshot is only a fallback for
+// focused callers that do not provide a build result. Partial evidence never
+// becomes an empty owner set, because that would make live claims look
+// abandoned and permit unsafe reclaim.
+func claimLeaseOwnerInfos(result DesiredStateResult, snapshot *sessionBeadSnapshot) ([]session.Info, bool) {
+	if result.SessionQueryPartial {
+		return nil, false
+	}
+	if result.SessionOccupancyInfos != nil || result.SessionSnapshotComplete {
+		infos := make([]session.Info, len(result.SessionOccupancyInfos))
+		copy(infos, result.SessionOccupancyInfos)
+		return infos, result.SessionSnapshotComplete
+	}
+	if result.SessionQueryPartial || snapshot == nil || snapshot.LoadError() != nil {
+		return nil, false
+	}
+	return snapshot.OpenInfos(), true
 }
 
 func (cr *CityRuntime) publishClaimLeaseResult(result claimLeaseReconcileResult) {

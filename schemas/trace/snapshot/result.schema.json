@@ -126,6 +126,43 @@
         "dropped_record_count": { "type": "integer", "minimum": 0 },
         "dropped_batch_count": { "type": "integer", "minimum": 0 }
       }
+    },
+    "claim_leases": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stores"],
+      "properties": {
+        "last_attempt_at": { "type": "string", "format": "date-time" },
+        "last_successful_at": { "type": "string", "format": "date-time" },
+        "stores": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["store", "renewed", "reclaimed", "errors"],
+            "properties": {
+              "store": { "type": "string" },
+              "renewed": { "type": "integer", "minimum": 0 },
+              "reclaimed": { "type": "integer", "minimum": 0 },
+              "errors": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
     }
-  }
+  },
+  "required": [
+    "ok",
+    "schema_version",
+    "city",
+    "generation",
+    "cycle",
+    "completeness",
+    "totals",
+    "templates",
+    "templates_truncated",
+    "template_count",
+    "trace",
+    "claim_leases"
+  ]
 }
