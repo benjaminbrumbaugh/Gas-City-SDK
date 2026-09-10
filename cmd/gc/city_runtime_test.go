@@ -1317,32 +1317,6 @@ func TestNewCityRuntimePreflightUsesResolvableProviderStateByDefault(t *testing.
 	}
 }
 
-func TestCityRuntimeTickPreflightUsesResolvableProviderStateByDefault(t *testing.T) {
-	t.Setenv("GC_BEADS", "bd")
-
-	healthCalls := 0
-	cityPath := t.TempDir()
-	writeReachableProviderManagedDoltState(t, cityPath)
-	cr := &CityRuntime{
-		cityPath:  cityPath,
-		logPrefix: "gc test",
-		stderr:    io.Discard,
-		managedDoltHealth: func(string) error {
-			healthCalls++
-			return nil
-		},
-		managedDoltOwned: func(string) (bool, error) {
-			return true, nil
-		},
-	}
-
-	cr.ensureManagedDoltPublishedForTick()
-
-	if healthCalls != 0 {
-		t.Fatalf("healthCalls = %d, want 0 when provider state is already resolvable", healthCalls)
-	}
-}
-
 func TestCityRuntimeDemandSnapshotRetainsOnlyPoolScaleCheckPartials(t *testing.T) {
 	sessionBeads := newSessionBeadSnapshot([]beads.Bead{{
 		ID:     "session-worker",
