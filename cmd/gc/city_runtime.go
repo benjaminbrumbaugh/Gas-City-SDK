@@ -2491,7 +2491,8 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 		recordPhase(TraceSiteSessionSnapshot, "bead_reconcile.load_session_snapshot", phaseStart, traceSessionSnapshotFields(sessionBeads))
 		result.SessionQueryPartial = result.SessionQueryPartial || sessionQueryPartial
 	}
-	cr.reconcileClaimLeasesIfDue(ctx, sessionBeads, time.Now())
+	ownerInfos, ownerSnapshotComplete := claimLeaseOwnerInfos(result, sessionBeads)
+	cr.reconcileClaimLeasesIfDueWithOwnerInfos(ctx, ownerInfos, ownerSnapshotComplete, time.Now())
 	// Emit any due compute usage facts by reusing the open-session snapshot this
 	// tick already loaded, rather than issuing a second redundant store scan. The
 	// boot pass covers the whole fleet at once on the readiness path, so it takes
