@@ -1367,6 +1367,33 @@ func TestCreateSessionNamedWithTransport_FailedStartDoesNotBurnExplicitName(t *t
 	}
 }
 
+func TestCreateSessionNamedWithTransport_DefinitiveACPStartFailureClearsRoute(t *testing.T) {
+	store := beads.NewMemStore()
+	defaultSP := runtime.NewFake()
+	acpSP := runtime.NewFake()
+	acpSP.StartErrors["sky"] = errors.New("boom")
+	autoSP := sessionauto.New(defaultSP, acpSP)
+	mgr := NewManagerWithOptions(store, autoSP)
+
+	if _, err := mgr.CreateSession(context.Background(), CreateOptions{ExplicitName: "sky", Template: "helper", Title: "first", Command: "claude", WorkDir: "/tmp", Provider: "claude", Transport: "acp", Env: nil, Resume: ProviderResume{}, Hints: runtime.Config{}, ExtraMeta: map[string]string{"session_origin": "manual"}}); err == nil {
+		t.Fatal("expected ACP start failure")
+	}
+
+	info, err := mgr.CreateSession(context.Background(), CreateOptions{ExplicitName: "sky", Template: "helper", Title: "second", Command: "claude", WorkDir: "/tmp", Provider: "claude", Transport: "", Env: nil, Resume: ProviderResume{}, Hints: runtime.Config{}, ExtraMeta: map[string]string{"session_origin": "manual"}})
+	if err != nil {
+		t.Fatalf("default retry after definitive ACP failure: %v", err)
+	}
+	if info.SessionName != "sky" {
+		t.Fatalf("SessionName = %q, want sky", info.SessionName)
+	}
+	if !defaultSP.IsRunning("sky") {
+		t.Fatal("default backend did not receive retry after definitive ACP failure")
+	}
+	if acpSP.IsRunning("sky") {
+		t.Fatal("ACP backend unexpectedly owns retry after definitive ACP failure")
+	}
+}
+
 func TestCreateSessionNamedWithTransport_ConvergesLateSuccessStartError(t *testing.T) {
 	store := beads.NewMemStore()
 	sp := &lateSuccessStartProvider{

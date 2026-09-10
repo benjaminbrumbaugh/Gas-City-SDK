@@ -108,6 +108,7 @@ func cycleAliveSessionForFreshReassign(
 		}
 		return false, nil
 	}
+	recordLegacyCompareWrites(info.ID, "freshCycleRestartHandoff", batch)
 	// The returned fold carries every batch key EXCEPT the durable reset commit
 	// marker: keeping ResetCommittedAtKey out of this tick's snapshot mirrors the
 	// restart-requested handoff so on-demand sessions are not force-woken without

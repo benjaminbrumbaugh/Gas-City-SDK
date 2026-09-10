@@ -27,10 +27,10 @@ const (
 // durable launched identity while a runtime is alive.
 func providerUsageFenceIdentityForRuntime(info sessionpkg.Info, tp TemplateParams, alive bool) string {
 	if alive {
-		if identity := strings.TrimSpace(info.StartedProviderFenceIdentity); identity != "" {
+		if identity := strings.TrimSpace(info.LaunchProviderFenceIdentity); identity != "" {
 			return identity
 		}
-		if identity := strings.TrimSpace(info.LaunchProviderFenceIdentity); identity != "" {
+		if identity := strings.TrimSpace(info.StartedProviderFenceIdentity); identity != "" {
 			return identity
 		}
 	}

@@ -277,7 +277,7 @@ func (m *Manager) retryFreshStartAfterStaleKey(
 	sessName,
 	resumeCommand string,
 	cfg runtime.Config,
-	unroute func(),
+	_ func(),
 ) (bool, error) {
 	// An empty session_key does not mean there is nothing to recover. The
 	// command can still carry a generated resume shape, because it was built
@@ -351,26 +351,17 @@ func (m *Manager) retryFreshStartAfterStaleKey(
 		return false, nil
 	}
 	if err := m.clearStaleResumeMetadata(id, b); err != nil {
-		if unroute != nil {
-			unroute()
-		}
 		return false, err
 	}
 	cfg.Command = freshCmd
 	// Refuse the fresh start if a prior escaped process for this session could
 	// not be confirmed dead: a survivor would race this replacement for the
-	// same work bead. This path reuses the existing bead ID, so there is no
-	// fresh-create to roll back — unroute and propagate the error before Start.
+	// same work bead. This path reuses the existing bead ID, so preserve the ACP
+	// route until absence is authoritatively established by the caller.
 	if orphanErr := m.killExistingOrphans(ctx, id); orphanErr != nil {
-		if unroute != nil {
-			unroute()
-		}
 		return false, fmt.Errorf("pre-start orphan cleanup: %w", orphanErr)
 	}
 	if err := m.sp.Start(ctx, sessName, cfg); err != nil {
-		if unroute != nil {
-			unroute()
-		}
 		return false, fmt.Errorf("fresh start after stale key: %w", err)
 	}
 	return true, nil
@@ -541,7 +532,10 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 		return err
 	}
 	failedStart := func(startErr error) error {
-		_, clearErr := m.clearLaunchProviderFenceIdentityIfDefinitelyAbsent(id, sessName, b.Metadata["launch_provider_fence_identity"])
+		absent, clearErr := m.clearLaunchProviderFenceIdentityIfDefinitelyAbsent(id, sessName, b.Metadata["launch_provider_fence_identity"])
+		if clearErr == nil && absent && unroute != nil {
+			unroute()
+		}
 		return errors.Join(startErr, clearErr)
 	}
 
@@ -583,12 +577,10 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 	// Refuse to resume if a prior escaped process for this session could not be
 	// confirmed dead: a survivor would race this replacement for the same work
 	// bead (duplicate bd close). This is the stable/reused-bead-ID path — the
-	// exact "old process survives alongside its replacement" scenario. No
-	// fresh-create to roll back, so unroute and propagate before Start.
+	// exact "old process survives alongside its replacement" scenario. Preserve
+	// the ACP route so later liveness and cleanup checks keep inspecting the
+	// backend that may own the orphan.
 	if orphanErr := m.killExistingOrphans(ctx, id); orphanErr != nil {
-		if unroute != nil {
-			unroute()
-		}
 		return fmt.Errorf("pre-start orphan cleanup: %w", orphanErr)
 	}
 	if err := m.sp.Start(ctx, sessName, cfg); err != nil {
@@ -602,9 +594,6 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 				// strip, so a relaunch would repeat this failure verbatim.
 				// Propagate the original start error rather than reporting a
 				// start that never happened.
-				if unroute != nil {
-					unroute()
-				}
 				return failedStart(fmt.Errorf("resuming session: %w", err))
 			}
 			started = retried
@@ -612,9 +601,6 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 			// Another caller may have resumed the same session after we loaded the
 			// bead but before we reached Start. If the runtime is already up, treat
 			// the resume as converged and only persist active state below.
-			if unroute != nil {
-				unroute()
-			}
 			return failedStart(fmt.Errorf("resuming session: %w", err))
 		}
 	} else {
@@ -632,15 +618,12 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 			// This is self-healing via NDI — the next ensureRunning call
 			// sees the suspended-state bead, attempts sp.Start, gets
 			// ErrSessionExists (IsRunning=true), and persists "active".
-			if unroute != nil {
-				unroute()
-			}
 			return err
 		}
 		if !m.sp.IsRunning(sessName) {
 			retried, err := m.retryFreshStartAfterStaleKey(ctx, id, &b, sessName, resumeCommand, cfg, unroute)
 			if err != nil {
-				return err
+				return failedStart(err)
 			}
 			started = retried
 		}
@@ -675,7 +658,10 @@ func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b bea
 		return err
 	}
 	failedStart := func(startErr error) error {
-		_, clearErr := m.clearLaunchProviderFenceIdentityIfDefinitelyAbsent(id, sessName, b.Metadata["launch_provider_fence_identity"])
+		absent, clearErr := m.clearLaunchProviderFenceIdentityIfDefinitelyAbsent(id, sessName, b.Metadata["launch_provider_fence_identity"])
+		if clearErr == nil && absent && unroute != nil {
+			unroute()
+		}
 		return errors.Join(startErr, clearErr)
 	}
 
@@ -719,11 +705,9 @@ func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b bea
 	// Refuse to respawn if a prior escaped process for this session could not
 	// be confirmed dead: a survivor would race this replacement for the same
 	// work bead. This is the reconciler respawn bridge on a stable/reused bead
-	// ID. No fresh-create to roll back, so unroute and propagate before Start.
+	// ID. Preserve the ACP route so later liveness and cleanup checks keep
+	// inspecting the backend that may own the orphan.
 	if orphanErr := m.killExistingOrphans(ctx, id); orphanErr != nil {
-		if unroute != nil {
-			unroute()
-		}
 		return fmt.Errorf("pre-start orphan cleanup: %w", orphanErr)
 	}
 	if err := m.sp.Start(ctx, sessName, cfg); err != nil {
@@ -736,18 +720,12 @@ func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b bea
 			if !retried {
 				// The recovery declined: nothing to strip, so a relaunch would
 				// repeat this failure verbatim. Propagate the original error.
-				if unroute != nil {
-					unroute()
-				}
 				return failedStart(fmt.Errorf("resuming session: %w", err))
 			}
 			started = retried
 		case errors.Is(err, runtime.ErrSessionExists) && m.sp.IsRunning(sessName):
 			return err
 		default:
-			if unroute != nil {
-				unroute()
-			}
 			return failedStart(fmt.Errorf("resuming session: %w", err))
 		}
 	} else {
@@ -755,14 +733,11 @@ func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b bea
 	}
 	if started && b.Metadata["session_key"] != "" {
 		if err := m.staleKeyDetectionWaiter(ctx, sessName); err != nil {
-			if unroute != nil {
-				unroute()
-			}
 			return err
 		}
 		if !m.sp.IsRunning(sessName) {
 			if _, err := m.retryFreshStartAfterStaleKey(ctx, id, &b, sessName, resumeCommand, cfg, unroute); err != nil {
-				return err
+				return failedStart(err)
 			}
 		}
 	}

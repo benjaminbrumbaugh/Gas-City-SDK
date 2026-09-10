@@ -2911,12 +2911,13 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						fmt.Fprintf(stderr, "session reconciler: recording restart handoff before usage-limit stop for %s: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
 						continue
 					}
+					recordLegacyCompareWrites(id, "usageLimitRestartHandoff", preStopHandoff)
 					usageLimitRestartHandoffPersisted = true
 					if err := conditionalStop.StopIfDetached(name, strings.TrimSpace(infoByID[id].InstanceToken)); err != nil {
-						recordLegacyCompareWrites(id, "usageLimitRestartHandoffRollback", rollback)
 						if next, rollbackErr := sessFront.UpdateMetadataInfo(handoffInfo, rollback); rollbackErr != nil {
 							fmt.Fprintf(stderr, "session reconciler: restoring restart handoff after refused usage-limit stop for %s: %v\n", name, rollbackErr) //nolint:errcheck
 						} else {
+							recordLegacyCompareWrites(id, "usageLimitRestartHandoffRollback", rollback)
 							tick.set(id, next)
 						}
 						fmt.Fprintf(stderr, "session reconciler: conditionally stopping restart-requested %s: %v\n", name, err) //nolint:errcheck
@@ -2966,6 +2967,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					fmt.Fprintf(stderr, "session reconciler: recording restart handoff for %s: %v\n", name, err) //nolint:errcheck
 					continue
 				}
+				recordLegacyCompareWrites(id, "restartRequestedHandoff", batch)
 				// Fold the batch onto the snapshot (Step 6d write-returns-Info), so the
 				// restart handoff — which CONSUMES the restart_requested marker
 				// (RestartRequestPatch sets it to "") and clears started_config_hash /

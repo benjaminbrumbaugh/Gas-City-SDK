@@ -67,6 +67,9 @@ func seedEquivSession(t *testing.T, store beads.Store, sp runtime.Provider) sess
 	if err := store.SetMetadata(info.ID, "worker_profile", string(ProfileClaudeTmuxCLI)); err != nil {
 		t.Fatalf("SetMetadata(worker_profile): %v", err)
 	}
+	if err := store.SetMetadata(info.ID, "launch_provider_fence_identity", "account:test"); err != nil {
+		t.Fatalf("SetMetadata(launch_provider_fence_identity): %v", err)
+	}
 	return info
 }
 
@@ -106,6 +109,12 @@ func TestSessionByHandleCharacterizesResolverAndSpec(t *testing.T) {
 	}
 	if sh.session.ID != info.ID {
 		t.Fatalf("spec.ID = %q, want %q", sh.session.ID, info.ID)
+	}
+	if got := sh.session.Metadata["launch_provider_fence_identity"]; got != "account:test" {
+		t.Fatalf("spec.Metadata[launch_provider_fence_identity] = %q, want account:test", got)
+	}
+	if got := sh.runtimeHints().ProviderFenceIdentity; got != "account:test" {
+		t.Fatalf("runtime ProviderFenceIdentity = %q, want account:test", got)
 	}
 	// The resolver receives the PERSISTED Info (before it overlays its own
 	// runtime): Provider is the stored legacy-provider, not the resolver's own

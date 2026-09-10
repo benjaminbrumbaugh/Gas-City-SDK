@@ -174,10 +174,11 @@ func (f *Factory) sessionFromRecord(info sessionpkg.Info, pr sessionpkg.Persiste
 		},
 	}
 	sessionKind := strings.TrimSpace(pr.Metadata["real_world_app_session_kind"])
+	metadata := cloneStringMap(pr.Metadata)
+	spec.Metadata = cloneStringMap(metadata)
 	if profile := strings.TrimSpace(pr.Metadata["worker_profile"]); profile != "" {
 		spec.Profile = Profile(profile)
 	}
-	metadata := cloneStringMap(pr.Metadata)
 	if f.resolveSessionRuntime != nil {
 		resolved, err := f.resolveSessionRuntime(info, sessionKind, metadata)
 		if err != nil {

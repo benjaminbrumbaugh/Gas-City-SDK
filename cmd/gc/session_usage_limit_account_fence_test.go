@@ -163,6 +163,10 @@ func TestProviderUsageFenceIdentityForRuntimePrefersLaunchedAccount(t *testing.T
 	if got := providerUsageFenceIdentityForRuntime(info, tp, true); got != "account:launching" {
 		t.Fatalf("launching runtime identity = %q, want write-ahead account", got)
 	}
+	info = sessionpkg.Info{StartedProviderFenceIdentity: "account:old", LaunchProviderFenceIdentity: "account:launching"}
+	if got := providerUsageFenceIdentityForRuntime(info, tp, true); got != "account:launching" {
+		t.Fatalf("recovered live runtime identity = %q, want write-ahead account", got)
+	}
 	if got := providerUsageFenceIdentityForRuntime(info, tp, false); got != "account:desired" {
 		t.Fatalf("dead runtime identity = %q, want desired account", got)
 	}

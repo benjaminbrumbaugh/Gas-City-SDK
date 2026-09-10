@@ -751,7 +751,7 @@ func (m *Manager) routeACPIfNeeded(provider, transport, sessName string) func() 
 	// otherwise an error return can make later liveness or fenced-cleanup checks
 	// inspect the default backend and falsely certify the ACP runtime absent.
 	router.RouteACP(sessName)
-	return func() {}
+	return func() { router.Unroute(sessName) }
 }
 
 // ManagerOption configures an optional Manager capability. It is the single
@@ -968,7 +968,7 @@ func (m *Manager) createStarted(ctx context.Context, spec CreateOptions) (Info, 
 			return err
 		}
 
-		_ = m.routeACPIfNeeded(provider, transport, sessName)
+		clearACPRoute := m.routeACPIfNeeded(provider, transport, sessName)
 		rollbackFailedCreate := func() error {
 			if explicitName != "" {
 				if err := m.store.SetMetadata(b.ID, "session_name", ""); err != nil {
@@ -1051,6 +1051,9 @@ func (m *Manager) createStarted(ctx context.Context, spec CreateOptions) (Info, 
 			}
 			if !absent {
 				return fmt.Errorf("starting session: %w (runtime absence not proven; preserving bead %s and launch attribution)", err, b.ID)
+			}
+			if clearACPRoute != nil {
+				clearACPRoute()
 			}
 			b.Metadata["launch_provider_fence_identity"] = ""
 			if rbErr := rollbackFailedCreate(); rbErr != nil {

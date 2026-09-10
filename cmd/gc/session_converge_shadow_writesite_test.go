@@ -26,8 +26,10 @@ var convergeComparedKeyWriteSiteInventory = map[string]string{
 	"session_name_lookup.go":        "pool-create canonical stamp; recorded via recordLegacyCompareWrites(poolSessionCreate)",
 	"session_reconcile.go":          "healStatePatchWithRollback builds priming clears; recorded via recordLegacyCompareWrites(healStateWithRollback) at the ApplyPatch site",
 	"session_usage_limit_modal.go":  "usage-limit restart rollback builds priming restores; recorded via recordLegacyCompareWrites(usageLimitRestartHandoffRollback) at the persistence site",
+	"session_bead_cycle.go":         "fresh-cycle restart handoff clears priming keys; recorded after successful persistence via recordLegacyCompareWrites",
 	"session_beads.go":              "syncSessionBeads reclaim priming clears + create canonical stamp + named-session retire canonical clears; recorded via recordLegacyCompareWrites",
 	"session_lifecycle_parallel.go": "clearStaleResumeKeyMetadata priming clears; recorded via recordLegacyCompareWrites(clearStaleResumeKeyMetadata)",
+	"session_reconciler.go":         "restart handoff and rollback priming writes; recorded after successful persistence via recordLegacyCompareWrites",
 	"session_converge_shadow.go":    "the recorder + owned-key oracle itself (applyDerivedToOwnedKeys writes a local prediction map, not a store)",
 }
 
@@ -105,6 +107,12 @@ func TestConvergeCompareKeyWriteSitesWired(t *testing.T) {
 				writes = true
 				break
 			}
+		}
+		// RestartRequestPatch clears compared priming keys inside the session
+		// package. Its cmd/gc callers are indirect writers and must be inventoried
+		// and recorded at their successful persistence sites too.
+		if strings.Contains(content, "sessionpkg.RestartRequestPatch(") {
+			writes = true
 		}
 		if !writes {
 			continue
