@@ -41,13 +41,21 @@ func gastownFormulaSearchPaths() []string {
 
 func runCmd(t *testing.T, dir, name string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	out, err := runCmdWithEnv(t, dir, nil, name, args...)
 	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func runCmdWithEnv(t *testing.T, dir string, env []string, name string, args ...string) ([]byte, error) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = env
+	}
+	return cmd.CombinedOutput()
 }
 
 func currentBranch(t *testing.T, dir string) string {
