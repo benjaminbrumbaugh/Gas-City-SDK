@@ -150,19 +150,5 @@
         }
       }
     }
-  },
-  "required": [
-    "ok",
-    "schema_version",
-    "city",
-    "generation",
-    "cycle",
-    "completeness",
-    "totals",
-    "templates",
-    "templates_truncated",
-    "template_count",
-    "trace",
-    "claim_leases"
-  ]
+  }
 }

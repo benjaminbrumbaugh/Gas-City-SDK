@@ -148,6 +148,7 @@ type CityRuntime struct {
 	// separate from bead metadata and published with the cycle facts.
 	claimLeaseMu          sync.RWMutex
 	claimLeaseLastAttempt time.Time
+	claimLeaseInFlight    bool
 	claimLeaseResult      claimLeaseReconcileResult
 
 	// routeRecovery is the route-repair lane: an event-fed delta pass in the
@@ -2492,7 +2493,7 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 		result.SessionQueryPartial = result.SessionQueryPartial || sessionQueryPartial
 	}
 	ownerInfos, ownerSnapshotComplete := claimLeaseOwnerInfos(result, sessionBeads)
-	cr.reconcileClaimLeasesIfDueWithOwnerInfos(ctx, ownerInfos, ownerSnapshotComplete, time.Now())
+	cr.startClaimLeaseReconcileIfDueWithOwnerInfos(ctx, ownerInfos, ownerSnapshotComplete, time.Now())
 	// Emit any due compute usage facts by reusing the open-session snapshot this
 	// tick already loaded, rather than issuing a second redundant store scan. The
 	// boot pass covers the whole fleet at once on the readiness path, so it takes

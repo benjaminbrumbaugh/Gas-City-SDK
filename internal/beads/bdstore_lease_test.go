@@ -1,6 +1,7 @@
 package beads
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -12,14 +13,14 @@ func TestBdStoreHeartbeatClaimUsesNativeLeaseRunner(t *testing.T) {
 	var gotArgs []string
 	store := NewBdStore("/rig", func(string, string, ...string) ([]byte, error) {
 		return nil, errors.New("ordinary store runner must not handle leases")
-	}, WithBdStoreLeaseRunner(func(dir, holder string, args ...string) ([]byte, error) {
+	}, WithBdStoreLeaseRunner(func(_ context.Context, dir, holder string, args ...string) ([]byte, error) {
 		gotDir = dir
 		gotHolder = holder
 		gotArgs = append([]string(nil), args...)
 		return []byte(`{"ok":true}`), nil
 	}))
 
-	if err := store.HeartbeatClaim("rig-claim", "instance-token"); err != nil {
+	if err := store.HeartbeatClaim(context.Background(), "rig-claim", "instance-token"); err != nil {
 		t.Fatalf("HeartbeatClaim() error = %v", err)
 	}
 	if gotDir != "/rig" || gotHolder != "instance-token" {
@@ -34,13 +35,13 @@ func TestBdStoreHeartbeatClaimUsesNativeLeaseRunner(t *testing.T) {
 func TestBdStoreReclaimExpiredClaimsUsesGraceAndReturnsCount(t *testing.T) {
 	var gotHolder string
 	var gotArgs []string
-	store := NewBdStore("/city", nil, WithBdStoreLeaseRunner(func(_, holder string, args ...string) ([]byte, error) {
+	store := NewBdStore("/city", nil, WithBdStoreLeaseRunner(func(_ context.Context, _ string, holder string, args ...string) ([]byte, error) {
 		gotHolder = holder
 		gotArgs = append([]string(nil), args...)
 		return []byte(`{"reclaimed":[{"id":"one"},{"id":"two"}]}`), nil
 	}))
 
-	got, err := store.ReclaimExpiredClaims(10*time.Minute, "worker", " worker ", "worker")
+	got, err := store.ReclaimExpiredClaims(context.Background(), 10*time.Minute, "worker", " worker ", "worker")
 	if err != nil {
 		t.Fatalf("ReclaimExpiredClaims() error = %v", err)
 	}
@@ -62,11 +63,11 @@ func TestBdStoreReclaimExpiredClaimsUsesGraceAndReturnsCount(t *testing.T) {
 }
 
 func TestBdStoreReclaimExpiredClaimsAcceptsEmptyNativeResult(t *testing.T) {
-	store := NewBdStore("/city", nil, WithBdStoreLeaseRunner(func(_, _ string, _ ...string) ([]byte, error) {
+	store := NewBdStore("/city", nil, WithBdStoreLeaseRunner(func(context.Context, string, string, ...string) ([]byte, error) {
 		return []byte(`{"count":0,"reclaimed":null,"schema_version":1,"scoped":false}`), nil
 	}))
 
-	got, err := store.ReclaimExpiredClaims(10 * time.Minute)
+	got, err := store.ReclaimExpiredClaims(context.Background(), 10*time.Minute)
 	if err != nil {
 		t.Fatalf("ReclaimExpiredClaims() error = %v", err)
 	}
@@ -77,10 +78,10 @@ func TestBdStoreReclaimExpiredClaimsAcceptsEmptyNativeResult(t *testing.T) {
 
 func TestBdStoreLeaseMethodsRefuseWithoutNativeLeaseRunner(t *testing.T) {
 	store := NewBdStore("/city", nil)
-	if err := store.HeartbeatClaim("claim", "token"); !errors.Is(err, ErrClaimLeaseUnsupported) {
+	if err := store.HeartbeatClaim(context.Background(), "claim", "token"); !errors.Is(err, ErrClaimLeaseUnsupported) {
 		t.Fatalf("HeartbeatClaim() error = %v, want ErrClaimLeaseUnsupported", err)
 	}
-	if _, err := store.ReclaimExpiredClaims(time.Minute); !errors.Is(err, ErrClaimLeaseUnsupported) {
+	if _, err := store.ReclaimExpiredClaims(context.Background(), time.Minute); !errors.Is(err, ErrClaimLeaseUnsupported) {
 		t.Fatalf("ReclaimExpiredClaims() error = %v, want ErrClaimLeaseUnsupported", err)
 	}
 }

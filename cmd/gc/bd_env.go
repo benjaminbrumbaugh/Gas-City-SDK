@@ -415,17 +415,88 @@ func bdCommandRunnerForRigWithLeaseHolder(cityPath string, cfg *config.City, rig
 }
 
 func bdLeaseCommandRunnerForCity(cityPath string) beads.LeaseCommandRunner {
-	return func(dir, holder string, args ...string) ([]byte, error) {
-		runner := bdCommandRunnerForCityWithLeaseHolder(cityPath, holder, true)
-		return runner(dir, "bd", args...)
+	return func(ctx context.Context, dir, holder string, args ...string) ([]byte, error) {
+		completeBinding, err := scopeHasCompleteStorageBinding(scopeMetadataJSONPath(cityPath))
+		if err != nil {
+			return nil, err
+		}
+		if completeBinding {
+			env := cityRuntimeEnvMapForCity(cityPath)
+			bdBin, err := workspacePinnedBdBinary(cityPath)
+			if err != nil {
+				return nil, err
+			}
+			env["BD_BIN"] = bdBin
+			env["BEADS_DIR"] = filepath.Join(dir, ".beads")
+			env["GC_RIG"] = ""
+			env["GC_RIG_ROOT"] = ""
+			env["BEADS_DOLT_AUTO_START"] = "0"
+			env["BD_EXPORT_AUTO"] = "false"
+			applyBdLeaseHolder(env, holder, true)
+			hosted, err := citySelectsHostedBeadsCredentialProvider(cityPath)
+			if err != nil {
+				return nil, err
+			}
+			credentialsFile := strings.TrimSpace(env["BEADS_CREDENTIALS_FILE"])
+			if credentialsFile == "" && !hosted {
+				credentialsFile = strings.TrimSpace(ambientNativeDoltOpenEnv("BEADS_CREDENTIALS_FILE"))
+			}
+			setExecProjectedBackendEnvEmpty(env)
+			if credentialsFile != "" {
+				env["BEADS_CREDENTIALS_FILE"] = credentialsFile
+			}
+			if err := applyHostedBeadsCredentialEnv(env, cityPath); err != nil {
+				return nil, err
+			}
+			return runContextBoundLeaseCommand(ctx, cityPath, dir, env, args)
+		}
+		env, err := bdRuntimeEnvWithError(cityPath)
+		if env == nil {
+			env = map[string]string{}
+		}
+		env["BEADS_DIR"] = filepath.Join(dir, ".beads")
+		applyBdLeaseHolder(env, holder, true)
+		if err != nil {
+			return nil, err
+		}
+		return runContextBoundLeaseCommand(ctx, cityPath, dir, env, args)
 	}
 }
 
 func bdLeaseCommandRunnerForRig(cityPath string, cfg *config.City, rigDir string) beads.LeaseCommandRunner {
-	return func(dir, holder string, args ...string) ([]byte, error) {
-		runner := bdCommandRunnerForRigWithLeaseHolder(cityPath, cfg, rigDir, holder, true)
-		return runner(dir, "bd", args...)
+	return func(ctx context.Context, dir, holder string, args ...string) ([]byte, error) {
+		env, err := bdRuntimeEnvForRigWithError(cityPath, cfg, rigDir)
+		if env == nil {
+			env = map[string]string{}
+		}
+		applyBdLeaseHolder(env, holder, true)
+		if err != nil {
+			return nil, err
+		}
+		return runContextBoundLeaseCommand(ctx, cityPath, dir, env, args)
 	}
+}
+
+// runContextBoundLeaseCommand deliberately performs one bounded native call.
+// Lease patrol retries on its next cadence; it must not inherit the general
+// runner's managed recovery and second 120-second attempt because a slow
+// heartbeat lane can otherwise become the reason later leases expire.
+func runContextBoundLeaseCommand(ctx context.Context, cityPath, dir string, env map[string]string, args []string) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ensureProjectedDoltEnvExplicit(env)
+	selected, err := citySelectsHostedBeadsCredentialProvider(cityPath)
+	if err != nil {
+		return nil, err
+	}
+	var runner beads.CommandRunner
+	if selected {
+		runner = beads.ExecCommandRunnerWithEnvContextWithoutAmbientBeads(ctx, env)
+	} else {
+		runner = beads.ExecCommandRunnerWithEnvContext(ctx, env)
+	}
+	return runner(dir, "bd", args...)
 }
 
 func applyBdLeaseHolder(env map[string]string, holder string, leaseCommand bool) {

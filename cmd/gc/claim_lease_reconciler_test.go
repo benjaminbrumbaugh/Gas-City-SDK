@@ -3,11 +3,16 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
@@ -20,6 +25,7 @@ type claimLeaseHeartbeat struct {
 
 type claimLeaseTestStore struct {
 	*beads.MemStore
+	mu               sync.Mutex
 	listErr          error
 	heartbeats       []claimLeaseHeartbeat
 	heartbeatErr     error
@@ -31,6 +37,40 @@ type claimLeaseTestStore struct {
 	leaseExpiresAt   time.Time
 }
 
+type claimLeaseListErrorProvider struct {
+	runtime.Provider
+}
+
+func (p claimLeaseListErrorProvider) ListRunning(string) ([]string, error) {
+	return nil, errors.New("runtime inventory unavailable")
+}
+
+type concurrentClaimLeaseTestStore struct {
+	*claimLeaseTestStore
+	active  atomic.Int32
+	maximum atomic.Int32
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *concurrentClaimLeaseTestStore) HeartbeatClaim(ctx context.Context, _, _ string) error {
+	active := s.active.Add(1)
+	defer s.active.Add(-1)
+	for {
+		maximum := s.maximum.Load()
+		if active <= maximum || s.maximum.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	s.started <- struct{}{}
+	select {
+	case <-s.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (s *claimLeaseTestStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 	if s.listErr != nil {
 		return nil, s.listErr
@@ -38,7 +78,9 @@ func (s *claimLeaseTestStore) List(query beads.ListQuery) ([]beads.Bead, error) 
 	return s.MemStore.List(query)
 }
 
-func (s *claimLeaseTestStore) HeartbeatClaim(id, holder string) error {
+func (s *claimLeaseTestStore) HeartbeatClaim(_ context.Context, id, holder string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.heartbeats = append(s.heartbeats, claimLeaseHeartbeat{id: id, holder: holder})
 	if s.heartbeatErr == nil {
 		s.leaseExpiresAt = time.Now().Add(5 * time.Minute)
@@ -46,7 +88,9 @@ func (s *claimLeaseTestStore) HeartbeatClaim(id, holder string) error {
 	return s.heartbeatErr
 }
 
-func (s *claimLeaseTestStore) ReclaimExpiredClaims(grace time.Duration, assignees ...string) (int, error) {
+func (s *claimLeaseTestStore) ReclaimExpiredClaims(_ context.Context, grace time.Duration, assignees ...string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.reclaimCalls = append(s.reclaimCalls, grace)
 	s.reclaimAssignees = append(s.reclaimAssignees, append([]string(nil), assignees...))
 	if s.reclaimRows {
@@ -302,6 +346,64 @@ func TestReconcileClaimLeasesDoesNotReclaimLiveProviderWithoutSessionIdentity(t 
 	}
 }
 
+func TestReconcileClaimLeasesFailsClosedWhenRuntimeInventoryFails(t *testing.T) {
+	store := newClaimLeaseTestStore(t, beads.Bead{
+		ID: "claim", Status: "in_progress", Assignee: "worker",
+		Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: "session"},
+	})
+	provider := liveLeaseProvider(t, "session", "worker", "token")
+
+	got := reconcileClaimLeases(context.Background(), claimLeaseListErrorProvider{Provider: provider}, []session.Info{{
+		ID: "session", State: session.StateActive, MetadataState: string(session.StateActive),
+		SessionName: "worker", SessionNameMetadata: "worker", InstanceToken: "token",
+	}}, []claimLeaseScope{{Name: "city", Store: store, Lease: store}}, time.Now())
+
+	if len(store.heartbeats) != 0 || len(store.reclaimCalls) != 0 {
+		t.Fatalf("inventory failure operations = heartbeats:%v reclaim:%v, want none", store.heartbeats, store.reclaimCalls)
+	}
+	if got.Stores[0].Errors == 0 || !got.LastSuccessfulAt.IsZero() {
+		t.Fatalf("inventory failure diagnostics = %#v, want fail-closed error", got)
+	}
+}
+
+func TestReconcileClaimLeasesHeartbeatsFleetConcurrently(t *testing.T) {
+	const claimCount = claimLeaseHeartbeatWorkers + 1
+	rows := make([]beads.Bead, 0, claimCount)
+	for i := range claimCount {
+		rows = append(rows, beads.Bead{
+			ID: fmt.Sprintf("claim-%d", i), Status: "in_progress", Assignee: "worker",
+			Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: "session"},
+		})
+	}
+	store := &concurrentClaimLeaseTestStore{
+		claimLeaseTestStore: newClaimLeaseTestStore(t, rows...),
+		started:             make(chan struct{}, claimCount),
+		release:             make(chan struct{}),
+	}
+	provider := liveLeaseProvider(t, "session", "worker", "token")
+	done := make(chan claimLeaseReconcileResult, 1)
+	go func() {
+		done <- reconcileClaimLeases(context.Background(), provider, []session.Info{{
+			ID: "session", State: session.StateActive, MetadataState: string(session.StateActive),
+			SessionName: "worker", SessionNameMetadata: "worker", InstanceToken: "token",
+		}}, []claimLeaseScope{{Name: "city", Store: store, Lease: store}}, time.Now())
+	}()
+
+	for range 2 {
+		select {
+		case <-store.started:
+		case <-time.After(time.Second):
+			close(store.release)
+			t.Fatal("heartbeats remained serial; two operations did not start together")
+		}
+	}
+	close(store.release)
+	got := <-done
+	if store.maximum.Load() < 2 || got.Stores[0].Renewed != claimCount {
+		t.Fatalf("heartbeat concurrency = %d, diagnostics = %#v", store.maximum.Load(), got.Stores[0])
+	}
+}
+
 func TestReconcileClaimLeasesFailsClosedPerUnreadableStore(t *testing.T) {
 	broken := newClaimLeaseTestStore(t)
 	broken.listErr = errors.New("rig ledger unavailable")
@@ -386,6 +488,65 @@ func TestReconcileClaimLeasesDueUsesCompleteCrossStoreOwnerCensus(t *testing.T) 
 	}
 }
 
+func TestStartClaimLeaseReconcileDoesNotBlockControllerTick(t *testing.T) {
+	const (
+		sessionID   = "session"
+		sessionName = "worker"
+		token       = "token"
+	)
+	store := &concurrentClaimLeaseTestStore{
+		claimLeaseTestStore: newClaimLeaseTestStore(t, beads.Bead{
+			ID: "claim", Status: "in_progress", Assignee: sessionName,
+			Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: sessionID},
+		}),
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	cr := &CityRuntime{
+		cityPath:            t.TempDir(),
+		cityName:            "city",
+		sp:                  liveLeaseProvider(t, sessionID, sessionName, token),
+		standaloneCityStore: store,
+	}
+	owner := session.Info{
+		ID: sessionID, State: session.StateActive, MetadataState: string(session.StateActive),
+		SessionName: sessionName, SessionNameMetadata: sessionName, InstanceToken: token,
+	}
+
+	returned := make(chan struct{})
+	go func() {
+		cr.startClaimLeaseReconcileIfDueWithOwnerInfos(context.Background(), []session.Info{owner}, true, time.Now())
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		close(store.release)
+		t.Fatal("lease reconciliation blocked the controller caller")
+	}
+	select {
+	case <-store.started:
+	case <-time.After(time.Second):
+		close(store.release)
+		t.Fatal("background lease reconciliation did not start")
+	}
+	close(store.release)
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		cr.claimLeaseMu.RLock()
+		inFlight := cr.claimLeaseInFlight
+		cr.claimLeaseMu.RUnlock()
+		if !inFlight {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background lease reconciliation did not finish")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestReconcileClaimLeasesDueFailsClosedOnPartialOwnerCensus(t *testing.T) {
 	const (
 		sessionID   = "possibly-live-session"
@@ -443,9 +604,9 @@ func TestClaimLeaseOwnerInfosRejectsPartialResultEvenWithCensus(t *testing.T) {
 	}
 }
 
-func TestReconcileClaimLeasesReopensAbandonedClaimThroughNativeReclaim(t *testing.T) {
+func TestReconcileClaimLeasesFailsClosedWhenClaimSessionIdentityIsMissing(t *testing.T) {
 	store := newClaimLeaseTestStore(t, beads.Bead{
-		ID: "abandoned", Status: "in_progress", Assignee: "direct-owner",
+		ID: "identity-unstamped", Status: "in_progress", Assignee: "direct-owner",
 	})
 	store.reclaimRows = true
 	store.reclaimCount = 1
@@ -455,20 +616,20 @@ func TestReconcileClaimLeasesReopensAbandonedClaimThroughNativeReclaim(t *testin
 	}, time.Now())
 
 	if len(store.heartbeats) != 0 {
-		t.Fatalf("abandoned claim heartbeats = %#v, want none", store.heartbeats)
+		t.Fatalf("unstamped claim heartbeats = %#v, want none", store.heartbeats)
 	}
-	if len(store.reclaimCalls) != 1 || store.reclaimCalls[0] != claimLeaseReclaimGrace {
-		t.Fatalf("reclaim calls = %v, want one native grace call", store.reclaimCalls)
+	if len(store.reclaimCalls) != 0 {
+		t.Fatalf("unstamped claim reclaim calls = %v, want none", store.reclaimCalls)
 	}
-	row, err := store.Get("abandoned")
+	row, err := store.Get("identity-unstamped")
 	if err != nil {
-		t.Fatalf("read reopened claim: %v", err)
+		t.Fatalf("read unstamped claim: %v", err)
 	}
-	if row.Status != "open" || row.Assignee != "" {
-		t.Fatalf("abandoned claim = status %q assignee %q, want open/unassigned", row.Status, row.Assignee)
+	if row.Status != "in_progress" || row.Assignee != "direct-owner" {
+		t.Fatalf("unstamped claim = status %q assignee %q, want ownership preserved", row.Status, row.Assignee)
 	}
-	if got.Stores[0].Reclaimed != 1 || got.LastSuccessfulAt.IsZero() {
-		t.Fatalf("reclaim diagnostics = %#v, want successful native reclaim", got)
+	if got.Stores[0].Errors == 0 || !got.LastSuccessfulAt.IsZero() {
+		t.Fatalf("unstamped diagnostics = %#v, want fail-closed error", got)
 	}
 }
 
@@ -505,13 +666,33 @@ func TestClaimLeaseScopesIncludeOnlyConfiguredActiveRigs(t *testing.T) {
 		},
 	}
 
-	scopes := cr.claimLeaseScopes()
+	scopes, err := cr.claimLeaseScopes()
+	if err != nil {
+		t.Fatalf("claimLeaseScopes() error = %v", err)
+	}
 	if len(scopes) != 2 || scopes[0].Name != "city" || scopes[1].Name != "active" {
 		t.Fatalf("lease scopes = %#v, want city and active configured rig only", scopes)
 	}
 }
 
-func TestApplyBdLeaseHolderUsesControllerActorForReclaim(t *testing.T) {
+func TestClaimLeaseScopesFailClosedWhenSuspensionStateIsUnreadable(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.MkdirAll(citylayout.SuspensionStateFile(cityPath), 0o755); err != nil {
+		t.Fatalf("create unreadable suspension-state path: %v", err)
+	}
+	cr := &CityRuntime{
+		cityPath:            cityPath,
+		cityName:            "city",
+		cfg:                 &config.City{Rigs: []config.Rig{{Name: "rig", Path: t.TempDir()}}},
+		standaloneCityStore: newClaimLeaseTestStore(t),
+	}
+
+	if scopes, err := cr.claimLeaseScopes(); err == nil || scopes != nil {
+		t.Fatalf("claimLeaseScopes() = (%#v, %v), want nil error-gated scopes", scopes, err)
+	}
+}
+
+func TestApplyBdLeaseHolderClearsAmbientIdentityForReclaim(t *testing.T) {
 	env := map[string]string{"BEADS_ACTOR": "stale-owner"}
 	applyBdLeaseHolder(env, "", true)
 	if env["BEADS_ACTOR"] != "controller" {

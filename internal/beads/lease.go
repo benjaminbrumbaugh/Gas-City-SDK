@@ -2,6 +2,7 @@ package beads
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +18,7 @@ var ErrClaimLeaseUnsupported = errors.New("native claim lease primitives unsuppo
 // LeaseCommandRunner runs a native lease command with the holder identity that
 // owns the claim. The holder is supplied separately from argv so it cannot be
 // mistaken for a bead id or accidentally appear in operator-facing output.
-type LeaseCommandRunner func(dir, holder string, args ...string) ([]byte, error)
+type LeaseCommandRunner func(ctx context.Context, dir, holder string, args ...string) ([]byte, error)
 
 // WithBdStoreLeaseRunner installs the native lease command runner for a
 // BdStore. Ordinary BdStore commands continue to use the CommandRunner passed
@@ -33,8 +34,8 @@ func WithBdStoreLeaseRunner(runner LeaseCommandRunner) BdStoreOption {
 // interface is deliberately optional: backends that do not implement bd's
 // ephemeral lease table must fail closed rather than emulate it with metadata.
 type ClaimLeaseStore interface {
-	HeartbeatClaim(id, holder string) error
-	ReclaimExpiredClaims(olderThan time.Duration, assignees ...string) (int, error)
+	HeartbeatClaim(ctx context.Context, id, holder string) error
+	ReclaimExpiredClaims(ctx context.Context, olderThan time.Duration, assignees ...string) (int, error)
 }
 
 var _ ClaimLeaseStore = (*BdStore)(nil)
@@ -42,7 +43,7 @@ var _ ClaimLeaseStore = (*BdStore)(nil)
 // HeartbeatClaim refreshes a claim through bd's native heartbeat primitive.
 // The holder must be the exact assignee that acquired the claim; the native
 // command rejects a different or expired owner.
-func (s *BdStore) HeartbeatClaim(id, holder string) error {
+func (s *BdStore) HeartbeatClaim(ctx context.Context, id, holder string) error {
 	if s == nil || s.leaseRunner == nil {
 		return ErrClaimLeaseUnsupported
 	}
@@ -54,7 +55,7 @@ func (s *BdStore) HeartbeatClaim(id, holder string) error {
 	if holder == "" {
 		return errors.New("heartbeat claim: empty holder")
 	}
-	_, err := s.leaseRunner(s.dir, holder, s.bdTransientWriteArgs([]string{"heartbeat", id, "--json"})...)
+	_, err := s.leaseRunner(ctx, s.dir, holder, s.bdTransientWriteArgs([]string{"heartbeat", id, "--json"})...)
 	if err != nil {
 		return fmt.Errorf("heartbeat claim %q: %w", id, err)
 	}
@@ -65,7 +66,7 @@ func (s *BdStore) HeartbeatClaim(id, holder string) error {
 // It never passes --any-replica: a controller may only reclaim leases granted
 // by this store's local replica. olderThan is the native grace threshold, not
 // a controller-side timestamp heuristic.
-func (s *BdStore) ReclaimExpiredClaims(olderThan time.Duration, assignees ...string) (int, error) {
+func (s *BdStore) ReclaimExpiredClaims(ctx context.Context, olderThan time.Duration, assignees ...string) (int, error) {
 	if s == nil || s.leaseRunner == nil {
 		return 0, ErrClaimLeaseUnsupported
 	}
@@ -77,7 +78,7 @@ func (s *BdStore) ReclaimExpiredClaims(olderThan time.Duration, assignees ...str
 		args = append(args, "--assignee", assignee)
 	}
 	args = append(args, "--json")
-	out, err := s.leaseRunner(s.dir, "", s.bdTransientWriteArgs(args)...)
+	out, err := s.leaseRunner(ctx, s.dir, "", s.bdTransientWriteArgs(args)...)
 	if err != nil {
 		return 0, fmt.Errorf("reclaim expired claims: %w", err)
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
 )
@@ -22,6 +23,11 @@ const (
 	// the five-minute claim TTL). It is passed to bd rather than reimplemented
 	// from wall-clock fields, because lease state is node-local to bd.
 	claimLeaseReclaimGrace = 10 * time.Minute
+	// Native heartbeat/reclaim calls are patrol work, not general bd commands.
+	// Keep each call well below the patrol interval so a slow backend cannot
+	// consume the next renewal window.
+	claimLeaseOperationTimeout = 20 * time.Second
+	claimLeaseHeartbeatWorkers = 8
 )
 
 type claimLeaseScope struct {
@@ -49,15 +55,27 @@ type claimLeaseReconcileResult struct {
 // rig stores cannot enter the operation through a broad filesystem scan.
 //
 // A store read is a safety gate: when it fails, neither heartbeat nor reclaim
-// is attempted for that scope. An absent session id is treated as an abandoned
-// claim and left for native reclaim; a present but fenced session is reported
-// as an identity error and is not heartbeated.
+// is attempted for that scope. Missing or fenced ownership evidence is also a
+// safety failure: the pass does not guess that a worker is gone.
 func reconcileClaimLeases(ctx context.Context, provider runtime.Provider, infos []session.Info, scopes []claimLeaseScope, now time.Time) claimLeaseReconcileResult {
 	result := claimLeaseReconcileResult{LastAttemptAt: now.UTC()}
 	bySessionID := make(map[string]session.Info, len(infos))
 	for _, info := range infos {
 		if id := strings.TrimSpace(info.ID); id != "" {
 			bySessionID[id] = info
+		}
+	}
+	runningNames := make(map[string]struct{})
+	var runtimeInventoryErr error
+	if provider == nil {
+		runtimeInventoryErr = fmt.Errorf("provider unavailable")
+	} else {
+		running, err := provider.ListRunning("")
+		runtimeInventoryErr = err
+		for _, name := range running {
+			if name = strings.TrimSpace(name); name != "" {
+				runningNames[name] = struct{}{}
+			}
 		}
 	}
 
@@ -91,6 +109,11 @@ func reconcileClaimLeases(ctx context.Context, provider runtime.Provider, infos 
 		claimed := false
 		assignees := make(map[string]struct{})
 		reclaimAllowed := true
+		type heartbeatCandidate struct {
+			id       string
+			assignee string
+		}
+		heartbeats := make([]heartbeatCandidate, 0, len(claims))
 		for _, claim := range claims {
 			assignee := strings.TrimSpace(claim.Assignee)
 			if assignee == "" {
@@ -102,15 +125,19 @@ func reconcileClaimLeases(ctx context.Context, provider runtime.Provider, infos 
 			assignees[assignee] = struct{}{}
 			sessionID := strings.TrimSpace(claim.Metadata[beadmeta.SessionIDMetadataKey])
 			if sessionID == "" {
-				// There is no exact owner to renew; native reclaim may recover
-				// this abandoned claim after the local grace period.
+				// Claim-time identity stamping is best-effort. Its absence cannot
+				// distinguish an abandoned claim from a live worker whose stamp
+				// failed, so destructive reclaim must fail closed for this store.
+				reclaimAllowed = false
+				current.Errors++
+				allComplete = false
 				continue
 			}
 			info, exists := bySessionID[sessionID]
 			if !exists {
 				continue
 			}
-			live, reason, safeToReclaim := claimLeaseOwnerStatus(provider, info)
+			live, reason, safeToReclaim := claimLeaseOwnerStatus(provider, info, runningNames, runtimeInventoryErr)
 			if !live {
 				reclaimAllowed = reclaimAllowed && safeToReclaim
 				if reason != "" {
@@ -125,7 +152,28 @@ func reconcileClaimLeases(ctx context.Context, provider runtime.Provider, infos 
 				allComplete = false
 				continue
 			}
-			if err := scope.Lease.HeartbeatClaim(claim.ID, assignee); err != nil {
+			heartbeats = append(heartbeats, heartbeatCandidate{id: claim.ID, assignee: assignee})
+		}
+		heartbeatResults := make(chan error, len(heartbeats))
+		heartbeatSlots := make(chan struct{}, claimLeaseHeartbeatWorkers)
+		for _, heartbeat := range heartbeats {
+			heartbeat := heartbeat
+			go func() {
+				select {
+				case heartbeatSlots <- struct{}{}:
+					defer func() { <-heartbeatSlots }()
+				case <-ctx.Done():
+					heartbeatResults <- ctx.Err()
+					return
+				}
+				opCtx, cancel := context.WithTimeout(ctx, claimLeaseOperationTimeout)
+				err := scope.Lease.HeartbeatClaim(opCtx, heartbeat.id, heartbeat.assignee)
+				cancel()
+				heartbeatResults <- err
+			}()
+		}
+		for range heartbeats {
+			if err := <-heartbeatResults; err != nil {
 				reclaimAllowed = false
 				current.Errors++
 				allComplete = false
@@ -144,7 +192,9 @@ func reconcileClaimLeases(ctx context.Context, provider runtime.Provider, infos 
 			assigneeList = append(assigneeList, assignee)
 		}
 		sort.Strings(assigneeList)
-		reclaimed, err := scope.Lease.ReclaimExpiredClaims(claimLeaseReclaimGrace, assigneeList...)
+		opCtx, cancel := context.WithTimeout(ctx, claimLeaseOperationTimeout)
+		reclaimed, err := scope.Lease.ReclaimExpiredClaims(opCtx, claimLeaseReclaimGrace, assigneeList...)
+		cancel()
 		if err != nil {
 			current.Errors++
 			allComplete = false
@@ -168,7 +218,7 @@ func reconcileClaimLeases(ctx context.Context, provider runtime.Provider, infos 
 // to interpret as abandonment. A draining session with matching runtime
 // identity is also not safe to reclaim: it remains the exact owner even though
 // its lease is intentionally not renewed.
-func claimLeaseOwnerStatus(provider runtime.Provider, info session.Info) (live bool, reason string, safeToReclaim bool) {
+func claimLeaseOwnerStatus(provider runtime.Provider, info session.Info, runningNames map[string]struct{}, runtimeInventoryErr error) (live bool, reason string, safeToReclaim bool) {
 	if provider == nil {
 		return false, "provider unavailable", false
 	}
@@ -179,7 +229,10 @@ func claimLeaseOwnerStatus(provider runtime.Provider, info session.Info) (live b
 	if name == "" {
 		return false, "session name is not persisted", false
 	}
-	if !provider.IsRunning(name) {
+	if runtimeInventoryErr != nil {
+		return false, "provider runtime inventory unavailable", false
+	}
+	if _, runtimePresent := runningNames[name]; !runtimePresent {
 		return false, "provider runtime is not running", true
 	}
 	runtimeID, err := provider.GetMeta(name, "GC_SESSION_ID")
@@ -250,8 +303,49 @@ func (cr *CityRuntime) reconcileClaimLeasesIfDueWithOwnerInfos(
 	}
 	cr.claimLeaseLastAttempt = now
 	cr.claimLeaseMu.Unlock()
+	cr.runClaimLeaseReconcile(ctx, ownerInfos, ownerSnapshotComplete, now)
+}
 
-	scopes := cr.claimLeaseScopes()
+// startClaimLeaseReconcileIfDueWithOwnerInfos keeps native lease I/O off the
+// controller tick. A single in-flight pass is allowed; each native command is
+// independently context-bounded, so this lane cannot serialize later tick
+// phases or accumulate overlapping reclaim attempts.
+func (cr *CityRuntime) startClaimLeaseReconcileIfDueWithOwnerInfos(
+	ctx context.Context,
+	ownerInfos []session.Info,
+	ownerSnapshotComplete bool,
+	now time.Time,
+) {
+	cr.claimLeaseMu.Lock()
+	if cr.claimLeaseInFlight || (!cr.claimLeaseLastAttempt.IsZero() && now.Before(cr.claimLeaseLastAttempt.Add(claimLeaseReconcileInterval))) {
+		cr.claimLeaseMu.Unlock()
+		return
+	}
+	cr.claimLeaseLastAttempt = now
+	cr.claimLeaseInFlight = true
+	cr.claimLeaseMu.Unlock()
+
+	owners := append([]session.Info(nil), ownerInfos...)
+	go func() {
+		defer func() {
+			cr.claimLeaseMu.Lock()
+			cr.claimLeaseInFlight = false
+			cr.claimLeaseMu.Unlock()
+		}()
+		cr.runClaimLeaseReconcile(ctx, owners, ownerSnapshotComplete, now)
+	}()
+}
+
+func (cr *CityRuntime) runClaimLeaseReconcile(ctx context.Context, ownerInfos []session.Info, ownerSnapshotComplete bool, now time.Time) {
+	scopes, scopeErr := cr.claimLeaseScopes()
+	if scopeErr != nil {
+		cr.publishClaimLeaseResult(claimLeaseReconcileResult{
+			LastAttemptAt: now.UTC(),
+			Stores:        []claimLeaseStoreReport{{Name: cr.claimLeaseCityScopeName(), Errors: 1}},
+		})
+		return
+	}
+
 	if !ownerSnapshotComplete {
 		result := claimLeaseReconcileResult{LastAttemptAt: now.UTC()}
 		for _, scope := range scopes {
@@ -300,11 +394,15 @@ func (cr *CityRuntime) publishClaimLeaseResult(result claimLeaseReconcileResult)
 	cr.claimLeaseMu.Unlock()
 }
 
-func (cr *CityRuntime) claimLeaseScopes() []claimLeaseScope {
-	cityName := strings.TrimSpace(cr.cityName)
-	if cityName == "" {
-		cityName = "city"
+func (cr *CityRuntime) claimLeaseCityScopeName() string {
+	if cityName := strings.TrimSpace(cr.cityName); cityName != "" {
+		return cityName
 	}
+	return "city"
+}
+
+func (cr *CityRuntime) claimLeaseScopes() ([]claimLeaseScope, error) {
+	cityName := cr.claimLeaseCityScopeName()
 	cityStore := cr.cityBeadStore()
 	scopes := []claimLeaseScope{{
 		Name:  cityName,
@@ -313,9 +411,12 @@ func (cr *CityRuntime) claimLeaseScopes() []claimLeaseScope {
 	}}
 
 	if cr.cfg == nil {
-		return scopes
+		return scopes, nil
 	}
-	suspension := loadSuspensionStateBestEffort(cr.cityPath)
+	suspension, err := loadSuspensionState(fsys.OSFS{}, cr.cityPath)
+	if err != nil {
+		return nil, fmt.Errorf("loading suspension state for claim lease scopes: %w", err)
+	}
 	rigStores := cr.rigBeadStores() // residency:allow lease reconciliation scopes only active configured rigs
 	for _, rig := range cr.cfg.Rigs {
 		if strings.TrimSpace(rig.Path) == "" || !rigStoreBackgroundRefresh(suspension, rig) {
@@ -329,7 +430,7 @@ func (cr *CityRuntime) claimLeaseScopes() []claimLeaseScope {
 			Lease: cr.claimLeaseBackend(scopeRoot, store),
 		})
 	}
-	return scopes
+	return scopes, nil
 }
 
 func (cr *CityRuntime) claimLeaseBackend(scopeRoot string, store beads.Store) beads.ClaimLeaseStore {
