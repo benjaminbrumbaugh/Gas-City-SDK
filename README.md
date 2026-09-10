@@ -104,9 +104,16 @@ make build
 go version -m ./bin/gc
 ```
 
-On macOS, the Makefile detects Homebrew's keg-only ICU dependency when available. A source build may require:
+The transitive Dolt / `go-icu-regex` dependency requires ICU headers for
+cgo-enabled source builds. On macOS, the Makefile detects Homebrew's keg-only
+ICU dependency when available. On Debian/Ubuntu, install the development
+package first. A source build may require:
 
 ```bash
+# Debian/Ubuntu
+sudo apt-get install libicu-dev
+
+# macOS
 brew install icu4c
 ```
 

@@ -24,7 +24,7 @@ func TestCurrentWorkflowsMatchPolicy(t *testing.T) {
 }
 
 func TestMakeTestCIPolicyRunsStaticScopeContracts(t *testing.T) {
-	const want = "\t$(TEST_ENV) GOFLAGS= GOENV=off GOWORK=off go test -count=1 -run '^(TestPreflightStaticScopesOrdinaryPRsWithoutWeakeningProtectedRuns|TestFullStaticLintExplicitlyOwnsConfiguredGolangCIGovet|TestChangedStaticTargetsScopeLintAndFormattingToTheDiff|TestCIStaticScopeClassifierFailsClosedOutsideValidatedPullRequestMerge)$$' ./scripts"
+	const want = "\t$(TEST_ENV) GOFLAGS= GOENV=off GOWORK=off go test -count=1 -run '^(TestPreflightStaticInstallsICUDevelopmentHeaders|TestUbuntuSetupInstallsICUDevelopmentHeaders|TestMacSetupInstallsICUDevelopmentHeaders|TestPreflightStaticScopesOrdinaryPRsWithoutWeakeningProtectedRuns|TestFullStaticLintExplicitlyOwnsConfiguredGolangCIGovet|TestChangedStaticTargetsScopeLintAndFormattingToTheDiff|TestCIStaticScopeClassifierFailsClosedOutsideValidatedPullRequestMerge)$$' ./scripts"
 
 	makefilePath := filepath.Join("..", "..", "Makefile")
 	body, err := os.ReadFile(makefilePath)

@@ -861,6 +861,80 @@ func TestStaticChecksUseOnlyTheGoToolchain(t *testing.T) {
 	}
 }
 
+func TestPreflightStaticInstallsICUDevelopmentHeaders(t *testing.T) {
+	wf := readCriticalPathWorkflow(t, "ci.yml")
+	job, ok := wf.Jobs["preflight-static"]
+	if !ok {
+		t.Fatal("CI workflow has no preflight-static job")
+	}
+
+	setupIndex := -1
+	installIndex := -1
+	vetIndex := -1
+	for index, step := range job.Steps {
+		if strings.Contains(step.Uses, "actions/setup-go@") {
+			setupIndex = index
+		}
+		if strings.Contains(step.Run, "libicu-dev") {
+			if installIndex >= 0 {
+				t.Fatalf("preflight-static installs libicu-dev more than once")
+			}
+			installIndex = index
+			if !strings.Contains(step.Run, "sudo apt-get update") {
+				t.Errorf("libicu-dev setup must refresh apt indexes")
+			}
+			if !strings.Contains(step.Run, "sudo apt-get install -y --no-install-recommends libicu-dev") {
+				t.Errorf("libicu-dev setup must use a noninteractive package install")
+			}
+		}
+		if strings.TrimSpace(step.Run) == "make vet" {
+			vetIndex = index
+		}
+	}
+
+	if setupIndex < 0 {
+		t.Fatal("preflight-static has no setup-go step")
+	}
+	if installIndex < 0 {
+		t.Fatal("preflight-static must install libicu-dev before cgo-enabled vet")
+	}
+	if installIndex <= setupIndex {
+		t.Errorf("libicu-dev setup step %d must follow setup-go step %d", installIndex, setupIndex)
+	}
+	if vetIndex < 0 {
+		t.Fatal("preflight-static has no make vet step")
+	}
+	if installIndex >= vetIndex {
+		t.Errorf("libicu-dev setup step %d must precede make vet step %d", installIndex, vetIndex)
+	}
+}
+
+func TestUbuntuSetupInstallsICUDevelopmentHeaders(t *testing.T) {
+	path := filepath.Join(repoRoot(t), ".github", "actions", "setup-gascity-ubuntu", "action.yml")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	content := string(body)
+	if !strings.Contains(content, "sudo apt-get update") {
+		t.Errorf("Ubuntu setup must refresh apt indexes before installing native dependencies")
+	}
+	if !strings.Contains(content, "sudo apt-get install -y --no-install-recommends tmux jq libicu-dev") {
+		t.Errorf("Ubuntu setup must install libicu-dev with the shared system dependencies")
+	}
+}
+
+func TestMacSetupInstallsICUDevelopmentHeaders(t *testing.T) {
+	path := filepath.Join(repoRoot(t), ".github", "actions", "setup-gascity-macos", "action.yml")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if !strings.Contains(string(body), "pkgs=(tmux jq flock icu4c)") {
+		t.Error("macOS setup must install icu4c with the shared Homebrew dependencies")
+	}
+}
+
 func TestPreflightStaticScopesOrdinaryPRsWithoutWeakeningProtectedRuns(t *testing.T) {
 	wf := readCriticalPathWorkflow(t, "ci.yml")
 	job, ok := wf.Jobs["preflight-static"]
