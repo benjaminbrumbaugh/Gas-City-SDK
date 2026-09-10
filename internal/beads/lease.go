@@ -34,11 +34,95 @@ func WithBdStoreLeaseRunner(runner LeaseCommandRunner) BdStoreOption {
 // interface is deliberately optional: backends that do not implement bd's
 // ephemeral lease table must fail closed rather than emulate it with metadata.
 type ClaimLeaseStore interface {
+	// ListInProgressClaims returns the current durable and ephemeral rows whose
+	// stored status is in_progress. The caller applies claim identity checks;
+	// this read exists here so the same bounded native runner owns the complete
+	// lease patrol rather than falling back to context-free Store.List.
+	ListInProgressClaims(ctx context.Context) ([]Bead, error)
+	// ListOpenSessionRows returns the current non-closed rows from which the
+	// controller builds its session-owner census. The beads package deliberately
+	// does not classify session rows, avoiding a package cycle with session.
+	ListOpenSessionRows(ctx context.Context) ([]Bead, error)
+	// GetClaimOwner resolves an exact persisted owner row, including closed
+	// history, through the bounded native runner.
+	GetClaimOwner(ctx context.Context, id string) (Bead, error)
 	HeartbeatClaim(ctx context.Context, id, holder string) error
-	ReclaimExpiredClaims(ctx context.Context, olderThan time.Duration, assignees ...string) (int, error)
+	ReclaimExpiredClaims(ctx context.Context, olderThan time.Duration, scope ClaimLeaseReclaimScope) (int, error)
+}
+
+// ClaimLeaseReclaimScope is an AND-combined destructive boundary. Callers must
+// provide both exact claim IDs and their fully validated assignees; an empty
+// side is rejected rather than widening reclaim to every local stale lease.
+type ClaimLeaseReclaimScope struct {
+	ClaimIDs  []string
+	Assignees []string
 }
 
 var _ ClaimLeaseStore = (*BdStore)(nil)
+
+// ListInProgressClaims returns the current in-progress rows through the
+// context-bound native lease runner.
+func (s *BdStore) ListInProgressClaims(ctx context.Context) ([]Bead, error) {
+	return s.listLeaseRows(ctx, "--status", "in_progress")
+}
+
+// ListOpenSessionRows returns current open and in-progress rows for session
+// ownership classification by the controller.
+func (s *BdStore) ListOpenSessionRows(ctx context.Context) ([]Bead, error) {
+	return s.listLeaseRows(ctx, "--status", "open,in_progress")
+}
+
+func (s *BdStore) listLeaseRows(ctx context.Context, filters ...string) ([]Bead, error) {
+	if s == nil || s.leaseRunner == nil {
+		return nil, ErrClaimLeaseUnsupported
+	}
+	args := []string{"list", "--json", "--include-infra", "--include-gates", "--include-templates", "--limit", "0"}
+	args = append(args, filters...)
+	out, err := s.leaseRunner(ctx, s.dir, "", s.bdTransientWriteArgs(args)...)
+	if err != nil {
+		return nil, fmt.Errorf("listing claim lease rows: %w", err)
+	}
+	issues, err := parseIssuesTolerant(extractJSON(out))
+	if err != nil {
+		return nil, fmt.Errorf("listing claim lease rows: %w", err)
+	}
+	rows := make([]Bead, 0, len(issues))
+	for i := range issues {
+		rows = append(rows, issues[i].toBead())
+	}
+	return rows, nil
+}
+
+// GetClaimOwner resolves one exact persisted owner row, including closed rows,
+// through the context-bound native lease runner.
+func (s *BdStore) GetClaimOwner(ctx context.Context, id string) (Bead, error) {
+	if s == nil || s.leaseRunner == nil {
+		return Bead{}, ErrClaimLeaseUnsupported
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Bead{}, errors.New("getting claim owner: empty bead id")
+	}
+	out, err := s.leaseRunner(ctx, s.dir, "", s.bdTransientWriteArgs([]string{"show", "--json", id})...)
+	if err != nil {
+		if isBdNotFound(err) {
+			return Bead{}, fmt.Errorf("getting claim owner %q: %w", id, ErrNotFound)
+		}
+		return Bead{}, fmt.Errorf("getting claim owner %q: %w", id, err)
+	}
+	issues, err := parseIssuesTolerant(extractJSON(out))
+	if err != nil {
+		return Bead{}, fmt.Errorf("getting claim owner %q: %w", id, err)
+	}
+	if len(issues) == 0 {
+		return Bead{}, fmt.Errorf("getting claim owner %q: %w", id, ErrNotFound)
+	}
+	bead := issues[0].toBead()
+	if bead.ID != id {
+		return Bead{}, fmt.Errorf("getting claim owner %q (resolved to %q): %w", id, bead.ID, ErrIDCollision)
+	}
+	return bead, nil
+}
 
 // HeartbeatClaim refreshes a claim through bd's native heartbeat primitive.
 // The holder must be the exact assignee that acquired the claim; the native
@@ -66,16 +150,24 @@ func (s *BdStore) HeartbeatClaim(ctx context.Context, id, holder string) error {
 // It never passes --any-replica: a controller may only reclaim leases granted
 // by this store's local replica. olderThan is the native grace threshold, not
 // a controller-side timestamp heuristic.
-func (s *BdStore) ReclaimExpiredClaims(ctx context.Context, olderThan time.Duration, assignees ...string) (int, error) {
+func (s *BdStore) ReclaimExpiredClaims(ctx context.Context, olderThan time.Duration, scope ClaimLeaseReclaimScope) (int, error) {
 	if s == nil || s.leaseRunner == nil {
 		return 0, ErrClaimLeaseUnsupported
 	}
 	if olderThan <= 0 {
 		return 0, errors.New("reclaim expired claims: grace must be positive")
 	}
+	claimIDs := normalizedStrings(scope.ClaimIDs)
+	assignees := normalizedStrings(scope.Assignees)
+	if len(claimIDs) == 0 || len(assignees) == 0 {
+		return 0, errors.New("reclaim expired claims: exact claim ids and assignees are required")
+	}
 	args := []string{"reclaim", "--older-than", olderThan.String()}
-	for _, assignee := range normalizedAssignees(assignees) {
+	for _, assignee := range assignees {
 		args = append(args, "--assignee", assignee)
+	}
+	for _, id := range claimIDs {
+		args = append(args, "--id", id)
 	}
 	args = append(args, "--json")
 	out, err := s.leaseRunner(ctx, s.dir, "", s.bdTransientWriteArgs(args)...)
@@ -89,19 +181,19 @@ func (s *BdStore) ReclaimExpiredClaims(ctx context.Context, olderThan time.Durat
 	return count, nil
 }
 
-func normalizedAssignees(assignees []string) []string {
-	seen := make(map[string]struct{}, len(assignees))
-	result := make([]string, 0, len(assignees))
-	for _, assignee := range assignees {
-		assignee = strings.TrimSpace(assignee)
-		if assignee == "" {
+func normalizedStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
 			continue
 		}
-		if _, exists := seen[assignee]; exists {
+		if _, exists := seen[value]; exists {
 			continue
 		}
-		seen[assignee] = struct{}{}
-		result = append(result, assignee)
+		seen[value] = struct{}{}
+		result = append(result, value)
 	}
 	sort.Strings(result)
 	return result

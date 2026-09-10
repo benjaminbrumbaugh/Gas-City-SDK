@@ -32,6 +32,68 @@ func TestBdStoreHeartbeatClaimUsesNativeLeaseRunner(t *testing.T) {
 	}
 }
 
+func TestBdStoreLeaseReadsUseBoundedNativeRunner(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls [][]string
+	store := NewBdStore("/rig", nil, WithBdStoreLeaseRunner(func(gotCtx context.Context, dir, holder string, args ...string) ([]byte, error) {
+		if gotCtx != ctx || dir != "/rig" || holder != "" {
+			t.Fatalf("lease read identity = (%v, %q, %q), want caller context, /rig, empty holder", gotCtx, dir, holder)
+		}
+		calls = append(calls, append([]string(nil), args...))
+		return []byte(`[{"id":"row","title":"row","status":"in_progress","issue_type":"task"}]`), nil
+	}))
+
+	claims, err := store.ListInProgressClaims(ctx)
+	if err != nil || len(claims) != 1 || claims[0].ID != "row" {
+		t.Fatalf("ListInProgressClaims() = (%#v, %v), want row", claims, err)
+	}
+	sessions, err := store.ListOpenSessionRows(ctx)
+	if err != nil || len(sessions) != 1 || sessions[0].ID != "row" {
+		t.Fatalf("ListOpenSessionRows() = (%#v, %v), want row", sessions, err)
+	}
+	owner, err := store.GetClaimOwner(ctx, "row")
+	if err != nil || owner.ID != "row" {
+		t.Fatalf("GetClaimOwner() = (%#v, %v), want exact row", owner, err)
+	}
+	want := [][]string{
+		{"list", "--json", "--include-infra", "--include-gates", "--include-templates", "--limit", "0", "--status", "in_progress"},
+		{"list", "--json", "--include-infra", "--include-gates", "--include-templates", "--limit", "0", "--status", "open,in_progress"},
+		{"show", "--json", "row"},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("lease read args = %#v, want %#v", calls, want)
+	}
+}
+
+func TestBdStoreGetClaimOwnerRejectsNonExactResolution(t *testing.T) {
+	store := NewBdStore("/city", nil, WithBdStoreLeaseRunner(func(context.Context, string, string, ...string) ([]byte, error) {
+		return []byte(`[{"id":"prefix-other","title":"row","status":"closed","issue_type":"session"}]`), nil
+	}))
+
+	if _, err := store.GetClaimOwner(context.Background(), "prefix"); !errors.Is(err, ErrIDCollision) {
+		t.Fatalf("GetClaimOwner() error = %v, want ErrIDCollision", err)
+	}
+}
+
+func TestBdStoreLeaseReadsPropagateCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	store := NewBdStore("/city", nil, WithBdStoreLeaseRunner(func(gotCtx context.Context, _ string, _ string, _ ...string) ([]byte, error) {
+		return nil, gotCtx.Err()
+	}))
+
+	if _, err := store.ListInProgressClaims(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListInProgressClaims() error = %v, want context.Canceled", err)
+	}
+	if _, err := store.ListOpenSessionRows(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListOpenSessionRows() error = %v, want context.Canceled", err)
+	}
+	if _, err := store.GetClaimOwner(ctx, "owner"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetClaimOwner() error = %v, want context.Canceled", err)
+	}
+}
+
 func TestBdStoreReclaimExpiredClaimsUsesGraceAndReturnsCount(t *testing.T) {
 	var gotHolder string
 	var gotArgs []string
@@ -41,7 +103,10 @@ func TestBdStoreReclaimExpiredClaimsUsesGraceAndReturnsCount(t *testing.T) {
 		return []byte(`{"reclaimed":[{"id":"one"},{"id":"two"}]}`), nil
 	}))
 
-	got, err := store.ReclaimExpiredClaims(context.Background(), 10*time.Minute, "worker", " worker ", "worker")
+	got, err := store.ReclaimExpiredClaims(context.Background(), 10*time.Minute, ClaimLeaseReclaimScope{
+		ClaimIDs:  []string{"claim-two", "claim-one", " claim-one "},
+		Assignees: []string{"worker", " worker ", "worker"},
+	})
 	if err != nil {
 		t.Fatalf("ReclaimExpiredClaims() error = %v", err)
 	}
@@ -51,7 +116,7 @@ func TestBdStoreReclaimExpiredClaimsUsesGraceAndReturnsCount(t *testing.T) {
 	if gotHolder != "" {
 		t.Fatalf("reclaim holder = %q, want empty local-replica reclaim holder", gotHolder)
 	}
-	wantArgs := []string{"reclaim", "--older-than", "10m0s", "--assignee", "worker", "--json"}
+	wantArgs := []string{"reclaim", "--older-than", "10m0s", "--assignee", "worker", "--id", "claim-one", "--id", "claim-two", "--json"}
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Fatalf("reclaim args = %v, want %v", gotArgs, wantArgs)
 	}
@@ -67,7 +132,7 @@ func TestBdStoreReclaimExpiredClaimsAcceptsEmptyNativeResult(t *testing.T) {
 		return []byte(`{"count":0,"reclaimed":null,"schema_version":1,"scoped":false}`), nil
 	}))
 
-	got, err := store.ReclaimExpiredClaims(context.Background(), 10*time.Minute)
+	got, err := store.ReclaimExpiredClaims(context.Background(), 10*time.Minute, ClaimLeaseReclaimScope{ClaimIDs: []string{"claim"}, Assignees: []string{"worker"}})
 	if err != nil {
 		t.Fatalf("ReclaimExpiredClaims() error = %v", err)
 	}
@@ -76,12 +141,41 @@ func TestBdStoreReclaimExpiredClaimsAcceptsEmptyNativeResult(t *testing.T) {
 	}
 }
 
+func TestBdStoreReclaimExpiredClaimsRequiresExactBoundary(t *testing.T) {
+	called := false
+	store := NewBdStore("/city", nil, WithBdStoreLeaseRunner(func(context.Context, string, string, ...string) ([]byte, error) {
+		called = true
+		return nil, nil
+	}))
+
+	for _, scope := range []ClaimLeaseReclaimScope{
+		{Assignees: []string{"worker"}},
+		{ClaimIDs: []string{"claim"}},
+	} {
+		if _, err := store.ReclaimExpiredClaims(context.Background(), 10*time.Minute, scope); err == nil {
+			t.Fatalf("ReclaimExpiredClaims(%#v) succeeded without an exact AND boundary", scope)
+		}
+	}
+	if called {
+		t.Fatal("invalid reclaim boundary reached native runner")
+	}
+}
+
 func TestBdStoreLeaseMethodsRefuseWithoutNativeLeaseRunner(t *testing.T) {
 	store := NewBdStore("/city", nil)
+	if _, err := store.ListInProgressClaims(context.Background()); !errors.Is(err, ErrClaimLeaseUnsupported) {
+		t.Fatalf("ListInProgressClaims() error = %v, want ErrClaimLeaseUnsupported", err)
+	}
+	if _, err := store.ListOpenSessionRows(context.Background()); !errors.Is(err, ErrClaimLeaseUnsupported) {
+		t.Fatalf("ListOpenSessionRows() error = %v, want ErrClaimLeaseUnsupported", err)
+	}
+	if _, err := store.GetClaimOwner(context.Background(), "owner"); !errors.Is(err, ErrClaimLeaseUnsupported) {
+		t.Fatalf("GetClaimOwner() error = %v, want ErrClaimLeaseUnsupported", err)
+	}
 	if err := store.HeartbeatClaim(context.Background(), "claim", "token"); !errors.Is(err, ErrClaimLeaseUnsupported) {
 		t.Fatalf("HeartbeatClaim() error = %v, want ErrClaimLeaseUnsupported", err)
 	}
-	if _, err := store.ReclaimExpiredClaims(context.Background(), time.Minute); !errors.Is(err, ErrClaimLeaseUnsupported) {
+	if _, err := store.ReclaimExpiredClaims(context.Background(), time.Minute, ClaimLeaseReclaimScope{}); !errors.Is(err, ErrClaimLeaseUnsupported) {
 		t.Fatalf("ReclaimExpiredClaims() error = %v, want ErrClaimLeaseUnsupported", err)
 	}
 }

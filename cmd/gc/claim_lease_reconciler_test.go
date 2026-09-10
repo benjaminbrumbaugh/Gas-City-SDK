@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,6 +32,7 @@ type claimLeaseTestStore struct {
 	heartbeatErr     error
 	reclaimCalls     []time.Duration
 	reclaimAssignees [][]string
+	reclaimClaimIDs  [][]string
 	reclaimCount     int
 	reclaimErr       error
 	reclaimRows      bool
@@ -43,6 +45,18 @@ type concurrentClaimLeaseTestStore struct {
 	maximum atomic.Int32
 	started chan struct{}
 	release chan struct{}
+}
+
+type blockingClaimLeaseCensusStore struct {
+	*claimLeaseTestStore
+	started chan struct{}
+	rows    []beads.Bead
+}
+
+func (s *blockingClaimLeaseCensusStore) ListOpenSessionRows(ctx context.Context) ([]beads.Bead, error) {
+	close(s.started)
+	<-ctx.Done()
+	return s.rows, ctx.Err()
 }
 
 func (s *concurrentClaimLeaseTestStore) HeartbeatClaim(ctx context.Context, _, _ string) error {
@@ -70,6 +84,27 @@ func (s *claimLeaseTestStore) List(query beads.ListQuery) ([]beads.Bead, error) 
 	return s.MemStore.List(query)
 }
 
+func (s *claimLeaseTestStore) ListInProgressClaims(ctx context.Context) ([]beads.Bead, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.List(beads.ListQuery{Status: "in_progress", TierMode: beads.TierBoth, Live: true})
+}
+
+func (s *claimLeaseTestStore) ListOpenSessionRows(ctx context.Context) ([]beads.Bead, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.List(beads.ListQuery{AllowScan: true, TierMode: beads.TierBoth, Live: true})
+}
+
+func (s *claimLeaseTestStore) GetClaimOwner(ctx context.Context, id string) (beads.Bead, error) {
+	if err := ctx.Err(); err != nil {
+		return beads.Bead{}, err
+	}
+	return s.Get(id)
+}
+
 func (s *claimLeaseTestStore) HeartbeatClaim(_ context.Context, id, holder string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -80,11 +115,12 @@ func (s *claimLeaseTestStore) HeartbeatClaim(_ context.Context, id, holder strin
 	return s.heartbeatErr
 }
 
-func (s *claimLeaseTestStore) ReclaimExpiredClaims(_ context.Context, grace time.Duration, assignees ...string) (int, error) {
+func (s *claimLeaseTestStore) ReclaimExpiredClaims(_ context.Context, grace time.Duration, scope beads.ClaimLeaseReclaimScope) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reclaimCalls = append(s.reclaimCalls, grace)
-	s.reclaimAssignees = append(s.reclaimAssignees, append([]string(nil), assignees...))
+	s.reclaimAssignees = append(s.reclaimAssignees, append([]string(nil), scope.Assignees...))
+	s.reclaimClaimIDs = append(s.reclaimClaimIDs, append([]string(nil), scope.ClaimIDs...))
 	if s.reclaimRows {
 		rows, err := s.MemStore.List(beads.ListQuery{Status: "in_progress", TierMode: beads.TierBoth, Live: true})
 		if err != nil {
@@ -174,14 +210,11 @@ func TestReconcileClaimLeasesRenewsExactOwnersAcrossCityAndRig(t *testing.T) {
 	if len(rig.heartbeats) != 1 || rig.heartbeats[0] != (claimLeaseHeartbeat{id: "rig-claim", holder: sessionName}) {
 		t.Fatalf("rig heartbeats = %#v, want the exact live owner", rig.heartbeats)
 	}
-	if len(city.reclaimCalls) != 1 || len(rig.reclaimCalls) != 1 {
-		t.Fatalf("reclaim calls = city:%v rig:%v, want one per scope", city.reclaimCalls, rig.reclaimCalls)
+	if len(city.reclaimCalls) != 0 || len(rig.reclaimCalls) != 0 {
+		t.Fatalf("active-owner reclaim calls = city:%v rig:%v, want none", city.reclaimCalls, rig.reclaimCalls)
 	}
-	if len(city.reclaimAssignees) != 1 || len(city.reclaimAssignees[0]) != 1 || city.reclaimAssignees[0][0] != sessionName {
-		t.Fatalf("city reclaim assignees = %v, want the observed owner only", city.reclaimAssignees)
-	}
-	if got.Stores[1].Reclaimed != 1 {
-		t.Fatalf("rig diagnostics = %#v, want one reclaimed claim", got.Stores)
+	if got.Stores[1].Reclaimed != 0 {
+		t.Fatalf("rig diagnostics = %#v, want no active-owner reclaim", got.Stores)
 	}
 }
 
@@ -211,7 +244,7 @@ func TestReconcileClaimLeasesRenewsExpiredActiveRigBeforeReclaimGrace(t *testing
 	if row.Status != "in_progress" || row.Assignee != sessionName {
 		t.Fatalf("active-rig claim = status %q assignee %q, want renewed ownership", row.Status, row.Assignee)
 	}
-	if len(store.heartbeats) != 1 || len(store.reclaimCalls) != 1 || got.Stores[0].Renewed != 1 {
+	if len(store.heartbeats) != 1 || len(store.reclaimCalls) != 0 || got.Stores[0].Renewed != 1 {
 		t.Fatalf("active-rig lease result = heartbeats:%v reclaim:%v diagnostics:%#v", store.heartbeats, store.reclaimCalls, got)
 	}
 }
@@ -290,8 +323,8 @@ func TestReconcileClaimLeasesUsesCompleteCensusWithoutProviderObservation(t *tes
 		SessionName: sessionName, SessionNameMetadata: sessionName, InstanceToken: token,
 	}}, []claimLeaseScope{{Name: "city", Store: store, Lease: store}}, time.Now())
 
-	if len(store.heartbeats) != 1 || len(store.reclaimCalls) != 1 {
-		t.Fatalf("census-owned operations = heartbeats:%v reclaim:%v, want one each", store.heartbeats, store.reclaimCalls)
+	if len(store.heartbeats) != 1 || len(store.reclaimCalls) != 0 {
+		t.Fatalf("census-owned operations = heartbeats:%v reclaim:%v, want heartbeat only", store.heartbeats, store.reclaimCalls)
 	}
 	if got.Stores[0].Errors != 0 || got.LastSuccessfulAt.IsZero() {
 		t.Fatalf("census-owned diagnostics = %#v, want success", got)
@@ -306,6 +339,10 @@ func TestReconcileClaimLeasesReclaimsOnlyTerminallyClosedOwner(t *testing.T) {
 		},
 		beads.Bead{
 			ID: "session", Type: session.BeadType, Status: "closed", Labels: []string{session.LabelSession},
+			Metadata: beads.StringMap{
+				"session_name":   "worker",
+				"instance_token": "token",
+			},
 		},
 	)
 	// Closed history is not part of the current-cycle open census. Reclaim is
@@ -317,6 +354,88 @@ func TestReconcileClaimLeasesReclaimsOnlyTerminallyClosedOwner(t *testing.T) {
 	}
 	if got.Stores[0].Errors != 0 || got.LastSuccessfulAt.IsZero() {
 		t.Fatalf("closed-owner diagnostics = %#v, want success", got)
+	}
+}
+
+func TestReconcileClaimLeasesRequiresExactTerminalOwnerIdentity(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata beads.StringMap
+	}{
+		{name: "missing persisted identity", metadata: beads.StringMap{}},
+		{name: "assignee mismatch", metadata: beads.StringMap{"session_name": "other-worker", "instance_token": "token"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newClaimLeaseTestStore(t,
+				beads.Bead{
+					ID: "claim", Status: "in_progress", Assignee: "worker",
+					Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: "session"},
+				},
+				beads.Bead{
+					ID: "session", Type: session.BeadType, Status: "closed", Labels: []string{session.LabelSession},
+					Metadata: tc.metadata,
+				},
+			)
+
+			got := reconcileClaimLeases(context.Background(), nil, nil, []claimLeaseScope{{Name: "city", Store: store, Lease: store}}, time.Now())
+			if len(store.reclaimCalls) != 0 || len(store.heartbeats) != 0 {
+				t.Fatalf("fenced terminal owner operations = heartbeats:%v reclaim:%v, want none", store.heartbeats, store.reclaimCalls)
+			}
+			if got.Stores[0].Errors == 0 || !got.LastSuccessfulAt.IsZero() {
+				t.Fatalf("fenced terminal owner diagnostics = %#v, want fail-closed error", got)
+			}
+		})
+	}
+}
+
+func TestReconcileClaimLeasesReclaimsOnlyExactTerminalAssignee(t *testing.T) {
+	store := newClaimLeaseTestStore(t,
+		beads.Bead{
+			ID: "active-claim", Status: "in_progress", Assignee: "active-worker",
+			Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: "active-session"},
+		},
+		beads.Bead{
+			ID: "closed-claim", Status: "in_progress", Assignee: "closed-worker",
+			Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: "closed-session"},
+		},
+		beads.Bead{
+			ID: "closed-session", Type: session.BeadType, Status: "closed", Labels: []string{session.LabelSession},
+			Metadata: beads.StringMap{"session_name": "closed-worker", "instance_token": "closed-token"},
+		},
+	)
+	active := session.Info{
+		ID: "active-session", State: session.StateActive, MetadataState: string(session.StateActive),
+		SessionName: "active-worker", SessionNameMetadata: "active-worker", InstanceToken: "active-token",
+	}
+
+	got := reconcileClaimLeases(context.Background(), nil, []session.Info{active}, []claimLeaseScope{{Name: "city", Store: store, Lease: store}}, time.Now())
+	if len(store.heartbeats) != 1 || store.heartbeats[0].id != "active-claim" {
+		t.Fatalf("heartbeats = %#v, want active claim only", store.heartbeats)
+	}
+	if len(store.reclaimAssignees) != 1 || !reflect.DeepEqual(store.reclaimAssignees[0], []string{"closed-worker"}) {
+		t.Fatalf("reclaim assignees = %#v, want exact terminal assignee only", store.reclaimAssignees)
+	}
+	if len(store.reclaimClaimIDs) != 1 || !reflect.DeepEqual(store.reclaimClaimIDs[0], []string{"closed-claim"}) {
+		t.Fatalf("reclaim claim ids = %#v, want exact terminal claim only", store.reclaimClaimIDs)
+	}
+	if got.Stores[0].Errors != 0 || got.LastSuccessfulAt.IsZero() {
+		t.Fatalf("mixed-owner diagnostics = %#v, want success", got)
+	}
+}
+
+func TestReconcileClaimLeasesSkipsSessionRowsInProgress(t *testing.T) {
+	store := newClaimLeaseTestStore(t, beads.Bead{
+		ID: "session", Type: session.BeadType, Status: "in_progress", Assignee: "worker", Labels: []string{session.LabelSession},
+		Metadata: beads.StringMap{"state": string(session.StateActive), "session_name": "worker", "instance_token": "token"},
+	})
+
+	got := reconcileClaimLeases(context.Background(), nil, nil, []claimLeaseScope{{Name: "city", Store: store, Lease: store}}, time.Now())
+	if len(store.heartbeats) != 0 || len(store.reclaimCalls) != 0 {
+		t.Fatalf("session-row operations = heartbeats:%v reclaim:%v, want none", store.heartbeats, store.reclaimCalls)
+	}
+	if got.Stores[0].Errors != 0 || got.LastSuccessfulAt.IsZero() {
+		t.Fatalf("session-row diagnostics = %#v, want successful no-op", got)
 	}
 }
 
@@ -394,8 +513,8 @@ func TestReconcileClaimLeasesFailsClosedPerUnreadableStore(t *testing.T) {
 	if len(broken.reclaimCalls) != 0 {
 		t.Fatalf("broken store reclaim calls = %v, want none", broken.reclaimCalls)
 	}
-	if len(healthy.reclaimCalls) != 1 || got.Stores[1].Reclaimed != 1 {
-		t.Fatalf("healthy store was not independently reconciled: calls=%v report=%#v", healthy.reclaimCalls, got.Stores)
+	if len(healthy.heartbeats) != 1 || len(healthy.reclaimCalls) != 0 || got.Stores[1].Renewed != 1 {
+		t.Fatalf("healthy store was not independently renewed: heartbeats=%v calls=%v report=%#v", healthy.heartbeats, healthy.reclaimCalls, got.Stores)
 	}
 	if got.Stores[0].Errors == 0 || !got.LastSuccessfulAt.IsZero() {
 		t.Fatalf("partial pass diagnostics = %#v, want error and no successful instant", got)
@@ -432,10 +551,16 @@ func TestReconcileClaimLeasesDueUsesCompleteCrossStoreOwnerCensus(t *testing.T) 
 		sessionName = "rig-worker"
 		token       = "rig-token"
 	)
-	store := newClaimLeaseTestStore(t, beads.Bead{
-		ID: "rig-claim", Status: "in_progress", Assignee: sessionName,
-		Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: sessionID},
-	})
+	store := newClaimLeaseTestStore(t,
+		beads.Bead{
+			ID: "rig-claim", Status: "in_progress", Assignee: sessionName,
+			Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: sessionID},
+		},
+		beads.Bead{
+			ID: sessionID, Type: session.BeadType, Labels: []string{session.LabelSession},
+			Metadata: beads.StringMap{"state": string(session.StateActive), "session_name": sessionName, "instance_token": token},
+		},
+	)
 	provider := liveLeaseProvider(t, sessionID, sessionName, token)
 	cr := &CityRuntime{
 		cityPath:            t.TempDir(),
@@ -443,17 +568,33 @@ func TestReconcileClaimLeasesDueUsesCompleteCrossStoreOwnerCensus(t *testing.T) 
 		sp:                  provider,
 		standaloneCityStore: store,
 	}
-	owner := session.Info{
-		ID: sessionID, State: session.StateActive, MetadataState: string(session.StateActive),
-		SessionName: sessionName, SessionNameMetadata: sessionName, InstanceToken: token,
-	}
-
-	cr.reconcileClaimLeasesIfDueWithOwnerInfos(
-		context.Background(), []session.Info{owner}, true, time.Now(),
-	)
+	cr.reconcileClaimLeasesIfDue(context.Background(), nil, time.Now())
 
 	if len(store.heartbeats) != 1 || store.heartbeats[0].id != "rig-claim" {
 		t.Fatalf("heartbeats = %#v, want the exact owner from the complete cross-store census", store.heartbeats)
+	}
+}
+
+func TestReconcileClaimLeasesDueIgnoresStaleSnapshot(t *testing.T) {
+	const sessionID, sessionName = "stale-session", "stale-worker"
+	store := newClaimLeaseTestStore(t, beads.Bead{
+		ID: "claim", Status: "in_progress", Assignee: sessionName,
+		Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: sessionID},
+	})
+	staleSnapshot := newSessionBeadSnapshot([]beads.Bead{{
+		ID: sessionID, Type: session.BeadType, Labels: []string{session.LabelSession},
+		Metadata: beads.StringMap{"state": string(session.StateActive), "session_name": sessionName, "instance_token": "stale-token"},
+	}})
+	cr := &CityRuntime{cityPath: t.TempDir(), cityName: "city", standaloneCityStore: store}
+
+	cr.reconcileClaimLeasesIfDue(context.Background(), staleSnapshot, time.Now())
+
+	if len(store.heartbeats) != 0 || len(store.reclaimCalls) != 0 {
+		t.Fatalf("stale-snapshot operations = heartbeats:%v reclaim:%v, want none", store.heartbeats, store.reclaimCalls)
+	}
+	got := cr.claimLeaseReconciliation()
+	if len(got.Stores) != 1 || got.Stores[0].Errors == 0 || !got.LastSuccessfulAt.IsZero() {
+		t.Fatalf("stale-snapshot diagnostics = %#v, want fresh-census failure", got)
 	}
 }
 
@@ -464,10 +605,16 @@ func TestStartClaimLeaseReconcileDoesNotBlockControllerTick(t *testing.T) {
 		token       = "token"
 	)
 	store := &concurrentClaimLeaseTestStore{
-		claimLeaseTestStore: newClaimLeaseTestStore(t, beads.Bead{
-			ID: "claim", Status: "in_progress", Assignee: sessionName,
-			Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: sessionID},
-		}),
+		claimLeaseTestStore: newClaimLeaseTestStore(t,
+			beads.Bead{
+				ID: "claim", Status: "in_progress", Assignee: sessionName,
+				Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: sessionID},
+			},
+			beads.Bead{
+				ID: sessionID, Type: session.BeadType, Labels: []string{session.LabelSession},
+				Metadata: beads.StringMap{"state": string(session.StateActive), "session_name": sessionName, "instance_token": token},
+			},
+		),
 		started: make(chan struct{}, 1),
 		release: make(chan struct{}),
 	}
@@ -477,14 +624,9 @@ func TestStartClaimLeaseReconcileDoesNotBlockControllerTick(t *testing.T) {
 		sp:                  liveLeaseProvider(t, sessionID, sessionName, token),
 		standaloneCityStore: store,
 	}
-	owner := session.Info{
-		ID: sessionID, State: session.StateActive, MetadataState: string(session.StateActive),
-		SessionName: sessionName, SessionNameMetadata: sessionName, InstanceToken: token,
-	}
-
 	returned := make(chan struct{})
 	go func() {
-		cr.startClaimLeaseReconcileIfDueWithOwnerInfos(context.Background(), []session.Info{owner}, true, time.Now())
+		cr.startClaimLeaseReconcileIfDue(context.Background(), time.Now())
 		close(returned)
 	}()
 	select {
@@ -516,6 +658,40 @@ func TestStartClaimLeaseReconcileDoesNotBlockControllerTick(t *testing.T) {
 	}
 }
 
+func TestStartClaimLeaseReconcileCancellationReleasesPatrolLane(t *testing.T) {
+	store := &blockingClaimLeaseCensusStore{
+		claimLeaseTestStore: newClaimLeaseTestStore(t),
+		started:             make(chan struct{}),
+	}
+	cr := &CityRuntime{cityPath: t.TempDir(), cityName: "city", standaloneCityStore: store}
+	ctx, cancel := context.WithCancel(context.Background())
+	cr.startClaimLeaseReconcileIfDue(ctx, time.Now())
+	select {
+	case <-store.started:
+	case <-time.After(time.Second):
+		t.Fatal("background owner census did not start")
+	}
+	cancel()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		cr.claimLeaseMu.RLock()
+		inFlight := cr.claimLeaseInFlight
+		cr.claimLeaseMu.RUnlock()
+		if !inFlight {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("canceled owner census did not release the patrol lane")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	got := cr.claimLeaseReconciliation()
+	if len(got.Stores) != 1 || got.Stores[0].Errors != 1 || !got.LastSuccessfulAt.IsZero() {
+		t.Fatalf("canceled-census diagnostics = %#v, want one failed store", got)
+	}
+}
+
 func TestReconcileClaimLeasesDueFailsClosedOnPartialOwnerCensus(t *testing.T) {
 	const (
 		sessionID   = "possibly-live-session"
@@ -526,6 +702,7 @@ func TestReconcileClaimLeasesDueFailsClosedOnPartialOwnerCensus(t *testing.T) {
 		ID: "possibly-live-claim", Status: "in_progress", Assignee: sessionName,
 		Metadata: beads.StringMap{beadmeta.SessionIDMetadataKey: sessionID},
 	})
+	store.listErr = errors.New("owner census unavailable")
 	provider := liveLeaseProvider(t, sessionID, sessionName, token)
 	cr := &CityRuntime{
 		cityPath:            t.TempDir(),
@@ -533,9 +710,7 @@ func TestReconcileClaimLeasesDueFailsClosedOnPartialOwnerCensus(t *testing.T) {
 		sp:                  provider,
 		standaloneCityStore: store,
 	}
-	cr.reconcileClaimLeasesIfDueWithOwnerInfos(
-		context.Background(), nil, false, time.Now(),
-	)
+	cr.reconcileClaimLeasesIfDue(context.Background(), nil, time.Now())
 
 	if len(store.heartbeats) != 0 || len(store.reclaimCalls) != 0 {
 		t.Fatalf("partial-census lease operations = heartbeats:%v reclaim:%v, want no mutation", store.heartbeats, store.reclaimCalls)
@@ -543,33 +718,6 @@ func TestReconcileClaimLeasesDueFailsClosedOnPartialOwnerCensus(t *testing.T) {
 	got := cr.claimLeaseReconciliation()
 	if len(got.Stores) != 1 || got.Stores[0].Errors != 1 || !got.LastSuccessfulAt.IsZero() {
 		t.Fatalf("partial-census diagnostics = %#v, want one error and no successful instant", got)
-	}
-}
-
-func TestClaimLeaseOwnerInfosPrefersCompleteCrossStoreCensus(t *testing.T) {
-	primary := session.Info{ID: "primary"}
-	foreign := session.Info{ID: "foreign-rig-owner"}
-	snapshot := newSessionBeadSnapshotFromInfos([]session.Info{primary})
-
-	got, complete := claimLeaseOwnerInfos(DesiredStateResult{
-		SessionOccupancyInfos:   []session.Info{foreign},
-		SessionSnapshotComplete: true,
-	}, snapshot)
-
-	if !complete || len(got) != 1 || got[0].ID != foreign.ID {
-		t.Fatalf("owner census = %#v, complete = %v; want complete foreign census", got, complete)
-	}
-}
-
-func TestClaimLeaseOwnerInfosRejectsPartialResultEvenWithCensus(t *testing.T) {
-	got, complete := claimLeaseOwnerInfos(DesiredStateResult{
-		SessionOccupancyInfos:   []session.Info{{ID: "possibly-stale"}},
-		SessionQueryPartial:     true,
-		SessionSnapshotComplete: true,
-	}, newSessionBeadSnapshotFromInfos(nil))
-
-	if got != nil || complete {
-		t.Fatalf("partial owner census = %#v, complete = %v; want no usable owner evidence", got, complete)
 	}
 }
 

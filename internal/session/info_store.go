@@ -42,6 +42,13 @@ func infoFromPersistedBead(b beads.Bead) Info {
 	return info
 }
 
+// InfoFromPersistedBead is the package-boundary form of the pure persisted
+// projection. Callers that already obtained a bounded bead snapshot can use it
+// without issuing a second store read or adding a live runtime observation.
+func InfoFromPersistedBead(b beads.Bead) Info {
+	return infoFromPersistedBead(b)
+}
+
 // Store is the session-domain front door over a session-class bead store: the
 // single typed seam through which callers read and write sessions without
 // touching *beads.Bead. The read half (Get / List, projecting via
