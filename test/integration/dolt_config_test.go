@@ -117,8 +117,9 @@ func TestDoltConfigWiringExternalHost(t *testing.T) {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 
-	// Init with same prefix and server — simulates a second machine's
-	// agent sharing the same bead store.
+	// Init against the same explicit database and server — simulates a second
+	// machine's agent sharing the same bead store. The explicit database name
+	// also tells bd to adopt the existing database project identity.
 	runBDInitCompat(t, env, wsDir2, "dc", port)
 
 	bdList2 := exec.Command(bdBinary, "list", "--json")
@@ -136,15 +137,20 @@ func TestDoltConfigWiringExternalHost(t *testing.T) {
 	t.Logf("SUCCESS: all phases passed — hostname reachable, config port wired, cross-workspace sharing works")
 }
 
-// runBDInitCompat initializes beads against a shared server, compatible
-// with bd v0.60.0 (which lacks --skip-agents).
+// runBDInitCompat initializes beads against a named database on a shared
+// server, compatible with bd v0.60.0 (which lacks --skip-agents).
+//
+// Passing --database is intentional. A prefix only selects the default
+// database name; it does not tell current bd versions to adopt the existing
+// database's project identity. Explicitly naming the shared database keeps a
+// second workspace's metadata aligned with the server-owned identity.
 func runBDInitCompat(t *testing.T, env []string, dir, prefix, port string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), bdInitTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bdBinary, "init", "--server",
 		"--server-host", "127.0.0.1", "--server-port", port,
-		"-p", prefix, "--skip-hooks")
+		"--database", prefix, "-p", prefix, "--skip-hooks")
 	cmd.Dir = dir
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
