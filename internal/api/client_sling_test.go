@@ -40,7 +40,7 @@ func TestClientSling_PostsAndParses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := c.Sling(SlingRequest{Target: "mayor", Bead: "BL-42", Force: true})
+	res, err := c.Sling(SlingRequest{Target: "mayor", Bead: "BL-42", Force: true, LaunchOrigin: "actor-token"})
 	if err != nil {
 		t.Fatalf("Sling: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestClientSling_PostsAndParses(t *testing.T) {
 	if boundDigest != wantDigest {
 		t.Errorf("grant digest %q != server-recomputed %q", boundDigest, wantDigest)
 	}
-	if !strings.Contains(gotBody, `"target":"mayor"`) || !strings.Contains(gotBody, `"bead":"BL-42"`) || !strings.Contains(gotBody, `"force":true`) {
+	if !strings.Contains(gotBody, `"target":"mayor"`) || !strings.Contains(gotBody, `"bead":"BL-42"`) || !strings.Contains(gotBody, `"force":true`) || !strings.Contains(gotBody, `"launch_origin":"actor-token"`) {
 		t.Errorf("request body = %q", gotBody)
 	}
 	if res.Status != "routed" || res.Target != "mayor" || res.Bead != "BL-42" || res.WorkflowID != "wf-1" {

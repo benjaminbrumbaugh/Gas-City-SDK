@@ -64,17 +64,18 @@ func cmdSlingRemote(c *api.Client, target *remoteTarget, args []string, isFormul
 		return fail("invalid_arguments", "gc sling: "+err.Error())
 	}
 	req := api.SlingRequest{
-		Target:    args[0],
-		Title:     title,
-		Vars:      vmap,
-		ScopeKind: scopeKind,
-		ScopeRef:  scopeRef,
-		Force:     force,
-		Reassign:  reassign,
-		Merge:     merge,
-		NoConvoy:  noConvoy,
-		Owned:     owned,
-		NoFormula: noFormula,
+		Target:       args[0],
+		LaunchOrigin: resolveLaunchOrigin(""),
+		Title:        title,
+		Vars:         vmap,
+		ScopeKind:    scopeKind,
+		ScopeRef:     scopeRef,
+		Force:        force,
+		Reassign:     reassign,
+		Merge:        merge,
+		NoConvoy:     noConvoy,
+		Owned:        owned,
+		NoFormula:    noFormula,
 	}
 	if isFormula {
 		req.Formula = args[1]

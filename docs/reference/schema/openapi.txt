@@ -15765,6 +15765,10 @@
             "description": "Formula name for workflow launch.",
             "type": "string"
           },
+          "launch_origin": {
+            "description": "Opaque actor identity captured by the launching client.",
+            "type": "string"
+          },
           "merge": {
             "description": "Merge strategy: direct, mr, or local.",
             "type": "string"

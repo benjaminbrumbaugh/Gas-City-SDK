@@ -228,6 +228,11 @@ func doConvoyCreateWithOptionsJSON(store beads.Store, cfg *config.City, cityPath
 	if opts.Owned {
 		b.Labels = []string{"owned"}
 	}
+	// Capture the launching actor here rather than in the cobra layer, so every
+	// route into convoy creation is attributed. A convoy with no launch origin
+	// can never produce a valid callback record, because the contract requires
+	// launch_origin on convoy.created and convoy.closed alike.
+	opts.Fields.LaunchOrigin = resolveLaunchOrigin(opts.Fields.LaunchOrigin)
 	applyConvoyFields(&b, opts.Fields)
 
 	convoy, err := store.Create(b)

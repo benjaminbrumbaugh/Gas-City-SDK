@@ -7,6 +7,15 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
+// LaunchOriginMetadataKey is the metadata key carrying a convoy's launch
+// origin: an opaque identifier for the actor that launched the work.
+//
+// The value is opaque route data. Nothing may parse it or infer a provider,
+// harness, role, runtime, URL, or credential from it. The key is absent — not
+// empty — on a convoy launched without a trustworthy actor route, which is the
+// legacy shape every reader must keep tolerating.
+const LaunchOriginMetadataKey = "convoy.launch_origin"
+
 // ConvoyFields holds structured metadata for convoy beads. These map to
 // individual key-value pairs stored via Store.SetMetadata.
 type ConvoyFields struct {
@@ -15,6 +24,16 @@ type ConvoyFields struct {
 	Molecule string // associated molecule ID
 	Merge    string // merge strategy: "direct", "mr", "local"
 	Target   string // target branch inherited by child work beads
+	// LaunchOrigin is the opaque identity of the actor that launched this
+	// convoy, captured automatically when the convoy is minted. Empty when no
+	// trustworthy actor route existed.
+	//
+	// Capture normalizes: a caller supplies a value that already satisfies the
+	// convoy callback contract's opaque-identity rules, or the empty string.
+	// This package stores the value verbatim and never parses it, so stamping a
+	// raw environment value here would persist an identity the callback wire
+	// then rejects. Use internal/launchorigin to resolve one.
+	LaunchOrigin string
 }
 
 // convoyFieldKeys maps ConvoyFields struct fields to their metadata key names.
@@ -30,6 +49,7 @@ var convoyFieldKeys = [...]struct {
 	// target is intentionally unprefixed so work beads can read their own value
 	// directly, while still inheriting it from convoy ancestors during sling.
 	{"target", func(f *ConvoyFields) string { return f.Target }, func(f *ConvoyFields, v string) { f.Target = v }},
+	{LaunchOriginMetadataKey, func(f *ConvoyFields) string { return f.LaunchOrigin }, func(f *ConvoyFields, v string) { f.LaunchOrigin = v }},
 }
 
 // ApplyConvoyFields populates a Bead's Metadata map with non-empty ConvoyFields.

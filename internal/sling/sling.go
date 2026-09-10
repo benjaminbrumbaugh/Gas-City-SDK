@@ -128,6 +128,16 @@ type SlingDeps struct {
 	// Events records best-effort current execution facts after graph workflow
 	// materialization. Nil leaves sling event-silent.
 	Events events.Recorder
+	// LaunchOrigin is the opaque identity of the actor launching this sling,
+	// captured by the caller and stamped onto any auto-convoy so the convoy
+	// carries its launch origin without anyone registering it.
+	//
+	// The sling layer treats it as opaque data: it neither reads meaning out of
+	// it nor derives a provider, harness, role, or runtime from it. Capture is
+	// the caller's job because reading the environment is a Layer 0 side
+	// effect; empty means no trustworthy actor route existed and the convoy
+	// keeps its legacy shape.
+	LaunchOrigin string
 	// ExecutionWorkStore, when set, is the work-store leg execution-fact
 	// projection reads through instead of Store. On a split-store city the
 	// launch beads a convoy tracks may be resident in a per-rig store, so the
