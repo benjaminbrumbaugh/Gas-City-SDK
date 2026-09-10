@@ -58,7 +58,7 @@ func TestBdStoreLeaseReadsUseBoundedNativeRunner(t *testing.T) {
 	}
 	want := [][]string{
 		{"list", "--json", "--include-infra", "--include-gates", "--include-templates", "--limit", "0", "--status", "in_progress"},
-		{"list", "--json", "--include-infra", "--include-gates", "--include-templates", "--limit", "0", "--status", "open,in_progress"},
+		{"list", "--json", "--include-infra", "--include-gates", "--include-templates", "--limit", "0", "--status", "open,in_progress", "--label", "gc:session"},
 		{"show", "--json", "row"},
 	}
 	if !reflect.DeepEqual(calls, want) {

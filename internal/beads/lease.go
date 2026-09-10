@@ -77,7 +77,10 @@ func (s *BdStore) ListInProgressClaims(ctx context.Context) ([]Bead, error) {
 // ListOpenSessionRows returns current open and in-progress rows for session
 // ownership classification by the controller.
 func (s *BdStore) ListOpenSessionRows(ctx context.Context) ([]Bead, error) {
-	return s.listLeaseRows(ctx, "--status", "open,in_progress")
+	// The session front door applies gc:session to every owner row. Filtering
+	// natively keeps the complete census proportional to sessions rather than
+	// scanning every open work bead; repairable legacy rows use the same label.
+	return s.listLeaseRows(ctx, "--status", "open,in_progress", "--label", "gc:session")
 }
 
 func (s *BdStore) listLeaseRows(ctx context.Context, filters ...string) ([]Bead, error) {
@@ -237,9 +240,8 @@ func reclaimCount(out []byte) (int, error) {
 		}
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			// bd emits reclaimed:null when a scoped reclaim finds no rows;
-			// continue to the count field instead of treating valid output as
-			// an undecodable result.
-			continue
+			// a null result is the native representation of a zero count.
+			return 0, nil
 		}
 		var count int
 		if err := json.Unmarshal(raw, &count); err == nil {
