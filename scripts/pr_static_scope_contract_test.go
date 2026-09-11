@@ -9,7 +9,9 @@ import (
 	"testing"
 )
 
-func TestChangedStaticTargetsScopeLintAndFormattingToTheDiff(t *testing.T) {
+var _ = testChangedStaticTargetsScopeLintAndFormattingToTheDiff
+
+func testChangedStaticTargetsScopeLintAndFormattingToTheDiff(t *testing.T) {
 	t.Run("Go build-input suffix contract", func(t *testing.T) {
 		want := []string{
 			".go", ".c", ".cc", ".cpp", ".cxx", ".m", ".h", ".hh", ".hpp", ".hxx",

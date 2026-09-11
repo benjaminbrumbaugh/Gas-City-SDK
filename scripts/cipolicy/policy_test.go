@@ -24,7 +24,7 @@ func TestCurrentWorkflowsMatchPolicy(t *testing.T) {
 }
 
 func TestMakeTestCIPolicyRunsStaticScopeContracts(t *testing.T) {
-	const want = "\t$(TEST_ENV) GOFLAGS= GOENV=off GOWORK=off go test -count=1 -run '^(TestPreflightStaticInstallsICUDevelopmentHeaders|TestUbuntuSetupInstallsICUDevelopmentHeaders|TestMacSetupInstallsICUDevelopmentHeaders|TestPreflightStaticScopesOrdinaryPRsWithoutWeakeningProtectedRuns|TestFullStaticLintExplicitlyOwnsConfiguredGolangCIGovet|TestChangedStaticTargetsScopeLintAndFormattingToTheDiff|TestCIStaticScopeClassifierFailsClosedOutsideValidatedPullRequestMerge)$$' ./scripts"
+	const want = "\t$(TEST_ENV) GOFLAGS= GOENV=off GOWORK=off go test -tags ci_policy -count=1 -timeout 20m -run '^(TestPreflightStaticInstallsICUDevelopmentHeaders|TestUbuntuSetupInstallsICUDevelopmentHeaders|TestMacSetupInstallsICUDevelopmentHeaders|TestPreflightStaticScopesOrdinaryPRsWithoutWeakeningProtectedRuns|TestFullStaticLintExplicitlyOwnsConfiguredGolangCIGovet|TestChangedStaticTargetsScopeLintAndFormattingToTheDiff|TestCIStaticScopeClassifierFailsClosedOutsideValidatedPullRequestMerge)$$' ./scripts"
 
 	makefilePath := filepath.Join("..", "..", "Makefile")
 	body, err := os.ReadFile(makefilePath)
@@ -44,6 +44,15 @@ func TestMakeTestCIPolicyRunsStaticScopeContracts(t *testing.T) {
 	}
 	if matches != 1 {
 		t.Fatalf("test-ci-policy recipe must run the focused static-scope contracts with the exact hermetic command:\n%s", want)
+	}
+
+	staticContractPath := filepath.Join("..", "pr_static_scope_contract_ci_policy_test.go")
+	staticContract, err := os.ReadFile(staticContractPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", staticContractPath, err)
+	}
+	if !strings.Contains(string(staticContract), "//go:build ci_policy") {
+		t.Fatalf("%s must be owned by the dedicated ci_policy test lane", staticContractPath)
 	}
 }
 

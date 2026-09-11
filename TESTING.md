@@ -771,6 +771,27 @@ and fail-closed-classifier contracts. A self-binding test in the existing CI
 policy package rejects any Makefile change that removes this focused Go suite
 from the target.
 
+The fixture-heavy `TestChangedStaticTargetsScopeLintAndFormattingToTheDiff`
+contract is tagged `ci_policy`. It remains a real selector/Makefile fixture
+proof, but is intentionally omitted from the generic `make test` and
+`go test ./scripts` fast package sweep because each fixture invokes the real Go
+toolchain and its wall time grows with host contention. The dedicated owner is
+the `preflight-static` job through `make test-ci-policy`, whose exact local
+equivalent is:
+
+```bash
+make test-ci-policy
+```
+
+That target gives the tagged contract an explicit 20-minute Go test budget,
+matching the per-package budget used by the sharded fast runner; the generic
+15-minute `make test` budget is not applied to this policy-only lane.
+
+When changing the static selector or its Makefile wiring, run that target and
+the focused tagged contract directly. A passing untagged scripts package proves
+fast-tier exclusion only; it is not evidence that the tagged selector matrix
+ran or that a loaded host has a particular runtime budget.
+
 #### Historical timing summaries
 
 The opt-in timing artifacts produced by `scripts/go-test-observable` can be
