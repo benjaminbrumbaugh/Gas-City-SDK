@@ -165,12 +165,7 @@ func TestStatusSessionSnapshotKillsBdChildOnTimeout(t *testing.T) {
 	state := newFakeState(t)
 	state.cityBeadStore = beads.NewMemStore()
 	state.scopedStoreFn = func(ctx context.Context, _ beads.Store) (beads.Store, error) {
-		runner := func(dir, name string, args ...string) ([]byte, error) {
-			cmd := exec.CommandContext(ctx, name, args...)
-			cmd.Dir = dir
-			return cmd.Output()
-		}
-		return beads.NewBdStore(t.TempDir(), runner), nil
+		return newContextBoundScopedTestStore(ctx, t), nil
 	}
 	s := &Server{state: state}
 
@@ -515,7 +510,10 @@ func TestStatusListStoreWithTimeoutKillsBdChildOnTimeout(t *testing.T) {
 	}
 
 	oldTimeout := statusStoreReadTimeout
-	statusStoreReadTimeout = 200 * time.Millisecond
+	// Keep enough bounded scheduling margin for the real fake command to write
+	// its PID before cancellation under a loaded integration runner. This is a
+	// test-only budget; production status reads remain one second.
+	statusStoreReadTimeout = 2 * time.Second
 	t.Cleanup(func() { statusStoreReadTimeout = oldTimeout })
 
 	binDir := t.TempDir()
@@ -528,7 +526,7 @@ func TestStatusListStoreWithTimeoutKillsBdChildOnTimeout(t *testing.T) {
 
 	state := newFakeState(t)
 	state.scopedStoreFn = func(ctx context.Context, _ beads.Store) (beads.Store, error) {
-		return beads.NewBdStore(t.TempDir(), beads.ExecCommandRunnerWithEnvContext(ctx, nil)), nil
+		return newContextBoundScopedTestStore(ctx, t), nil
 	}
 
 	start := time.Now()
@@ -552,7 +550,10 @@ func TestStatusReadyStoreWithTimeoutKillsBdChildOnTimeout(t *testing.T) {
 	}
 
 	oldTimeout := statusStoreReadTimeout
-	statusStoreReadTimeout = 200 * time.Millisecond
+	// Keep enough bounded scheduling margin for the real fake command to write
+	// its PID before cancellation under a loaded integration runner. This is a
+	// test-only budget; production status reads remain one second.
+	statusStoreReadTimeout = 2 * time.Second
 	t.Cleanup(func() { statusStoreReadTimeout = oldTimeout })
 
 	binDir := t.TempDir()
@@ -565,7 +566,7 @@ func TestStatusReadyStoreWithTimeoutKillsBdChildOnTimeout(t *testing.T) {
 
 	state := newFakeState(t)
 	state.scopedStoreFn = func(ctx context.Context, _ beads.Store) (beads.Store, error) {
-		return beads.NewBdStore(t.TempDir(), beads.ExecCommandRunnerWithEnvContext(ctx, nil)), nil
+		return newContextBoundScopedTestStore(ctx, t), nil
 	}
 
 	start := time.Now()
@@ -637,6 +638,11 @@ func writeExecutableScopedTest(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func newContextBoundScopedTestStore(ctx context.Context, t *testing.T) beads.Store {
+	t.Helper()
+	return beads.NewBdStore(t.TempDir(), contextBoundScopedTestRunner(ctx))
 }
 
 func slowStatusWorkScopedStoreResolution(context.Context, beads.Store) (beads.Store, error) {
