@@ -397,6 +397,7 @@ func TestGcInitCommandHostedDoltEnvOnlyEndpoint(t *testing.T) {
 	t.Setenv(envBeadsProjectID, "prj_envonly")
 
 	stubInitDependencyChecks(t)
+	stubInitRemoteImports(t)
 	stubInitDoltAuthorIdentity(t, map[string]string{"user.name": "ci", "user.email": "ci@example.com"})
 
 	cityPath := filepath.Join(t.TempDir(), "env-city")
