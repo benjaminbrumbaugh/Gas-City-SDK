@@ -3610,6 +3610,7 @@ type fakeChildQuerier struct {
 	childrenOf  map[string][]beads.Bead
 	getErr      error
 	childrenErr error
+	readyErr    error
 }
 
 func newFakeChildQuerier() *fakeChildQuerier {
@@ -3654,6 +3655,23 @@ func (q *fakeChildQuerier) List(query beads.ListQuery) ([]beads.Bead, error) {
 	}
 	query.ParentID = ""
 	return beads.ApplyListQuery(normalized, query), nil
+}
+
+func (q *fakeChildQuerier) Ready(...beads.ReadyQuery) ([]beads.Bead, error) {
+	var ready []beads.Bead
+	for _, b := range q.beadsByID {
+		if b.Status == "open" {
+			ready = append(ready, b)
+		}
+	}
+	for _, children := range q.childrenOf {
+		for _, b := range children {
+			if b.Status == "open" {
+				ready = append(ready, b)
+			}
+		}
+	}
+	return ready, q.readyErr
 }
 
 func TestCheckBeadStateAssigneeWarns(t *testing.T) {
