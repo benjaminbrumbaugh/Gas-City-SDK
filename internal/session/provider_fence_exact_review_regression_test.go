@@ -3,12 +3,33 @@ package session
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/runtime"
 )
+
+type staleProviderFenceStartReadStore struct {
+	*beads.MemStore
+	readCaptured chan struct{}
+	releaseRead  chan struct{}
+	readOnce     sync.Once
+}
+
+func (s *staleProviderFenceStartReadStore) Get(id string) (beads.Bead, error) {
+	row, err := s.MemStore.Get(id)
+	blocked := false
+	s.readOnce.Do(func() {
+		blocked = true
+		close(s.readCaptured)
+	})
+	if blocked {
+		<-s.releaseRead
+	}
+	return row, err
+}
 
 func TestProviderFenceStoreObservesCorruptNonOpenRowsButSkipsValidClosedHistory(t *testing.T) {
 	mem := beads.NewMemStore()
@@ -64,9 +85,12 @@ func TestProviderFenceLaunchClaimPreventsCrossManagerIdentityTheft(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	claim, err := mgrA.prepareProviderFenceStart(info.ID, &rowA, "account:winner")
+	claim, alreadyRunning, err := mgrA.prepareProviderFenceStart(info.ID, &rowA, "account:winner")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if alreadyRunning {
+		t.Fatal("winner observed an unexpected running session")
 	}
 	if claim == "" {
 		t.Fatal("winner did not acquire durable launch ownership")
@@ -77,14 +101,14 @@ func TestProviderFenceLaunchClaimPreventsCrossManagerIdentityTheft(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgrB.prepareProviderFenceStart(info.ID, &rowB, "account:winner"); err == nil {
+	if _, _, err := mgrB.prepareProviderFenceStart(info.ID, &rowB, "account:winner"); err == nil {
 		t.Fatal("second manager bypassed durable ownership for the same identity")
 	}
 	rowB, err = mem.Get(info.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgrB.prepareProviderFenceStart(info.ID, &rowB, "account:loser"); err == nil {
+	if _, _, err := mgrB.prepareProviderFenceStart(info.ID, &rowB, "account:loser"); err == nil {
 		t.Fatal("losing manager stole in-flight provider account launch ownership")
 	}
 	current, err := mem.Get(info.ID)
@@ -93,5 +117,84 @@ func TestProviderFenceLaunchClaimPreventsCrossManagerIdentityTheft(t *testing.T)
 	}
 	if got := current.Metadata["launch_provider_fence_identity"]; got != "account:winner" {
 		t.Fatalf("launch identity = %q, want winner", got)
+	}
+}
+
+func TestProviderFenceStartDoesNotAdoptUncommittedLiveRuntimeAfterClaim(t *testing.T) {
+	mem := beads.NewMemStore()
+	sp := runtime.NewFake()
+	mgr := NewManagerWithOptions(mem, sp)
+	info, err := mgr.CreateSession(context.Background(), CreateOptions{
+		BeadOnly: true, Template: "worker", Title: "worker", Command: "true", WorkDir: t.TempDir(),
+		ExtraMeta: map[string]string{"state": string(StateSuspended)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.Start(context.Background(), info.SessionName, runtime.Config{Command: "foreign-runtime"}); err != nil {
+		t.Fatal(err)
+	}
+	row, err := mem.Get(info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, alreadyRunning, err := mgr.prepareProviderFenceStart(info.ID, &row, "account:caller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.releaseProviderFenceLaunchClaim(info.ID, claim)
+	if alreadyRunning {
+		t.Fatal("suspended row with an uncommitted live runtime was adopted as a completed prior start")
+	}
+	if got := row.Metadata["launch_provider_fence_identity"]; got != "account:caller" {
+		t.Fatalf("launch identity = %q, want caller staged for guarded orphan cleanup/start", got)
+	}
+}
+
+func TestProviderFenceStartDoesNotRelabelWinnerAfterPriorClaimRelease(t *testing.T) {
+	mem := beads.NewMemStore()
+	sp := runtime.NewFake()
+	mgrA := NewManagerWithOptions(mem, sp)
+	info, err := mgrA.CreateSession(context.Background(), CreateOptions{
+		BeadOnly: true, Template: "worker", Title: "worker", Command: "true", WorkDir: t.TempDir(),
+		ExtraMeta: map[string]string{"state": string(StateSuspended)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	staleStore := &staleProviderFenceStartReadStore{
+		MemStore:     mem,
+		readCaptured: make(chan struct{}),
+		releaseRead:  make(chan struct{}),
+	}
+	mgrB := NewManagerWithOptions(staleStore, sp)
+	loserDone := make(chan error, 1)
+	go func() {
+		row, sessionName, err := mgrB.sessionBead(info.ID)
+		if err == nil {
+			err = mgrB.ensureRunning(context.Background(), info.ID, row, sessionName, "true", runtime.Config{ProviderFenceIdentity: "account:loser"})
+		}
+		loserDone <- err
+	}()
+	<-staleStore.readCaptured
+
+	if err := mgrA.Start(context.Background(), info.ID, "true", runtime.Config{ProviderFenceIdentity: "account:winner"}); err != nil {
+		t.Fatalf("winner Start: %v", err)
+	}
+	close(staleStore.releaseRead)
+	if err := <-loserDone; err != nil {
+		t.Fatalf("delayed concurrent Start: %v", err)
+	}
+
+	current, err := mem.Get(info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.Metadata["started_provider_fence_identity"]; got != "account:winner" {
+		t.Fatalf("started provider identity = %q, want prior runtime winner after its claim was released", got)
+	}
+	if got := current.Metadata["launch_provider_fence_identity"]; got != "" {
+		t.Fatalf("launch provider identity = %q, want no delayed staging left behind", got)
 	}
 }

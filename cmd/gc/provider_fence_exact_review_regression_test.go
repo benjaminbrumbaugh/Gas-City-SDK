@@ -137,11 +137,147 @@ type concurrentStateMutationStopProvider struct {
 	id    string
 }
 
+type concurrentSuccessfulStopMutationProvider struct {
+	runtime.Provider
+	store beads.Store
+	id    string
+}
+
+func (p concurrentSuccessfulStopMutationProvider) StopIfDetached(name, token string) error {
+	if err := p.store.SetMetadata(p.id, "started_config_hash", "concurrent-after-handoff"); err != nil {
+		return err
+	}
+	return p.Provider.(runtime.ConditionalStopProvider).StopIfDetached(name, token)
+}
+
+type concurrentPreStopHandoffMutationStore struct {
+	*beads.MemStore
+	id       string
+	key      string
+	value    string
+	injected bool
+}
+
+type concurrentPreStopSnapshotMutationStore struct {
+	*beads.MemStore
+	id       string
+	injected bool
+}
+
+func (s *concurrentPreStopSnapshotMutationStore) Get(id string) (beads.Bead, error) {
+	row, err := s.MemStore.Get(id)
+	if err != nil || id != s.id || s.injected {
+		return row, err
+	}
+	if row.Metadata[sessionHealthReasonMetadataKey] != sessionHealthReasonUsageLimitModal ||
+		row.Metadata["restart_requested"] != "true" ||
+		row.Metadata["continuation_reset_pending"] == "true" {
+		return row, nil
+	}
+	s.injected = true
+	_ = s.SetMetadata(id, "restart_requested", "")
+	return s.MemStore.Get(id)
+}
+
+func (s *concurrentPreStopHandoffMutationStore) injectBeforeHandoff(opts beads.UpdateOpts) {
+	if s.injected || opts.Metadata["continuation_reset_pending"] != "true" {
+		return
+	}
+	s.injected = true
+	_ = s.SetMetadata(s.id, s.key, s.value)
+}
+
+func (s *concurrentPreStopHandoffMutationStore) Update(id string, opts beads.UpdateOpts) error {
+	s.injectBeforeHandoff(opts)
+	return s.MemStore.Update(id, opts)
+}
+
+func (s *concurrentPreStopHandoffMutationStore) UpdateIfMatch(id string, expectedRevision int64, opts beads.UpdateOpts) error {
+	s.injectBeforeHandoff(opts)
+	return s.MemStore.UpdateIfMatch(id, expectedRevision, opts)
+}
+
 func (p concurrentStateMutationStopProvider) StopIfDetached(string, string) error {
 	if err := p.store.SetMetadata(p.id, "started_config_hash", "concurrent-newer-state"); err != nil {
 		return err
 	}
 	return runtime.ErrConditionalStopRefused
+}
+
+func TestUsageLimitPreStopHandoffDoesNotRearmConcurrentRestartCancellation(t *testing.T) {
+	env, source, sessionName := newUsageLimitModalScenario(t)
+	mem := env.store.(*beads.MemStore)
+	tracingStore := &concurrentPreStopSnapshotMutationStore{MemStore: mem, id: source.ID}
+	env.store = tracingStore
+
+	env.reconcile([]beads.Bead{source})
+
+	if !tracingStore.injected {
+		t.Fatal("test did not clear restart_requested after the tick snapshot")
+	}
+	if !env.sp.IsRunning(sessionName) {
+		t.Fatal("runtime was stopped after a concurrent writer canceled restart")
+	}
+	got, err := env.store.Get(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value := got.Metadata["restart_requested"]; value != "" {
+		t.Fatalf("restart_requested = %q, want concurrent cancellation preserved", value)
+	}
+}
+
+func TestUsageLimitPreStopHandoffRejectsConcurrentDestructiveMetadataWrite(t *testing.T) {
+	env, source, sessionName := newUsageLimitModalScenario(t)
+	mem, ok := env.store.(*beads.MemStore)
+	if !ok {
+		t.Fatalf("scenario store = %T, want *beads.MemStore", env.store)
+	}
+	const concurrentValue = "concurrent-newer-state"
+	tracingStore := &concurrentPreStopHandoffMutationStore{
+		MemStore: mem,
+		id:       source.ID,
+		key:      "started_config_hash",
+		value:    concurrentValue,
+	}
+	env.store = tracingStore
+
+	env.reconcile([]beads.Bead{source})
+
+	if !tracingStore.injected {
+		t.Fatal("test did not inject the concurrent write at the pre-stop handoff")
+	}
+	if !env.sp.IsRunning(sessionName) {
+		t.Fatal("runtime was stopped after the pre-stop handoff lost its metadata precondition")
+	}
+	if calls := env.sp.CountCalls("StopIfDetached", sessionName); calls != 0 {
+		t.Fatalf("StopIfDetached calls = %d, want 0 after handoff precondition loss", calls)
+	}
+	got, err := env.store.Get(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value := got.Metadata["started_config_hash"]; value != concurrentValue {
+		t.Fatalf("started_config_hash = %q, want concurrent value %q preserved", value, concurrentValue)
+	}
+}
+
+func TestUsageLimitSuccessfulStopDoesNotRewriteConcurrentPostHandoffState(t *testing.T) {
+	env, source, sessionName := newUsageLimitModalScenario(t)
+	env.provider = concurrentSuccessfulStopMutationProvider{Provider: env.sp, store: env.store, id: source.ID}
+
+	env.reconcile([]beads.Bead{source})
+
+	if env.sp.IsRunning(sessionName) {
+		t.Fatal("runtime remained running after the guarded stop succeeded")
+	}
+	got, err := env.store.Get(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value := got.Metadata["started_config_hash"]; value != "concurrent-after-handoff" {
+		t.Fatalf("started_config_hash = %q, want concurrent post-handoff value preserved", value)
+	}
 }
 
 func TestUsageLimitRollbackPreservesConcurrentNewerSessionState(t *testing.T) {

@@ -533,11 +533,18 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 	if resumeCommand == "" {
 		return fmt.Errorf("%w: %s", ErrResumeRequired, id)
 	}
-	launchClaim, err := m.prepareProviderFenceStart(id, &b, hints.ProviderFenceIdentity)
+	launchClaim, alreadyRunning, err := m.prepareProviderFenceStart(id, &b, hints.ProviderFenceIdentity)
 	if err != nil {
 		return err
 	}
 	defer m.releaseProviderFenceLaunchClaim(id, launchClaim)
+	if alreadyRunning {
+		freshTransport, freshTransportVerified := m.transportForBead(b, sessionName(id, b))
+		if b.Metadata["transport"] == "" && freshTransportVerified {
+			m.persistTransport(id, b.Metadata["provider"], freshTransport)
+		}
+		return m.confirmLiveSessionState(id, &b)
+	}
 	failedStart := func(startErr error) error {
 		absent, clearErr := m.clearLaunchProviderFenceIdentityIfDefinitelyAbsent(id, sessName, b.Metadata["launch_provider_fence_identity"])
 		if clearErr == nil && absent && unroute != nil {
@@ -661,11 +668,14 @@ func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b bea
 	if resumeCommand == "" {
 		return fmt.Errorf("%w: %s", ErrResumeRequired, id)
 	}
-	launchClaim, err := m.prepareProviderFenceStart(id, &b, hints.ProviderFenceIdentity)
+	launchClaim, alreadyRunning, err := m.prepareProviderFenceStart(id, &b, hints.ProviderFenceIdentity)
 	if err != nil {
 		return err
 	}
 	defer m.releaseProviderFenceLaunchClaim(id, launchClaim)
+	if alreadyRunning {
+		return nil
+	}
 	failedStart := func(startErr error) error {
 		absent, clearErr := m.clearLaunchProviderFenceIdentityIfDefinitelyAbsent(id, sessName, b.Metadata["launch_provider_fence_identity"])
 		if clearErr == nil && absent && unroute != nil {
@@ -786,20 +796,34 @@ func (m *Manager) confirmLiveSessionState(id string, b *beads.Bead) error {
 	return nil
 }
 
-func (m *Manager) prepareProviderFenceStart(id string, b *beads.Bead, identity string) (string, error) {
+func (m *Manager) prepareProviderFenceStart(id string, b *beads.Bead, identity string) (string, bool, error) {
 	identity = strings.TrimSpace(identity)
 	if identity == "" || b == nil {
-		return "", nil
+		return "", false, nil
 	}
-	current := strings.TrimSpace(b.Metadata["launch_provider_fence_identity"])
 	claim, err := m.acquireProviderFenceLaunchClaim(id, b)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	releaseOnError := func(err error) (string, error) {
+	releaseOnError := func(err error) (string, bool, error) {
 		m.releaseProviderFenceLaunchClaim(id, claim)
-		return "", err
+		return "", false, err
 	}
+	// The per-process mutation lock cannot serialize starts from different GC
+	// processes. Re-read only after this caller owns the durable launch claim:
+	// an earlier caller may have started, committed its attribution, and released
+	// its claim after our caller loaded b. In that case converge on the freshly
+	// observed runtime without staging this stale caller's identity over it.
+	fresh, freshName, err := m.loadSessionBead(id, false)
+	if err != nil {
+		return releaseOnError(fmt.Errorf("refreshing provider account launch ownership: %w", err))
+	}
+	*b = fresh
+	freshState := State(fresh.Metadata["state"])
+	if (freshState == StateActive || freshState == StateAwake) && m.sp.IsRunning(freshName) {
+		return claim, true, nil
+	}
+	current := strings.TrimSpace(b.Metadata["launch_provider_fence_identity"])
 	fences, err := NewStore(beads.SessionStore{Store: m.store}).ActiveProviderFences(time.Now().UTC())
 	if err != nil {
 		return releaseOnError(fmt.Errorf("checking provider account fence before session start: %w", err))
@@ -810,7 +834,7 @@ func (m *Manager) prepareProviderFenceStart(id string, b *beads.Bead, identity s
 		}
 	}
 	if current == identity {
-		return claim, nil
+		return claim, false, nil
 	}
 	if current != "" {
 		absent, err := m.providerSessionDefinitelyAbsent(sessionName(id, *b))
@@ -829,7 +853,7 @@ func (m *Manager) prepareProviderFenceStart(id string, b *beads.Bead, identity s
 			return releaseOnError(errors.New("replacing stale provider account attribution lost metadata precondition"))
 		}
 		b.Metadata["launch_provider_fence_identity"] = identity
-		return claim, nil
+		return claim, false, nil
 	}
 	writer, ok := beads.MetadataCASWriterFor(m.store)
 	if !ok {
@@ -846,7 +870,7 @@ func (m *Manager) prepareProviderFenceStart(id string, b *beads.Bead, identity s
 		b.Metadata = make(map[string]string)
 	}
 	b.Metadata["launch_provider_fence_identity"] = identity
-	return claim, nil
+	return claim, false, nil
 }
 
 func (m *Manager) acquireProviderFenceLaunchClaim(id string, b *beads.Bead) (string, error) {

@@ -112,6 +112,42 @@ func (s *Store) UpdateMetadataInfo(info Info, patch MetadataPatch) (Info, error)
 	return info.ApplyPatch(patch), nil
 }
 
+// UpdateMetadataInfoIfCurrent persists patch atomically only while every
+// expected metadata value still matches the durable row. The fresh read catches
+// interference before handoff preparation; the revision-fenced update catches
+// interference after that read. Stores without whole-row revision CAS fail
+// closed rather than degrading to an unconditional write.
+func (s *Store) UpdateMetadataInfoIfCurrent(info Info, expected, patch MetadataPatch) (Info, error) {
+	if len(patch) == 0 {
+		return info, nil
+	}
+	if len(expected) == 0 {
+		return info, errors.New("conditional metadata update requires value preconditions")
+	}
+	writer, ok := beads.ConditionalWriterFor(s.store.Store)
+	if !ok {
+		return info, beads.ErrConditionalWriteUnsupported
+	}
+	current, err := s.store.Get(info.ID)
+	if err != nil {
+		return info, err
+	}
+	keys := make([]string, 0, len(expected))
+	for key := range expected {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if current.Metadata[key] != expected[key] {
+			return info, fmt.Errorf("conditional metadata update lost value precondition for %q", key)
+		}
+	}
+	if err := writer.UpdateIfMatch(info.ID, current.Revision, beads.UpdateOpts{Metadata: map[string]string(patch)}); err != nil {
+		return info, err
+	}
+	return InfoFromPersistedBead(current).ApplyPatch(patch), nil
+}
+
 // RestoreMetadataInfoIfCurrent restores only handoff values that still match
 // the failed operation's write-ahead patch. Each field is value-CASed, so a
 // concurrent newer session mutation wins instead of being overwritten by a

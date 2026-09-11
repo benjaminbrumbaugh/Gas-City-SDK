@@ -2885,6 +2885,8 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				usageLimitRestartHandoffPersisted := false
 				usageLimitRestartSessionKey := ""
 				usageLimitRestartHasCapability := false
+				var usageLimitRestartHandoff sessionpkg.MetadataPatch
+				usageLimitRestartHandoffInfo := infoByID[id]
 				if runtimeRunning && strings.TrimSpace(infoByID[id].HealthReason) == sessionHealthReasonUsageLimitModal {
 					conditionalStop, ok := sp.(runtime.ConditionalStopProvider)
 					if !ok || !runtime.SupportsConditionalStop(sp, name) {
@@ -2900,21 +2902,30 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					// boundary. If the atomic runtime guard refuses, restore every
 					// destructive field while leaving restart_requested armed.
 					usageLimitRestartSessionKey, usageLimitRestartHasCapability = freshRestartSessionKeyInfo(tp, infoByID[id])
-					preStopHandoff := sessionpkg.RestartRequestPatch(usageLimitRestartSessionKey, clk.Now())
-					preStopHandoff["restart_requested"] = "true"
+					usageLimitRestartHandoff = sessionpkg.RestartRequestPatch(usageLimitRestartSessionKey, clk.Now())
+					usageLimitRestartHandoff["restart_requested"] = "true"
 					if usageLimitRestartHasCapability && usageLimitRestartSessionKey == "" {
-						preStopHandoff["session_key"] = ""
+						usageLimitRestartHandoff["session_key"] = ""
 					}
-					rollback := usageLimitRestartHandoffRollback(infoByID[id], preStopHandoff)
-					handoffInfo, err := sessFront.UpdateMetadataInfo(infoByID[id], preStopHandoff)
+					rollback := usageLimitRestartHandoffRollback(infoByID[id], usageLimitRestartHandoff)
+					handoffExpected := make(sessionpkg.MetadataPatch, len(rollback)+4)
+					for key, value := range rollback {
+						handoffExpected[key] = value
+					}
+					handoffExpected["restart_requested"] = infoByID[id].RestartRequested
+					handoffExpected["instance_token"] = infoByID[id].InstanceToken
+					handoffExpected["state"] = string(infoByID[id].State)
+					handoffExpected[sessionHealthReasonMetadataKey] = infoByID[id].HealthReason
+					handoffInfo, err := sessFront.UpdateMetadataInfoIfCurrent(infoByID[id], handoffExpected, usageLimitRestartHandoff)
 					if err != nil {
 						fmt.Fprintf(stderr, "session reconciler: recording restart handoff before usage-limit stop for %s: %v; leaving runtime untouched\n", name, err) //nolint:errcheck
 						continue
 					}
-					recordLegacyCompareWrites(id, "usageLimitRestartHandoff", preStopHandoff)
+					recordLegacyCompareWrites(id, "usageLimitRestartHandoff", usageLimitRestartHandoff)
+					usageLimitRestartHandoffInfo = handoffInfo
 					usageLimitRestartHandoffPersisted = true
 					if err := conditionalStop.StopIfDetached(name, strings.TrimSpace(infoByID[id].InstanceToken)); err != nil {
-						if next, rollbackErr := sessFront.RestoreMetadataInfoIfCurrent(handoffInfo, preStopHandoff, rollback); rollbackErr != nil {
+						if next, rollbackErr := sessFront.RestoreMetadataInfoIfCurrent(handoffInfo, usageLimitRestartHandoff, rollback); rollbackErr != nil {
 							fmt.Fprintf(stderr, "session reconciler: restoring restart handoff after refused usage-limit stop for %s: %v\n", name, rollbackErr) //nolint:errcheck
 						} else {
 							recordLegacyCompareWrites(id, "usageLimitRestartHandoffRollback", rollback)
@@ -2954,15 +2965,25 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				// intentional death from crash and churn trackers (both
 				// check last_woke_at first).
 				newSessionKey, hasCapability := freshRestartSessionKeyInfo(tp, infoByID[id])
-				if usageLimitRestartHandoffPersisted {
-					newSessionKey = usageLimitRestartSessionKey
-					hasCapability = usageLimitRestartHasCapability
-				}
 				batch := sessionpkg.RestartRequestPatch(newSessionKey, clk.Now())
 				if hasCapability && newSessionKey == "" {
 					batch["session_key"] = ""
 				}
-				_, err := sessionFrontDoor(store).UpdateMetadataInfo(infoByID[id], batch)
+				var err error
+				if usageLimitRestartHandoffPersisted {
+					// The destructive handoff is already durable. Consume only the
+					// restart marker, under the same value/revision preconditions, so
+					// metadata written while the guarded stop runs is never replayed
+					// over by the tick snapshot.
+					batch = sessionpkg.MetadataPatch{"restart_requested": ""}
+					_, err = sessFront.UpdateMetadataInfoIfCurrent(
+						usageLimitRestartHandoffInfo,
+						usageLimitRestartHandoff,
+						batch,
+					)
+				} else {
+					_, err = sessionFrontDoor(store).UpdateMetadataInfo(infoByID[id], batch)
+				}
 				if err != nil {
 					fmt.Fprintf(stderr, "session reconciler: recording restart handoff for %s: %v\n", name, err) //nolint:errcheck
 					continue
@@ -2981,13 +3002,18 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				// R4): its only consumer was the start-execution cluster's raw bead
 				// pointer, now deleted — the executor reads the captured Info twin, which
 				// this fold keeps coherent.
-				restartFold := make(sessionpkg.MetadataPatch, len(batch))
-				for key, value := range batch {
+				restartFoldSource := batch
+				if usageLimitRestartHandoffPersisted {
+					restartFoldSource = usageLimitRestartHandoff
+				}
+				restartFold := make(sessionpkg.MetadataPatch, len(restartFoldSource))
+				for key, value := range restartFoldSource {
 					if key == sessionpkg.ResetCommittedAtKey {
 						continue
 					}
 					restartFold[key] = value
 				}
+				restartFold["restart_requested"] = ""
 				tick.apply(id, restartFold)
 				if runtimeRunning {
 					if tmuxRequested && dops != nil {

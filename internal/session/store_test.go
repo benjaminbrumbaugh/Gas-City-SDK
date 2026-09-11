@@ -722,6 +722,39 @@ func TestUpdateMetadataInfoEmitsSingleUpdateWithFullPatch(t *testing.T) {
 	}
 }
 
+// TestUpdateMetadataInfoIfCurrentReturnsFreshUnrelatedState proves the
+// conditional write folds onto the fresh row used for its revision fence, not
+// the stale caller snapshot.
+func TestUpdateMetadataInfoIfCurrentReturnsFreshUnrelatedState(t *testing.T) {
+	b := sessionBeadFixture("s-1", "open", map[string]string{
+		"state":               "active",
+		"started_config_hash": "original-hash",
+		"last_woke_at":        "2026-01-01T00:00:00Z",
+	})
+	mem := beads.NewMemStoreFrom(1, []beads.Bead{b}, nil)
+	store := NewStore(beads.SessionStore{Store: mem})
+	pre, err := store.Get("s-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const newerWake = "2026-01-02T00:00:00Z"
+	if err := mem.SetMetadata("s-1", "last_woke_at", newerWake); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.UpdateMetadataInfoIfCurrent(
+		pre,
+		MetadataPatch{"started_config_hash": "original-hash"},
+		MetadataPatch{"started_config_hash": ""},
+	)
+	if err != nil {
+		t.Fatalf("UpdateMetadataInfoIfCurrent: %v", err)
+	}
+	if got.LastWokeAt != newerWake {
+		t.Fatalf("returned LastWokeAt = %q, want fresh unrelated value %q", got.LastWokeAt, newerWake)
+	}
+}
+
 // TestUpdateMetadataInfoFailedWritePersistsNothingAndReturnsInputUnchanged proves
 // the all-or-nothing guarantee: when the single Update fails, NOTHING is persisted
 // (the durable row keeps its pre-write metadata) and the returned Info is the
