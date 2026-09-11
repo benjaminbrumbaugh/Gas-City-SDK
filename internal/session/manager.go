@@ -842,7 +842,7 @@ func (m *Manager) CreateSession(ctx context.Context, spec CreateOptions) (Info, 
 		identity = strings.TrimSpace(spec.ExtraMeta["launch_provider_fence_identity"])
 	}
 	var info Info
-	err := NewStoreForCity(beads.SessionStore{Store: m.store}, m.cityPath).withProviderFenceStart(identity, func() error {
+	err := NewStoreForCity(beads.SessionStore{Store: m.store}, m.cityPath).withProviderFenceStart(ctx, identity, func() error {
 		var err error
 		info, err = m.createStarted(ctx, spec)
 		return err
@@ -1049,6 +1049,9 @@ func (m *Manager) createStarted(ctx context.Context, spec CreateOptions) (Info, 
 				return errors.Join(fmt.Errorf("pre-start orphan cleanup: %w", orphanErr), rbErr)
 			}
 			return fmt.Errorf("pre-start orphan cleanup: %w", orphanErr)
+		}
+		if err := ctx.Err(); err != nil {
+			return errors.Join(err, rollbackFailedCreate())
 		}
 		if err := m.sp.Start(ctx, sessName, cfg); err != nil {
 			if runtimeSessionMatchesBead(m.sp, sessName, b.ID, meta["instance_token"]) {

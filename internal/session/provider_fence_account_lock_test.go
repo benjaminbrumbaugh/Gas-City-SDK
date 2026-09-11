@@ -2,17 +2,33 @@ package session
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/pidutil"
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/testutil"
 )
+
+func awaitProviderFenceLockWait(t *testing.T, waiting <-chan struct{}, done <-chan error) {
+	t.Helper()
+	timer := time.NewTimer(testutil.GoroutineRaceTimeout)
+	defer timer.Stop()
+	select {
+	case <-waiting:
+	case err := <-done:
+		t.Fatalf("lock operation returned before reporting contention: %v", err)
+	case <-timer.C:
+		t.Fatal("timed out waiting for lock contention signal")
+	}
+}
 
 func TestProviderFenceRecordWaitsForIdentityAwareCreateAttribution(t *testing.T) {
 	cityPath := t.TempDir()
@@ -35,17 +51,19 @@ func TestProviderFenceRecordWaitsForIdentityAwareCreateAttribution(t *testing.T)
 	<-provider.entered
 
 	now := time.Now().UTC()
+	waiting := make(chan struct{})
+	var waitingOnce sync.Once
+	recordCtx := context.WithValue(context.Background(), providerFenceLockWaitObserverKey{}, func() {
+		waitingOnce.Do(func() { close(waiting) })
+	})
 	recordDone := make(chan error, 1)
 	go func() {
-		recordDone <- NewStoreForCity(beads.SessionStore{Store: mem}, cityPath).RecordProviderFence(
+		recordDone <- NewStoreForCity(beads.SessionStore{Store: mem}, cityPath).recordProviderFence(
+			recordCtx,
 			identity, now.Add(time.Hour), now, "usage_limit_modal",
 		)
 	}()
-	select {
-	case err := <-recordDone:
-		t.Fatalf("provider fence record completed before launch attribution: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
+	awaitProviderFenceLockWait(t, waiting, recordDone)
 	close(provider.release)
 	if err := <-startDone; err != nil {
 		t.Fatalf("identity-aware create: %v", err)
@@ -74,21 +92,21 @@ func TestIdentityAwareStartsRereadFenceAfterAccountLockWait(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			waiting := make(chan struct{})
+			var waitingOnce sync.Once
+			startCtx := context.WithValue(context.Background(), providerFenceLockWaitObserverKey{}, func() {
+				waitingOnce.Do(func() { close(waiting) })
+			})
 			startDone := make(chan error, 1)
 			go func() {
 				hints := runtime.Config{ProviderFenceIdentity: identity}
 				if mode == "runtime-only" {
-					startDone <- mgr.StartRuntimeOnly(context.Background(), info.ID, "true", hints)
+					startDone <- mgr.StartRuntimeOnly(startCtx, info.ID, "true", hints)
 					return
 				}
-				startDone <- mgr.Start(context.Background(), info.ID, "true", hints)
+				startDone <- mgr.Start(startCtx, info.ID, "true", hints)
 			}()
-			select {
-			case err := <-startDone:
-				unlock()
-				t.Fatalf("identity-aware %s did not wait for account lock: %v", mode, err)
-			case <-time.After(100 * time.Millisecond):
-			}
+			awaitProviderFenceLockWait(t, waiting, startDone)
 
 			now := time.Now().UTC()
 			if err := NewStore(beads.SessionStore{Store: mem}).RecordProviderFence(identity, now.Add(time.Hour), now, "usage_limit_modal"); err != nil {
@@ -129,19 +147,13 @@ func TestProviderFenceAccountLockSerializesAcrossProcesses(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer unlock()
-		if err := os.WriteFile(filepath.Join(cityPath, "child-ready"), []byte("ready"), 0o600); err != nil {
+		if _, err := os.Stdout.Write([]byte("ready\n")); err != nil {
 			t.Fatal(err)
 		}
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			if _, err := os.Stat(filepath.Join(cityPath, "child-release")); err == nil {
-				return
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("timed out waiting for parent release")
-			}
-			time.Sleep(10 * time.Millisecond)
+		if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+			t.Fatal(err)
 		}
+		return
 	}
 
 	cityPath := t.TempDir()
@@ -152,40 +164,73 @@ func TestProviderFenceAccountLockSerializesAcrossProcesses(t *testing.T) {
 		"GC_TEST_PROVIDER_FENCE_LOCK_CITY="+cityPath,
 		"GC_TEST_PROVIDER_FENCE_LOCK_IDENTITY="+identity,
 	)
-	childDone := make(chan error, 1)
+	childIn, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	childOut, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	childDone := make(chan error, 1)
 	go func() { childDone <- cmd.Wait() }()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if _, err := os.Stat(filepath.Join(cityPath, "child-ready")); err == nil {
-			break
+	childReaped := false
+	t.Cleanup(func() {
+		_ = childIn.Close()
+		if !childReaped {
+			_ = cmd.Process.Kill()
+			<-childDone
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for child lock")
-		}
-		time.Sleep(10 * time.Millisecond)
+	})
+	var ready [6]byte
+	if _, err := io.ReadFull(childOut, ready[:]); err != nil {
+		t.Fatalf("reading lock helper readiness: %v", err)
+	}
+	if string(ready[:]) != "ready\n" {
+		t.Fatalf("lock helper readiness = %q, want %q", ready[:], "ready\\n")
 	}
 
 	mem := beads.NewMemStore()
 	now := time.Now().UTC()
-	recordDone := make(chan error, 1)
+	canceledWaiting := make(chan struct{})
+	var canceledWaitingOnce sync.Once
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), providerFenceLockWaitObserverKey{}, func() {
+		canceledWaitingOnce.Do(func() { close(canceledWaiting) })
+	}))
+	canceledDone := make(chan error, 1)
 	go func() {
-		recordDone <- NewStoreForCity(beads.SessionStore{Store: mem}, cityPath).RecordProviderFence(
-			identity, now.Add(time.Hour), now, "usage_limit_modal",
+		canceledDone <- NewStoreForCity(beads.SessionStore{Store: mem}, cityPath).recordProviderFence(
+			ctx, identity, now.Add(time.Hour), now, "usage_limit_modal",
 		)
 	}()
-	select {
-	case err := <-recordDone:
-		t.Fatalf("record crossed a provider fence account lock held by another process: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	awaitProviderFenceLockWait(t, canceledWaiting, canceledDone)
+	cancel()
+	if err := <-canceledDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("record canceled during cross-process lock wait error = %v, want context.Canceled", err)
 	}
-	if err := os.WriteFile(filepath.Join(cityPath, "child-release"), []byte("release"), 0o600); err != nil {
+
+	recordWaiting := make(chan struct{})
+	var recordWaitingOnce sync.Once
+	recordCtx := context.WithValue(context.Background(), providerFenceLockWaitObserverKey{}, func() {
+		recordWaitingOnce.Do(func() { close(recordWaiting) })
+	})
+	recordDone := make(chan error, 1)
+	go func() {
+		recordDone <- NewStoreForCity(beads.SessionStore{Store: mem}, cityPath).recordProviderFence(
+			recordCtx, identity, now.Add(time.Hour), now, "usage_limit_modal",
+		)
+	}()
+	awaitProviderFenceLockWait(t, recordWaiting, recordDone)
+	if err := childIn.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-childDone; err != nil {
-		t.Fatalf("lock helper: %v", err)
+	childErr := <-childDone
+	childReaped = true
+	if childErr != nil {
+		t.Fatalf("lock helper: %v", childErr)
 	}
 	if err := <-recordDone; err != nil {
 		t.Fatal(err)
@@ -215,6 +260,49 @@ func TestProviderFenceAccountLocksDoNotSerializeDifferentAccounts(t *testing.T) 
 	case <-time.After(time.Second):
 		t.Fatal("different provider accounts were serialized by a global exclusive lock")
 	}
+}
+
+func TestProviderFenceStartCanceledWhileWaitingDoesNotLaunch(t *testing.T) {
+	cityPath := t.TempDir()
+	identity := "account:canceled-waiter"
+	mem := beads.NewMemStore()
+	provider := runtime.NewFake()
+	mgr := NewManagerWithOptions(mem, provider, WithCityPath(cityPath))
+	info, err := mgr.CreateSession(context.Background(), CreateOptions{
+		BeadOnly: true, Template: "worker", Title: "worker", Command: "true", WorkDir: cityPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unlock, err := acquireProviderFenceAccountLock(cityPath, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := make(chan struct{})
+	var waitingOnce sync.Once
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), providerFenceLockWaitObserverKey{}, func() {
+		waitingOnce.Do(func() { close(waiting) })
+	}))
+	startDone := make(chan error, 1)
+	go func() {
+		startDone <- mgr.Start(ctx, info.ID, "true", runtime.Config{ProviderFenceIdentity: identity})
+	}()
+	awaitProviderFenceLockWait(t, waiting, startDone)
+	cancel()
+	unlock()
+
+	if err := <-startDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("start after cancellation error = %v, want context.Canceled", err)
+	}
+	if provider.IsRunning(info.SessionName) {
+		t.Fatal("provider start ran after its account-lock wait was canceled")
+	}
+	retryUnlock, err := acquireProviderFenceAccountLock(cityPath, identity)
+	if err != nil {
+		t.Fatalf("reacquiring account lock after canceled waiter: %v", err)
+	}
+	retryUnlock()
 }
 
 func TestExpiredProviderFenceLaunchClaimCannotBeStolenFromLiveOwner(t *testing.T) {

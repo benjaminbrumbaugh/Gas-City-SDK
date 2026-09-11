@@ -67,8 +67,11 @@ func TestExecutePreparedStartWaveUsesWorkerBoundaryForKnownSession(t *testing.T)
 	if updatedBead.Metadata["pending_create_claim"] != "true" {
 		t.Fatalf("pending_create_claim = %q, want preserved before commit", updatedBead.Metadata["pending_create_claim"])
 	}
-	if got := updatedBead.Metadata["launch_provider_fence_identity"]; got != "account:hmac-sha256:test-identity" {
-		t.Fatalf("launch_provider_fence_identity = %q, want persisted before provider start returns", got)
+	if got := updatedBead.Metadata["launch_provider_fence_identity"]; got != "" {
+		t.Fatalf("launch_provider_fence_identity = %q, want cleared after provider start succeeds", got)
+	}
+	if got := updatedBead.Metadata["started_provider_fence_identity"]; got != "account:hmac-sha256:test-identity" {
+		t.Fatalf("started_provider_fence_identity = %q, want durable started attribution", got)
 	}
 	if !sp.IsRunning(info.SessionName) {
 		t.Fatal("session should be running after prepared start")

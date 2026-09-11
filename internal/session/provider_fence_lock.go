@@ -1,52 +1,87 @@
 package session
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/runtime"
+	"golang.org/x/sync/semaphore"
 )
 
-const providerFenceLocksDir = "provider-fence-locks"
+const (
+	providerFenceLocksDir         = "provider-fence-locks"
+	providerFenceGlobalLockWeight = int64(1 << 30)
+	providerFenceFileLockRetry    = 10 * time.Millisecond
+)
 
 type providerFenceProcessLockSet struct {
-	global   sync.RWMutex
-	mu       sync.Mutex
-	accounts map[string]*sync.Mutex
+	global   *semaphore.Weighted
+	accounts sync.Map // map[string]*semaphore.Weighted
 }
 
-var providerFenceProcessLocks = struct {
-	sync.Mutex
-	byScope map[string]*providerFenceProcessLockSet
-}{byScope: make(map[string]*providerFenceProcessLockSet)}
+var providerFenceProcessLocks sync.Map // map[string]*providerFenceProcessLockSet
 
-func (s *Store) withProviderFenceStart(identity string, fn func() error) error {
+type providerFenceLockWaitObserverKey struct{}
+
+func notifyProviderFenceLockWait(ctx context.Context) {
+	if observer, ok := ctx.Value(providerFenceLockWaitObserverKey{}).(func()); ok && observer != nil {
+		observer()
+	}
+}
+
+func acquireProviderFenceSemaphore(ctx context.Context, lock *semaphore.Weighted, weight int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if lock.TryAcquire(weight) {
+		if err := ctx.Err(); err != nil {
+			lock.Release(weight)
+			return err
+		}
+		return nil
+	}
+	notifyProviderFenceLockWait(ctx)
+	return lock.Acquire(ctx, weight)
+}
+
+func (s *Store) withProviderFenceStart(ctx context.Context, identity string, fn func() error) error {
 	identity = strings.TrimSpace(identity)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if identity == "" {
 		return fn()
 	}
-	unlock, err := acquireProviderFenceScopedLock(s.lockScope, s.cityPath, identity, false)
+	unlock, err := acquireProviderFenceScopedLock(ctx, s.lockScope, s.cityPath, identity, false)
 	if err != nil {
 		return fmt.Errorf("locking provider account start: %w", err)
 	}
 	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return fn()
 }
 
-func (s *Store) withProviderFenceRecord(identity string, fn func() error) error {
+func (s *Store) withProviderFenceRecordContext(ctx context.Context, identity string, fn func() error) error {
 	identity = strings.TrimSpace(identity)
 	if identity == "" {
 		return fn()
 	}
-	unlock, err := acquireProviderFenceScopedLock(s.lockScope, s.cityPath, identity, identity == LegacyGlobalProviderFenceIdentity)
+	unlock, err := acquireProviderFenceScopedLock(ctx, s.lockScope, s.cityPath, identity, identity == LegacyGlobalProviderFenceIdentity)
 	if err != nil {
 		return fmt.Errorf("locking provider fence record: %w", err)
 	}
 	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return fn()
 }
 
@@ -54,39 +89,44 @@ func (s *Store) withProviderFenceRecord(identity string, fn func() error) error 
 // identity-aware starts and exact-account fence records. It is kept separate
 // from Store so tests can pin wait/re-read ordering at the durable boundary.
 func acquireProviderFenceAccountLock(cityPath, identity string) (func(), error) {
-	return acquireProviderFenceScopedLock(cityPath, cityPath, strings.TrimSpace(identity), false)
+	return acquireProviderFenceScopedLock(context.Background(), cityPath, cityPath, strings.TrimSpace(identity), false)
 }
 
-func acquireProviderFenceScopedLock(scope, cityPath, identity string, legacyExclusive bool) (func(), error) {
+func acquireProviderFenceScopedLock(ctx context.Context, scope, cityPath, identity string, legacyExclusive bool) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if identity == "" {
 		return func() {}, nil
 	}
-	providerFenceProcessLocks.Lock()
-	set := providerFenceProcessLocks.byScope[scope]
-	if set == nil {
-		set = &providerFenceProcessLockSet{accounts: make(map[string]*sync.Mutex)}
-		providerFenceProcessLocks.byScope[scope] = set
-	}
-	providerFenceProcessLocks.Unlock()
+	loaded, _ := providerFenceProcessLocks.LoadOrStore(scope, &providerFenceProcessLockSet{
+		global: semaphore.NewWeighted(providerFenceGlobalLockWeight),
+	})
+	set := loaded.(*providerFenceProcessLockSet)
 
-	var releaseProcess func()
+	globalWeight := int64(1)
 	if legacyExclusive {
-		set.global.Lock()
-		releaseProcess = set.global.Unlock
-	} else {
-		set.global.RLock()
-		set.mu.Lock()
-		account := set.accounts[identity]
-		if account == nil {
-			account = &sync.Mutex{}
-			set.accounts[identity] = account
+		globalWeight = providerFenceGlobalLockWeight
+	}
+	if err := acquireProviderFenceSemaphore(ctx, set.global, globalWeight); err != nil {
+		return nil, err
+	}
+	releaseProcess := func() { set.global.Release(globalWeight) }
+	if !legacyExclusive {
+		loaded, _ := set.accounts.LoadOrStore(identity, semaphore.NewWeighted(1))
+		account := loaded.(*semaphore.Weighted)
+		if err := acquireProviderFenceSemaphore(ctx, account, 1); err != nil {
+			releaseProcess()
+			return nil, err
 		}
-		set.mu.Unlock()
-		account.Lock()
 		releaseProcess = func() {
-			account.Unlock()
-			set.global.RUnlock()
+			account.Release(1)
+			set.global.Release(globalWeight)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		releaseProcess()
+		return nil, err
 	}
 
 	if strings.TrimSpace(cityPath) == "" {
@@ -97,7 +137,7 @@ func acquireProviderFenceScopedLock(scope, cityPath, identity string, legacyExcl
 		releaseProcess()
 		return nil, fmt.Errorf("preparing provider fence lock directory: %w", err)
 	}
-	globalUnlock, err := acquireProviderFenceFileLock(filepath.Join(lockDir, "global.lock"), legacyExclusive)
+	globalUnlock, err := acquireProviderFenceFileLock(ctx, filepath.Join(lockDir, "global.lock"), legacyExclusive)
 	if err != nil {
 		releaseProcess()
 		return nil, err
@@ -110,7 +150,7 @@ func acquireProviderFenceScopedLock(scope, cityPath, identity string, legacyExcl
 	}
 	digest := sha256.Sum256([]byte(identity))
 	accountPath := filepath.Join(lockDir, "account-"+hex.EncodeToString(digest[:])+".lock")
-	accountUnlock, err := acquireProviderFenceFileLock(accountPath, true)
+	accountUnlock, err := acquireProviderFenceFileLock(ctx, accountPath, true)
 	if err != nil {
 		globalUnlock()
 		releaseProcess()
@@ -121,4 +161,32 @@ func acquireProviderFenceScopedLock(scope, cityPath, identity string, legacyExcl
 		globalUnlock()
 		releaseProcess()
 	}, nil
+}
+
+func waitForProviderFenceFileLock(ctx context.Context, tryAcquire func() (bool, error)) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		acquired, err := tryAcquire()
+		if err != nil {
+			return err
+		}
+		if acquired {
+			return nil
+		}
+		notifyProviderFenceLockWait(ctx)
+		timer := time.NewTimer(providerFenceFileLockRetry)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }

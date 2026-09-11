@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -288,8 +289,14 @@ func (s *Store) AttestProviderFenceIdentityKeyDigest(digest string) error {
 // RecordProviderFence appends a durable fence record. It is deliberately
 // monotonic at read time: overlapping records may remain open until expiry, and
 // ActiveProviderFences selects the maximum deadline. That avoids an update race
-// where a slower observer could shorten a newer account quarantine.
+// where a slower observer could shorten a newer account quarantine. Fence
+// records are safety-critical durable observations and have no caller context,
+// so contention waits fail closed rather than dropping the quarantine.
 func (s *Store) RecordProviderFence(identity string, until, observedAt time.Time, reason string) error {
+	return s.recordProviderFence(context.Background(), identity, until, observedAt, reason)
+}
+
+func (s *Store) recordProviderFence(ctx context.Context, identity string, until, observedAt time.Time, reason string) error {
 	identity = strings.TrimSpace(identity)
 	if identity == "" {
 		return fmt.Errorf("provider fence identity is empty")
@@ -303,7 +310,7 @@ func (s *Store) RecordProviderFence(identity string, until, observedAt time.Time
 	if s == nil || s.store.Store == nil {
 		return fmt.Errorf("provider fence store is unavailable")
 	}
-	err := s.withProviderFenceRecord(identity, func() error {
+	err := s.withProviderFenceRecordContext(ctx, identity, func() error {
 		_, err := s.store.Create(beads.Bead{
 			Title:  "provider usage fence",
 			Status: "open",

@@ -3,13 +3,15 @@
 package session
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
 )
 
-func acquireProviderFenceFileLock(path string, exclusive bool) (func(), error) {
+func acquireProviderFenceFileLock(ctx context.Context, path string, exclusive bool) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("creating provider fence lock directory: %w", err)
 	}
@@ -21,9 +23,24 @@ func acquireProviderFenceFileLock(path string, exclusive bool) (func(), error) {
 	if exclusive {
 		mode = syscall.LOCK_EX
 	}
-	if err := syscall.Flock(int(file.Fd()), mode); err != nil {
+	if err := waitForProviderFenceFileLock(ctx, func() (bool, error) {
+		err := syscall.Flock(int(file.Fd()), mode|syscall.LOCK_NB)
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, syscall.EWOULDBLOCK), errors.Is(err, syscall.EAGAIN):
+			return false, nil
+		default:
+			return false, fmt.Errorf("acquiring provider fence lock: %w", err)
+		}
+	}); err != nil {
 		_ = file.Close()
-		return nil, fmt.Errorf("acquiring provider fence lock: %w", err)
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+		return nil, err
 	}
 	return func() {
 		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)

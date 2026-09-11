@@ -387,6 +387,9 @@ func (m *Manager) retryFreshStartAfterStaleKey(
 	if orphanErr := m.killExistingOrphans(ctx, id); orphanErr != nil {
 		return false, fmt.Errorf("pre-start orphan cleanup: %w", orphanErr)
 	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if err := m.sp.Start(ctx, sessName, cfg); err != nil {
 		return false, fmt.Errorf("fresh start after stale key: %w", err)
 	}
@@ -540,7 +543,7 @@ func (m *Manager) commitPendingContinuationReset(id string, b beads.Bead) (int, 
 }
 
 func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, sessName, resumeCommand string, hints runtime.Config) error {
-	return NewStoreForCity(beads.SessionStore{Store: m.store}, m.cityPath).withProviderFenceStart(hints.ProviderFenceIdentity, func() error {
+	return NewStoreForCity(beads.SessionStore{Store: m.store}, m.cityPath).withProviderFenceStart(ctx, hints.ProviderFenceIdentity, func() error {
 		return m.ensureRunningWithProviderFenceLock(ctx, id, b, sessName, resumeCommand, hints)
 	})
 }
@@ -621,6 +624,9 @@ func (m *Manager) ensureRunningWithProviderFenceLock(ctx context.Context, id str
 	if orphanErr := m.killExistingOrphans(ctx, id); orphanErr != nil {
 		return fmt.Errorf("pre-start orphan cleanup: %w", orphanErr)
 	}
+	if err := ctx.Err(); err != nil {
+		return failedStart(err)
+	}
 	if err := m.sp.Start(ctx, sessName, cfg); err != nil {
 		if errors.Is(err, runtime.ErrSessionDiedDuringStartup) {
 			retried, retryErr := m.retryFreshStartAfterStaleKey(ctx, id, &b, sessName, resumeCommand, cfg, unroute)
@@ -684,7 +690,7 @@ func (m *Manager) ensureRunningWithProviderFenceLock(ctx context.Context, id str
 }
 
 func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b beads.Bead, sessName, resumeCommand string, hints runtime.Config) error {
-	return NewStoreForCity(beads.SessionStore{Store: m.store}, m.cityPath).withProviderFenceStart(hints.ProviderFenceIdentity, func() error {
+	return NewStoreForCity(beads.SessionStore{Store: m.store}, m.cityPath).withProviderFenceStart(ctx, hints.ProviderFenceIdentity, func() error {
 		return m.ensureRunningRuntimeOnlyWithProviderFenceLock(ctx, id, b, sessName, resumeCommand, hints)
 	})
 }
@@ -758,6 +764,9 @@ func (m *Manager) ensureRunningRuntimeOnlyWithProviderFenceLock(ctx context.Cont
 	// inspecting the backend that may own the orphan.
 	if orphanErr := m.killExistingOrphans(ctx, id); orphanErr != nil {
 		return fmt.Errorf("pre-start orphan cleanup: %w", orphanErr)
+	}
+	if err := ctx.Err(); err != nil {
+		return failedStart(err)
 	}
 	if err := m.sp.Start(ctx, sessName, cfg); err != nil {
 		switch {
