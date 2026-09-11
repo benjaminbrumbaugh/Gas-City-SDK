@@ -305,7 +305,7 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 			activeRigs = append(activeRigs, rig)
 		}
 		var probeErr error
-		if !opts.SkipStorePreflight {
+		if !opts.SkipStorePreflight && doctorStorePreflightApplies(cityPath) {
 			probeErr = doctorBeadStorePreflight(cityPath, storeFactory)
 		}
 		if isBeadStoreUnreachable(probeErr) {

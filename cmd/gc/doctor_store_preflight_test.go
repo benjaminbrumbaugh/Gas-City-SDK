@@ -382,3 +382,42 @@ func TestBuildDoctorChecks_SkipStorePreflightSkipsProbe(t *testing.T) {
 		t.Fatalf("store checks omitted with SkipStorePreflight; names=%v", names)
 	}
 }
+
+func TestBuildDoctorChecks_SkipsStorePreflightForFileProvider(t *testing.T) {
+	cityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "demo"
+
+[beads]
+provider = "file"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GC_BEADS", "")
+	t.Setenv("GC_DOLT", "skip")
+
+	called := false
+	old := doctorBeadStorePreflight
+	doctorBeadStorePreflight = func(string, func(string) (beads.Store, error)) error {
+		called = true
+		return errors.New("connection refused")
+	}
+	t.Cleanup(func() { doctorBeadStorePreflight = old })
+
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "demo"},
+		Beads:     config.BeadsConfig{Provider: "file"},
+	}
+	names := doctorCheckNames(buildDoctorChecks(cityDir, cfg, nil, buildDoctorChecksOpts{
+		ControllerRunning:    true,
+		SkipCityDoltCheck:    true,
+		SkipManagedDoltCheck: true,
+		SkipRigDoltChecks:    true,
+	}))
+	if called {
+		t.Fatal("file-backed city ran the bd store preflight")
+	}
+	if doctorCheckIndex(names, "session-model") < 0 {
+		t.Fatalf("session-model check missing for file-backed city; names=%v", names)
+	}
+}

@@ -21,6 +21,14 @@ const (
 // City-scoped store probe before store-dependent checks (also used at gc start warmup). Tests override.
 var doctorBeadStorePreflight = defaultDoctorBeadStorePreflight
 
+// doctorStorePreflightApplies reports whether the city store uses the bd
+// contract that the probe exercises. Non-bd providers have no bd process or
+// Dolt endpoint for this probe to validate; their store checks must remain
+// eligible even when an unrelated bd command is slow or unavailable.
+func doctorStorePreflightApplies(cityPath string) bool {
+	return providerUsesBdStoreContract(rawBeadsProviderForScope(cityPath, cityPath))
+}
+
 func defaultDoctorBeadStorePreflight(cityPath string, _ func(string) (beads.Store, error)) error {
 	ctx, cancel := context.WithTimeout(context.Background(), doctorBeadStorePreflightTimeout)
 	defer cancel()
