@@ -98,6 +98,66 @@ func (f *controlledRefreshFetcher) getCalls() int {
 	return f.calls
 }
 
+type concurrentBlockingFetcher struct {
+	active    atomic.Int64
+	maxActive atomic.Int64
+	started   chan struct{}
+	release   chan struct{}
+}
+
+func (f *concurrentBlockingFetcher) FetchState(ctx context.Context) (runtimeStateSnapshot, error) {
+	active := f.active.Add(1)
+	defer f.active.Add(-1)
+	for {
+		maximum := f.maxActive.Load()
+		if active <= maximum || f.maxActive.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	select {
+	case f.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-f.release:
+		return runtimeStateSnapshot{Sessions: map[string]sessionRuntimeState{"agent-2": {Running: true}}}, nil
+	case <-ctx.Done():
+		return runtimeStateSnapshot{}, ctx.Err()
+	}
+}
+
+type blockingErrorFetcher struct {
+	started chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func (f *blockingErrorFetcher) FetchState(ctx context.Context) (runtimeStateSnapshot, error) {
+	close(f.started)
+	select {
+	case <-f.release:
+		return runtimeStateSnapshot{}, f.err
+	case <-ctx.Done():
+		return runtimeStateSnapshot{}, ctx.Err()
+	}
+}
+
+type cacheLockProbeWriter struct {
+	cache       *StateCache
+	logged      atomic.Bool
+	lockWasHeld atomic.Bool
+}
+
+func (w *cacheLockProbeWriter) Write(p []byte) (int, error) {
+	w.logged.Store(true)
+	if !w.cache.mu.TryLock() {
+		w.lockWasHeld.Store(true)
+	} else {
+		w.cache.mu.Unlock()
+	}
+	return len(p), nil
+}
+
 func TestStateCache_FreshCacheReturnsCorrectState(t *testing.T) {
 	f := &mockFetcher{
 		sessions: map[string]bool{"agent-1": true, "agent-2": true},
@@ -177,6 +237,122 @@ func TestStateCache_ConcurrentCallersCoalesceIntoOneFetch(t *testing.T) {
 	// singleflight should have coalesced all callers into exactly 1 fetch.
 	if got := f.getCalls(); got != 1 {
 		t.Errorf("expected 1 fetch call (singleflight), got %d", got)
+	}
+}
+
+func TestStateCache_DirtyReadersCoalesceWithinGeneration(t *testing.T) {
+	f := &concurrentBlockingFetcher{
+		started: make(chan struct{}, 32),
+		release: make(chan struct{}),
+	}
+	cache := NewStateCache(f, time.Hour)
+	cache.state = runtimeStateSnapshot{Sessions: map[string]sessionRuntimeState{"agent-1": {Running: true}}}
+	cache.fetchedAt = time.Now()
+	cache.Invalidate()
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = cache.IsRunning("agent-2")
+		}()
+	}
+	close(start)
+	<-f.started
+
+	overlapped := false
+	select {
+	case <-f.started:
+		overlapped = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(f.release)
+	wg.Wait()
+	if overlapped || f.maxActive.Load() != 1 {
+		t.Fatalf("maximum concurrent FetchState calls for one generation = %d, want 1", f.maxActive.Load())
+	}
+}
+
+func TestStateCache_DelayedDirtyGenerationReaderCannotRefetchRetiredGeneration(t *testing.T) {
+	f := &mockFetcher{sessions: map[string]bool{"agent-2": true}}
+	cache := NewStateCache(f, time.Hour)
+	cache.state = runtimeStateSnapshot{Sessions: map[string]sessionRuntimeState{"agent-1": {Running: true}}}
+	cache.fetchedAt = time.Now()
+	cache.Invalidate()
+
+	// Reader A snapshots dirty generation G, then pauses before entering
+	// singleflight. This ordering is the regression: B must fully complete and
+	// retire G before A is released, otherwise a max-concurrency assertion can
+	// miss A's second, sequential FetchState call.
+	snapshotted := make(chan uint64, 1)
+	releaseA := make(chan struct{})
+	doneA := make(chan struct{})
+	go func() {
+		cache.mu.RLock()
+		generation := cache.generation
+		dirty := cache.dirty
+		cache.mu.RUnlock()
+		if !dirty {
+			panic("reader A did not snapshot a dirty generation")
+		}
+		snapshotted <- generation
+		<-releaseA
+		cache.refresh(generation)
+		close(doneA)
+	}()
+
+	generation := <-snapshotted
+	cache.refresh(generation) // reader B completes G while A remains paused
+	close(releaseA)
+	<-doneA
+
+	if got := f.getCalls(); got != 1 {
+		t.Fatalf("FetchState calls for retired generation %d = %d, want exactly 1", generation, got)
+	}
+}
+
+func TestStateCache_NewerGenerationFetchDoesNotWaitForStaleGeneration(t *testing.T) {
+	f := &concurrentBlockingFetcher{
+		started: make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+	cache := NewStateCache(f, time.Hour)
+	cache.state = runtimeStateSnapshot{Sessions: map[string]sessionRuntimeState{"agent-1": {Running: true}}}
+	cache.fetchedAt = time.Now()
+	cache.Invalidate()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = cache.IsRunning("agent-2")
+	}()
+	<-f.started
+
+	cache.Invalidate()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = cache.IsRunning("agent-2")
+	}()
+	select {
+	case <-f.started:
+	case <-time.After(time.Second):
+		close(f.release)
+		wg.Wait()
+		t.Fatal("new generation waited for stale generation fetch")
+	}
+	close(f.release)
+	wg.Wait()
+
+	if f.maxActive.Load() != 2 {
+		t.Fatalf("maximum concurrent FetchState calls across generations = %d, want 2", f.maxActive.Load())
+	}
+	if !cache.IsRunning("agent-2") {
+		t.Fatal("new generation did not publish its refresh result")
 	}
 }
 
@@ -437,6 +613,153 @@ func TestStateCache_RefreshFailurePreservesLastKnownGood(t *testing.T) {
 	cache.mu.RUnlock()
 	if lastErr == nil {
 		t.Error("expected lastError to be set after refresh failure")
+	}
+}
+
+func TestStateCache_RefreshLoggingDoesNotHoldCacheLock(t *testing.T) {
+	oldOutput := log.Writer()
+	t.Cleanup(func() { log.SetOutput(oldOutput) })
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "success"},
+		{name: "failure", err: errors.New("boom")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GC_LOG_TMUX_CACHE", "true")
+			cache := NewStateCache(&mockFetcher{sessions: map[string]bool{"agent-1": true}, err: tc.err}, time.Hour)
+			probe := &cacheLockProbeWriter{cache: cache}
+			log.SetOutput(probe)
+			_ = cache.IsRunning("agent-1")
+			if !probe.logged.Load() {
+				t.Fatal("refresh did not exercise logging path")
+			}
+			if probe.lockWasHeld.Load() {
+				t.Fatal("refresh logged while holding StateCache.mu")
+			}
+		})
+	}
+}
+
+func TestStateCache_StaleErrorCompletionCannotMutateNewGeneration(t *testing.T) {
+	f := &blockingErrorFetcher{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		err:     errors.New("stale failure"),
+	}
+	cache := NewStateCache(f, 0)
+	cache.state = runtimeStateSnapshot{Sessions: map[string]sessionRuntimeState{"agent-1": {Running: true}}}
+	cache.fetchedAt = time.Now()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = cache.IsRunning("agent-1")
+	}()
+	<-f.started
+	cache.Invalidate()
+	close(f.release)
+	<-done
+
+	cache.mu.RLock()
+	defer cache.mu.RUnlock()
+	if cache.lastError != nil {
+		t.Fatalf("stale failure replaced lastError: %v", cache.lastError)
+	}
+	if !cache.dirty {
+		t.Fatal("stale failure cleared newer dirty generation")
+	}
+	if !cache.state.Sessions["agent-1"].Running {
+		t.Fatal("stale failure replaced newer cached state")
+	}
+}
+
+func TestStateCache_StaleNoServerCompletionCannotUndoEviction(t *testing.T) {
+	f := &blockingErrorFetcher{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		err:     ErrNoServer,
+	}
+	cache := NewStateCache(f, time.Hour)
+	cache.state = runtimeStateSnapshot{Sessions: map[string]sessionRuntimeState{
+		"agent-1":  {Running: true},
+		"survivor": {Running: true},
+	}}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = cache.IsRunning("agent-1")
+	}()
+	<-f.started
+	cache.EvictSession("agent-1")
+	close(f.release)
+	<-done
+
+	cache.mu.RLock()
+	defer cache.mu.RUnlock()
+	if _, ok := cache.state.Sessions["agent-1"]; ok {
+		t.Fatal("stale no-server completion restored evicted session")
+	}
+	if !cache.state.Sessions["survivor"].Running {
+		t.Fatal("stale no-server completion replaced newer state")
+	}
+	if !cache.dirty {
+		t.Fatal("stale no-server completion cleared newer dirty generation")
+	}
+	if !cache.fetchedAt.IsZero() {
+		t.Fatal("stale no-server completion updated fetchedAt")
+	}
+	if cache.lastError != nil {
+		t.Fatalf("stale no-server completion replaced lastError: %v", cache.lastError)
+	}
+}
+
+func TestStateCache_StaleSuccessfulEmptyCompletionCannotUndoEviction(t *testing.T) {
+	f := &controlledRefreshFetcher{
+		state:     runtimeStateSnapshot{Sessions: map[string]sessionRuntimeState{}},
+		blockCall: 1,
+		entered:   make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	cache := NewStateCache(f, 0)
+	originalFetchedAt := time.Now().Add(-time.Second)
+	originalError := errors.New("newer generation marker")
+	cache.state = runtimeStateSnapshot{Sessions: map[string]sessionRuntimeState{
+		"agent-1":  {Running: true},
+		"survivor": {Running: true},
+	}}
+	cache.fetchedAt = originalFetchedAt
+	cache.lastError = originalError
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = cache.IsRunning("agent-1")
+	}()
+	<-f.entered
+	cache.EvictSession("agent-1")
+	close(f.release)
+	<-done
+
+	cache.mu.RLock()
+	defer cache.mu.RUnlock()
+	if _, ok := cache.state.Sessions["agent-1"]; ok {
+		t.Fatal("stale successful empty completion restored evicted session")
+	}
+	if !cache.state.Sessions["survivor"].Running || len(cache.state.Sessions) != 1 {
+		t.Fatalf("stale successful empty completion replaced newer state: %+v", cache.state.Sessions)
+	}
+	if !cache.fetchedAt.Equal(originalFetchedAt) {
+		t.Fatalf("stale successful empty completion changed fetchedAt from %v to %v", originalFetchedAt, cache.fetchedAt)
+	}
+	if !errors.Is(cache.lastError, originalError) {
+		t.Fatalf("stale successful empty completion changed lastError from %v to %v", originalError, cache.lastError)
+	}
+	if !cache.dirty {
+		t.Fatal("stale successful empty completion cleared newer dirty generation")
 	}
 }
 
