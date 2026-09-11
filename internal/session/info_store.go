@@ -65,14 +65,25 @@ func InfoFromPersistedBead(b beads.Bead) Info {
 // composition and worker.sessionRecordViaManager). The reconciler
 // already routes its writes through this type.
 type Store struct {
-	store beads.SessionStore
+	store     beads.SessionStore
+	cityPath  string
+	lockScope string
 }
 
 // NewStore wraps a strongly-typed session-class store as the session-domain
 // front door. The wrapper holds the typed beads.SessionStore by value; the
 // embedded .Store is used for all bead access internally.
 func NewStore(store beads.SessionStore) *Store {
-	return &Store{store: store}
+	return &Store{store: store, lockScope: fmt.Sprintf("store:%p", store.Store)}
+}
+
+// NewStoreForCity binds store coordination to a durable city scope.
+func NewStoreForCity(store beads.SessionStore, cityPath string) *Store {
+	lockScope := cityPath
+	if lockScope == "" {
+		lockScope = fmt.Sprintf("store:%p", store.Store)
+	}
+	return &Store{store: store, cityPath: cityPath, lockScope: lockScope}
 }
 
 // Get returns the persisted session.Info for the given id. It returns

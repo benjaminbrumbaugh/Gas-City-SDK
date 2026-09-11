@@ -837,7 +837,17 @@ func (m *Manager) CreateSession(ctx context.Context, spec CreateOptions) (Info, 
 	if spec.BeadOnly {
 		return m.createBeadOnly(spec)
 	}
-	return m.createStarted(ctx, spec)
+	identity := strings.TrimSpace(spec.Hints.ProviderFenceIdentity)
+	if identity == "" {
+		identity = strings.TrimSpace(spec.ExtraMeta["launch_provider_fence_identity"])
+	}
+	var info Info
+	err := NewStoreForCity(beads.SessionStore{Store: m.store}, m.cityPath).withProviderFenceStart(identity, func() error {
+		var err error
+		info, err = m.createStarted(ctx, spec)
+		return err
+	})
+	return info, err
 }
 
 func (m *Manager) createStarted(ctx context.Context, spec CreateOptions) (Info, error) {
@@ -2013,7 +2023,7 @@ func (m *Manager) EnrichInfos(infos []Info) []Info {
 // persisted read half of the read model — pair it with EnrichInfo for the live
 // overlay (the worker catalog's Get composes exactly that).
 func (m *Manager) PersistedStore() *Store {
-	return NewStore(beads.SessionStore{Store: m.store})
+	return NewStoreForCity(beads.SessionStore{Store: m.store}, m.cityPath)
 }
 
 // ListFromInfos filters a pre-loaded persisted Info feed by state and template

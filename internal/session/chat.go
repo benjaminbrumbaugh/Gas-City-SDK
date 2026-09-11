@@ -2,15 +2,18 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/pidutil"
 	"github.com/gastownhall/gascity/internal/promptsafe"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/sessionlog"
@@ -37,6 +40,24 @@ const (
 	providerFenceLaunchClaimMetadataKey = "launch_provider_fence_claim"
 	providerFenceLaunchClaimTTL         = 15 * time.Minute
 )
+
+type providerFenceLaunchClaim struct {
+	Version    int       `json:"version"`
+	ClaimedAt  time.Time `json:"claimed_at"`
+	OwnerPID   int       `json:"owner_pid"`
+	OwnerStart string    `json:"owner_start"`
+	Token      string    `json:"token"`
+}
+
+var providerFenceActiveLaunchClaims sync.Map
+
+func encodeProviderFenceLaunchClaim(claim providerFenceLaunchClaim) (string, error) {
+	if claim.Version != 1 || claim.ClaimedAt.IsZero() || claim.OwnerPID <= 0 || claim.OwnerStart == "" || claim.Token == "" {
+		return "", errors.New("provider account launch ownership is incomplete")
+	}
+	raw, err := json.Marshal(claim)
+	return string(raw), err
+}
 
 // ErrStateSync reports that the runtime reached the requested lifecycle
 // boundary but persisting the corresponding bead metadata failed.
@@ -519,6 +540,12 @@ func (m *Manager) commitPendingContinuationReset(id string, b beads.Bead) (int, 
 }
 
 func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, sessName, resumeCommand string, hints runtime.Config) error {
+	return NewStoreForCity(beads.SessionStore{Store: m.store}, m.cityPath).withProviderFenceStart(hints.ProviderFenceIdentity, func() error {
+		return m.ensureRunningWithProviderFenceLock(ctx, id, b, sessName, resumeCommand, hints)
+	})
+}
+
+func (m *Manager) ensureRunningWithProviderFenceLock(ctx context.Context, id string, b beads.Bead, sessName, resumeCommand string, hints runtime.Config) error {
 	transport, transportVerified := m.transportForBead(b, sessName)
 	unroute := m.routeACPIfNeeded(b.Metadata["provider"], transport, sessName)
 	if strings.TrimSpace(hints.ProviderFenceIdentity) == "" && State(b.Metadata["state"]) != StateSuspended && m.sp.IsRunning(sessName) {
@@ -657,9 +684,15 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 }
 
 func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b beads.Bead, sessName, resumeCommand string, hints runtime.Config) error {
+	return NewStoreForCity(beads.SessionStore{Store: m.store}, m.cityPath).withProviderFenceStart(hints.ProviderFenceIdentity, func() error {
+		return m.ensureRunningRuntimeOnlyWithProviderFenceLock(ctx, id, b, sessName, resumeCommand, hints)
+	})
+}
+
+func (m *Manager) ensureRunningRuntimeOnlyWithProviderFenceLock(ctx context.Context, id string, b beads.Bead, sessName, resumeCommand string, hints runtime.Config) error {
 	transport, _ := m.transportForBead(b, sessName)
 	unroute := m.routeACPIfNeeded(b.Metadata["provider"], transport, sessName)
-	if m.sp.IsRunning(sessName) {
+	if strings.TrimSpace(hints.ProviderFenceIdentity) == "" && m.sp.IsRunning(sessName) {
 		return nil
 	}
 	if resumeCommand == "" {
@@ -756,6 +789,37 @@ func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b bea
 				return failedStart(err)
 			}
 		}
+	}
+	if strings.TrimSpace(hints.ProviderFenceIdentity) != "" {
+		if err := m.confirmProviderFenceRuntimeAttribution(id, &b); err != nil {
+			if started {
+				if stopErr := m.stopRuntimeIfDetachedAndOwned(sessName, instanceToken); stopErr != nil {
+					return errors.Join(err, fmt.Errorf("conditionally stopping started runtime after attribution failure: %w", stopErr))
+				}
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manager) confirmProviderFenceRuntimeAttribution(id string, b *beads.Bead) error {
+	if b == nil {
+		return nil
+	}
+	identity := strings.TrimSpace(b.Metadata["launch_provider_fence_identity"])
+	if identity == "" {
+		return nil
+	}
+	batch := map[string]string{
+		"started_provider_fence_identity": identity,
+		"launch_provider_fence_identity":  "",
+	}
+	if err := m.store.SetMetadataBatch(id, batch); err != nil {
+		return fmt.Errorf("%w: storing provider account runtime attribution: %w", ErrStateSync, err)
+	}
+	for key, value := range batch {
+		b.Metadata[key] = value
 	}
 	return nil
 }
@@ -883,23 +947,47 @@ func (m *Manager) acquireProviderFenceLaunchClaim(id string, b *beads.Bead) (str
 		return "", fmt.Errorf("claiming provider account launch ownership: %w", beads.ErrConditionalWriteUnsupported)
 	}
 	now := m.now().UTC()
-	claim := now.Format(time.RFC3339Nano) + "/" + NewInstanceToken()
+	ownerStart, err := pidutil.StartTime(os.Getpid())
+	if err != nil {
+		return "", fmt.Errorf("capturing provider account launch owner identity: %w", err)
+	}
+	newOwner := providerFenceLaunchClaim{
+		Version: 1, ClaimedAt: now, OwnerPID: os.Getpid(), OwnerStart: ownerStart, Token: NewInstanceToken(),
+	}
+	claim, err := encodeProviderFenceLaunchClaim(newOwner)
+	if err != nil {
+		return "", fmt.Errorf("encoding provider account launch ownership: %w", err)
+	}
 	current := strings.TrimSpace(b.Metadata[providerFenceLaunchClaimMetadataKey])
 	if current != "" {
-		stamp, _, ok := strings.Cut(current, "/")
-		claimedAt, parseErr := time.Parse(time.RFC3339Nano, stamp)
-		if !ok || parseErr != nil {
-			return "", errors.New("provider account launch ownership metadata is corrupt")
-		}
-		if now.Sub(claimedAt) < providerFenceLaunchClaimTTL {
-			return "", errors.New("provider account launch is already owned by another caller")
+		var owner providerFenceLaunchClaim
+		if json.Unmarshal([]byte(current), &owner) == nil && owner.Version == 1 && !owner.ClaimedAt.IsZero() && owner.OwnerPID > 0 && owner.OwnerStart != "" && owner.Token != "" {
+			ownerLive := pidutil.AliveWithStartTime(owner.OwnerPID, owner.OwnerStart)
+			_, activeHere := providerFenceActiveLaunchClaims.Load(owner.Token)
+			if ownerLive && (owner.OwnerPID != os.Getpid() || owner.OwnerStart != ownerStart || activeHere) {
+				return "", errors.New("provider account launch is already owned by another caller")
+			}
+		} else {
+			// Legacy timestamp/token claims have no process identity. Preserve their
+			// established bounded lease and fail closed until it expires.
+			stamp, _, ok := strings.Cut(current, "/")
+			claimedAt, parseErr := time.Parse(time.RFC3339Nano, stamp)
+			if !ok || parseErr != nil {
+				return "", errors.New("provider account launch ownership metadata is corrupt")
+			}
+			if now.Sub(claimedAt) < providerFenceLaunchClaimTTL {
+				return "", errors.New("provider account launch is already owned by another caller")
+			}
 		}
 	}
+	providerFenceActiveLaunchClaims.Store(newOwner.Token, struct{}{})
 	swapped, err := writer.CompareAndSetMetadataKey(id, providerFenceLaunchClaimMetadataKey, current, claim)
 	if err != nil {
+		providerFenceActiveLaunchClaims.Delete(newOwner.Token)
 		return "", fmt.Errorf("claiming provider account launch ownership: %w", err)
 	}
 	if !swapped {
+		providerFenceActiveLaunchClaims.Delete(newOwner.Token)
 		return "", errors.New("provider account launch ownership lost metadata precondition")
 	}
 	if b.Metadata == nil {
@@ -913,6 +1001,10 @@ func (m *Manager) releaseProviderFenceLaunchClaim(id, claim string) {
 	claim = strings.TrimSpace(claim)
 	if claim == "" {
 		return
+	}
+	var owner providerFenceLaunchClaim
+	if json.Unmarshal([]byte(claim), &owner) == nil {
+		defer providerFenceActiveLaunchClaims.Delete(owner.Token)
 	}
 	writer, ok := beads.MetadataCASWriterFor(m.store)
 	if !ok {

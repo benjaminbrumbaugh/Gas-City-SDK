@@ -1398,7 +1398,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 	// drain-ack stop-pending). The raw store stays for the work/by-id/worker
 	// residual. Same underlying store, so every session bead write is
 	// byte-identical.
-	sessFront := sessionpkg.NewStore(sessStore)
+	sessFront := sessionpkg.NewStoreForCity(sessStore, cityPath)
 	// Every tick counts as a cycle, including ticks aborted by context
 	// cancellation after real work (e.g. starts) already executed — the
 	// counter means "cycles", not "cycles that ran to completion". started

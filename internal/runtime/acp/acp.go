@@ -3,6 +3,7 @@ package acp
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/pidutil"
 	"github.com/gastownhall/gascity/internal/runtime"
 )
 
@@ -64,7 +66,8 @@ type Provider struct {
 	conns         map[string]*sessionConn // in-process tracking
 	workDirs      map[string]string       // session name → workDir (for CopyTo)
 	cfg           Config
-	activityWrite func(path string, data []byte) error // test seam
+	activityWrite func(path string, data []byte) error                    // test seam
+	socketProbe   func(name, command string, timeout time.Duration) error // test seam
 }
 
 // Compile-time check.
@@ -249,7 +252,8 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	// with the control socket, this closes the cross-process startup gap so an
 	// absence proof cannot overlook a same-name ACP process between cmd.Start and
 	// listener creation.
-	if err := p.reserveSessionName(name); err != nil {
+	reservationToken, err := p.reserveSessionName(name)
+	if err != nil {
 		_ = stdinPipe.Close()
 		_ = stdoutPipe.Close()
 		stderrW.Close() //nolint:errcheck
@@ -257,27 +261,48 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		clearSentinel()
 		return err
 	}
+	if err := p.inheritSessionNameLease(cmd, name, reservationToken); err != nil {
+		_ = stdinPipe.Close()
+		_ = stdoutPipe.Close()
+		stderrW.Close() //nolint:errcheck
+		stderrR.Close() //nolint:errcheck
+		p.releaseSessionName(name, reservationToken)
+		clearSentinel()
+		return fmt.Errorf("inheriting ACP session %q reservation lease: %w", name, err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		_ = stdinPipe.Close()
 		_ = stdoutPipe.Close()
 		stderrW.Close() //nolint:errcheck
 		stderrR.Close() //nolint:errcheck
-		p.releaseSessionName(name)
+		p.releaseSessionName(name, reservationToken)
 		clearSentinel()
 		return fmt.Errorf("starting session %q: %w", name, err)
 	}
+	if err := p.transferSessionNameOwner(name, reservationToken, cmd.Process.Pid); err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		_ = stdinPipe.Close()
+		_ = stdoutPipe.Close()
+		stderrW.Close() //nolint:errcheck
+		stderrR.Close() //nolint:errcheck
+		p.releaseSessionName(name, reservationToken)
+		clearSentinel()
+		return fmt.Errorf("transferring ACP session %q reservation to child: %w", name, err)
+	}
+	p.closeParentSessionNameLease(name, reservationToken)
 	// Close the write end — child inherits it; we only read.
 	stderrW.Close() //nolint:errcheck
 
 	// Create control socket for cross-process discovery.
 	processDone := make(chan struct{})
-	lis, err := p.startControlSocket(name, cmd, processDone)
+	lis, err := p.startControlSocket(name, reservationToken, cmd, processDone)
 	if err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = cmd.Wait()
 		_ = stderrR.Close()
-		p.releaseSessionName(name)
+		p.releaseSessionName(name, reservationToken)
 		clearSentinel()
 		return fmt.Errorf("creating control socket for %q: %w", name, err)
 	}
@@ -308,9 +333,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		<-sc.readDone
 		sc.drainPending()
 		sc.closeActivityPublisher()
-		lis.Close()                 //nolint:errcheck
-		os.Remove(p.sockPath(name)) //nolint:errcheck
-		_ = os.Remove(p.sockNamePath(name))
+		p.cleanupSessionGeneration(name, reservationToken, lis)
 		close(processDone)
 	}()
 
@@ -571,10 +594,21 @@ func (p *Provider) SessionDefinitelyAbsent(name string) (bool, error) {
 	if reserved {
 		return false, nil
 	}
-	if err := p.sendSocketCommand(name, "ping", 500*time.Millisecond); err == nil {
+	probe := p.sendSocketCommand
+	if p.socketProbe != nil {
+		probe = p.socketProbe
+	}
+	if err := probe(name, "ping", 500*time.Millisecond); err == nil {
 		return false, nil
 	} else if !isUnavailableSocketError(err) {
 		return false, fmt.Errorf("probing ACP session %q: %w", name, err)
+	}
+	reserved, err = p.sessionNameReserved(name)
+	if err != nil {
+		return false, fmt.Errorf("rechecking ACP session reservation for %q: %w", name, err)
+	}
+	if reserved {
+		return false, nil
 	}
 	return true, nil
 }
@@ -923,49 +957,306 @@ func (p *Provider) sockNamePath(name string) string {
 	return filepath.Join(p.dir, p.sockKey(name)+".name")
 }
 
+type sessionNameReservation struct {
+	Version    int    `json:"version"`
+	Name       string `json:"name"`
+	OwnerPID   int    `json:"owner_pid"`
+	OwnerStart string `json:"owner_start"`
+	Token      string `json:"token"`
+	Lease      string `json:"lease"`
+}
+
+var (
+	sessionNameProcessLocks sync.Map
+	sessionNameLeaseFiles   sync.Map
+)
+
+func (p *Provider) validSessionNameReservation(name string, record sessionNameReservation) bool {
+	return record.Version == 2 && record.Name == name && record.OwnerPID > 0 && record.OwnerStart != "" && record.Token != "" &&
+		record.Lease == p.sockKey(name)+".lease-"+record.Token
+}
+
 func (p *Provider) sessionNameReserved(name string) (bool, error) {
-	_, err := os.Lstat(p.sockNamePath(name))
-	if err == nil {
-		return true, nil
+	if err := runtime.EnsurePrivateDir(p.dir); err != nil {
+		return false, err
 	}
+	var reserved bool
+	err := p.withSessionNameLock(name, func() error {
+		var err error
+		reserved, err = p.sessionNameReservedLocked(name)
+		return err
+	})
+	return reserved, err
+}
+
+// sessionNameReservedLocked reports whether a live, legacy, malformed, or
+// otherwise inconclusive reservation owns name. A structured reservation is
+// reclaimed only when both its inherited lease and PID/start identity prove
+// that its owner is gone.
+func (p *Provider) sessionNameReservedLocked(name string) (bool, error) {
+	path := p.sockNamePath(name)
+	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	return false, err
+	if err != nil {
+		return false, err
+	}
+	var record sessionNameReservation
+	if json.Unmarshal(raw, &record) != nil || !p.validSessionNameReservation(name, record) {
+		// Legacy and unparseable reservations have no safe ownership proof.
+		return true, nil
+	}
+	lease, err := os.OpenFile(filepath.Join(p.dir, record.Lease), os.O_RDWR, 0o600)
+	if err == nil {
+		lockErr := syscall.Flock(int(lease.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if errors.Is(lockErr, syscall.EWOULDBLOCK) || errors.Is(lockErr, syscall.EAGAIN) {
+			_ = lease.Close()
+			return true, nil
+		}
+		if lockErr != nil {
+			_ = lease.Close()
+			return false, lockErr
+		}
+		_ = syscall.Flock(int(lease.Fd()), syscall.LOCK_UN)
+		_ = lease.Close()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	currentStart, startErr := pidutil.StartTime(record.OwnerPID)
+	if startErr == nil {
+		if currentStart == record.OwnerStart {
+			return true, nil
+		}
+		return false, p.removeSessionNameReservationFiles(path, record)
+	}
+	if pidutil.Alive(record.OwnerPID) {
+		// The process exists but its identity could not be read. Never steal it.
+		return true, nil
+	}
+	return false, p.removeSessionNameReservationFiles(path, record)
 }
 
-func (p *Provider) reserveSessionName(name string) error {
+func (p *Provider) reserveSessionName(name string) (string, error) {
 	if err := runtime.EnsurePrivateDir(p.dir); err != nil {
-		return fmt.Errorf("preparing ACP session directory: %w", err)
+		return "", fmt.Errorf("preparing ACP session directory: %w", err)
 	}
-	path := p.sockNamePath(name)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	ownerStart, err := pidutil.StartTime(os.Getpid())
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
+		return "", fmt.Errorf("capturing ACP reservation owner identity: %w", err)
+	}
+	tokenBytes := make([]byte, 16)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", fmt.Errorf("generating ACP reservation owner token: %w", err)
+	}
+	token := hex.EncodeToString(tokenBytes)
+	leaseName := p.sockKey(name) + ".lease-" + token
+	leasePath := filepath.Join(p.dir, leaseName)
+	lease, err := os.OpenFile(leasePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("creating ACP reservation lease: %w", err)
+	}
+	if err := syscall.Flock(int(lease.Fd()), syscall.LOCK_EX); err != nil {
+		_ = lease.Close()
+		_ = os.Remove(leasePath)
+		return "", fmt.Errorf("locking ACP reservation lease: %w", err)
+	}
+	record := sessionNameReservation{Version: 2, Name: name, OwnerPID: os.Getpid(), OwnerStart: ownerStart, Token: token, Lease: leaseName}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		_ = lease.Close()
+		_ = os.Remove(leasePath)
+		return "", fmt.Errorf("encoding ACP session name reservation: %w", err)
+	}
+	err = p.withSessionNameLock(name, func() error {
+		reserved, err := p.sessionNameReservedLocked(name)
+		if err != nil {
+			return err
+		}
+		if reserved {
 			return fmt.Errorf("%w: session %q has an ACP name reservation", runtime.ErrSessionExists, name)
 		}
-		return fmt.Errorf("reserving ACP session name %q: %w", name, err)
+		return publishReservationNoReplace(p.sockNamePath(name), raw)
+	})
+	if err != nil {
+		_ = lease.Close()
+		_ = os.Remove(leasePath)
+		return "", fmt.Errorf("reserving ACP session name %q: %w", name, err)
 	}
-	if _, err := io.WriteString(f, name); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return fmt.Errorf("writing ACP session name reservation for %q: %w", name, err)
+	sessionNameLeaseFiles.Store(p.sessionNameLeaseKey(name, token), lease)
+	return token, nil
+}
+
+func (p *Provider) releaseSessionName(name, token string) {
+	p.closeParentSessionNameLease(name, token)
+	_ = p.withSessionNameLock(name, func() error {
+		raw, err := os.ReadFile(p.sockNamePath(name))
+		if err != nil {
+			return nil
+		}
+		var record sessionNameReservation
+		if json.Unmarshal(raw, &record) != nil || !p.validSessionNameReservation(name, record) || record.Token != token {
+			return nil
+		}
+		return p.removeSessionNameReservationFiles(p.sockNamePath(name), record)
+	})
+}
+
+func (p *Provider) transferSessionNameOwner(name, token string, ownerPID int) error {
+	ownerStart, err := pidutil.StartTime(ownerPID)
+	if err != nil {
+		return fmt.Errorf("capturing child process identity: %w", err)
 	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(path)
-		return fmt.Errorf("closing ACP session name reservation for %q: %w", name, err)
+	return p.withSessionNameLock(name, func() error {
+		path := p.sockNamePath(name)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var record sessionNameReservation
+		if err := json.Unmarshal(raw, &record); err != nil || !p.validSessionNameReservation(name, record) || record.Token != token {
+			return errors.New("ACP session reservation ownership changed before child transfer")
+		}
+		record.OwnerPID = ownerPID
+		record.OwnerStart = ownerStart
+		raw, err = json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		return replaceReservation(path, raw)
+	})
+}
+
+func (p *Provider) sessionNameLeaseKey(name, token string) string {
+	return p.sockNamePath(name) + ":" + token
+}
+
+func (p *Provider) inheritSessionNameLease(cmd *exec.Cmd, name, token string) error {
+	value, ok := sessionNameLeaseFiles.Load(p.sessionNameLeaseKey(name, token))
+	if !ok {
+		return errors.New("ACP reservation lease is unavailable")
+	}
+	cmd.ExtraFiles = append(cmd.ExtraFiles, value.(*os.File))
+	return nil
+}
+
+func (p *Provider) closeParentSessionNameLease(name, token string) {
+	value, ok := sessionNameLeaseFiles.LoadAndDelete(p.sessionNameLeaseKey(name, token))
+	if ok {
+		_ = value.(*os.File).Close()
+	}
+}
+
+func (p *Provider) removeSessionNameReservationFiles(path string, record sessionNameReservation) error {
+	if err := removeReservation(path); err != nil {
+		return err
+	}
+	if record.Lease != "" {
+		if err := os.Remove(filepath.Join(p.dir, record.Lease)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	return nil
 }
 
-func (p *Provider) releaseSessionName(name string) {
-	_ = os.Remove(p.sockNamePath(name))
+func (p *Provider) cleanupSessionGeneration(name, token string, lis net.Listener) {
+	_ = p.withSessionNameLock(name, func() error {
+		_ = lis.Close()
+		raw, err := os.ReadFile(p.sockNamePath(name))
+		if err != nil {
+			return nil
+		}
+		var record sessionNameReservation
+		if json.Unmarshal(raw, &record) != nil || !p.validSessionNameReservation(name, record) || record.Token != token {
+			return nil
+		}
+		if err := os.Remove(p.sockPath(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return p.removeSessionNameReservationFiles(p.sockNamePath(name), record)
+	})
+}
+
+func (p *Provider) withSessionNameLock(name string, fn func() error) error {
+	lockPath := p.sockNamePath(name) + ".lock"
+	processLock, _ := sessionNameProcessLocks.LoadOrStore(lockPath, &sync.Mutex{})
+	mu := processLock.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close() //nolint:errcheck
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	return fn()
+}
+
+func publishReservationNoReplace(path string, raw []byte) error {
+	tempPath, err := writeReservationTemp(path, raw)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tempPath) //nolint:errcheck
+	return os.Link(tempPath, path)
+}
+
+func replaceReservation(path string, raw []byte) error {
+	tempPath, err := writeReservationTemp(path, raw)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tempPath) //nolint:errcheck
+	return os.Rename(tempPath, path)
+}
+
+func writeReservationTemp(path string, raw []byte) (string, error) {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".reservation-*")
+	if err != nil {
+		return "", err
+	}
+	tempPath := temp.Name()
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+	if _, err := temp.Write(raw); err != nil {
+		_ = temp.Close()
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+	return tempPath, nil
+}
+
+func removeReservation(path string) error {
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 func (p *Provider) socketNameForEntry(key string) string {
 	data, err := os.ReadFile(filepath.Join(p.dir, key+".name"))
 	if err != nil {
 		return key
+	}
+	var record sessionNameReservation
+	if json.Unmarshal(data, &record) == nil && p.validSessionNameReservation(record.Name, record) {
+		return record.Name
 	}
 	name := strings.TrimSpace(string(data))
 	if name == "" {
@@ -975,10 +1266,30 @@ func (p *Provider) socketNameForEntry(key string) string {
 }
 
 // startControlSocket creates a unix socket for cross-process commands.
-func (p *Provider) startControlSocket(name string, cmd *exec.Cmd, done <-chan struct{}) (net.Listener, error) {
-	sp := p.sockPath(name)
-	os.Remove(sp) //nolint:errcheck
-	lis, err := net.Listen("unix", sp)
+func (p *Provider) startControlSocket(name, token string, cmd *exec.Cmd, done <-chan struct{}) (net.Listener, error) {
+	var lis net.Listener
+	err := p.withSessionNameLock(name, func() error {
+		raw, err := os.ReadFile(p.sockNamePath(name))
+		if err != nil {
+			return err
+		}
+		var record sessionNameReservation
+		if json.Unmarshal(raw, &record) != nil || !p.validSessionNameReservation(name, record) || record.Token != token {
+			return fmt.Errorf("ACP session %q reservation ownership changed before socket publication", name)
+		}
+		sp := p.sockPath(name)
+		if err := os.Remove(sp); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		lis, err = net.Listen("unix", sp)
+		if err != nil {
+			return err
+		}
+		if unixListener, ok := lis.(*net.UnixListener); ok {
+			unixListener.SetUnlinkOnClose(false)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}

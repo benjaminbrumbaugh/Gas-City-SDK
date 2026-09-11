@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -46,10 +47,11 @@ func TestSessionDefinitelyAbsentUsesExclusiveStartupReservation(t *testing.T) {
 	if err != nil || !absent {
 		t.Fatalf("initial absence = %v, %v; want true, nil", absent, err)
 	}
-	if err := p.reserveSessionName(name); err != nil {
+	token, err := p.reserveSessionName(name)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { p.releaseSessionName(name) })
+	t.Cleanup(func() { p.releaseSessionName(name, token) })
 	absent, err = p.SessionDefinitelyAbsent(name)
 	if err != nil {
 		t.Fatalf("reserved absence observation: %v", err)
@@ -58,23 +60,262 @@ func TestSessionDefinitelyAbsentUsesExclusiveStartupReservation(t *testing.T) {
 		t.Fatal("startup reservation was certified absent")
 	}
 
-	if err := p.reserveSessionName(name); !errors.Is(err, runtime.ErrSessionExists) {
+	if _, err := p.reserveSessionName(name); !errors.Is(err, runtime.ErrSessionExists) {
 		t.Fatalf("duplicate reservation error = %v, want ErrSessionExists", err)
 	}
-	p.releaseSessionName(name)
+	p.releaseSessionName(name, token)
 	absent, err = p.SessionDefinitelyAbsent(name)
 	if err != nil || !absent {
 		t.Fatalf("released absence = %v, %v; want true, nil", absent, err)
 	}
 }
 
+func TestSessionDefinitelyAbsentRechecksReservationAfterUnavailableProbe(t *testing.T) {
+	p := newTestProvider(t)
+	name := testName()
+	p.socketProbe = func(gotName, command string, _ time.Duration) error {
+		if gotName != name || command != "ping" {
+			t.Fatalf("socket probe = (%q, %q), want (%q, ping)", gotName, command, name)
+		}
+		if err := os.WriteFile(p.sockNamePath(name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return os.ErrNotExist
+	}
+
+	absent, err := p.SessionDefinitelyAbsent(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if absent {
+		t.Fatal("reservation published during the socket probe was certified absent")
+	}
+}
+
+func TestReserveSessionNamePersistsCrashSafeOwnership(t *testing.T) {
+	p := newTestProvider(t)
+	name := testName()
+	token, err := p.reserveSessionName(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.releaseSessionName(name, token) })
+
+	raw, err := os.ReadFile(p.sockNamePath(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record struct {
+		Version    int    `json:"version"`
+		Name       string `json:"name"`
+		OwnerPID   int    `json:"owner_pid"`
+		OwnerStart string `json:"owner_start"`
+		Token      string `json:"token"`
+		Lease      string `json:"lease"`
+	}
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatalf("reservation is not structured ownership evidence: %v", err)
+	}
+	if record.Version != 2 || record.Name != name || record.OwnerPID != os.Getpid() || record.OwnerStart == "" || record.Token == "" || record.Lease == "" {
+		t.Fatalf("reservation = %#v, want complete owner identity and token", record)
+	}
+}
+
+func TestReserveSessionNameReclaimsDefinitelyDeadOwner(t *testing.T) {
+	p := newTestProvider(t)
+	name := testName()
+	deadOwner := map[string]any{
+		"version":     2,
+		"name":        name,
+		"owner_pid":   2147483647,
+		"owner_start": "definitely-not-live",
+		"token":       "dead-owner-token",
+		"lease":       p.sockKey(name) + ".lease-dead-owner-token",
+	}
+	raw, err := json.Marshal(deadOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.sockNamePath(name), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	token, err := p.reserveSessionName(name)
+	if err != nil {
+		t.Fatalf("reclaiming definitely dead owner: %v", err)
+	}
+	t.Cleanup(func() { p.releaseSessionName(name, token) })
+}
+
+func TestReleaseSessionNameRequiresOwnerToken(t *testing.T) {
+	p := newTestProvider(t)
+	name := testName()
+	token, err := p.reserveSessionName(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.releaseSessionName(name, token) })
+
+	p.releaseSessionName(name, "not-the-owner-token")
+	reserved, err := p.sessionNameReserved(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reserved {
+		t.Fatal("non-owner release removed the live reservation")
+	}
+}
+
+func TestTransferSessionNameOwnerProtectsLiveChildAfterLauncherCrash(t *testing.T) {
+	p := newTestProvider(t)
+	name := testName()
+	token, err := p.reserveSessionName(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.releaseSessionName(name, token) })
+
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	if err := p.transferSessionNameOwner(name, token, cmd.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(p.sockNamePath(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record sessionNameReservation
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.OwnerPID != cmd.Process.Pid || record.OwnerStart == "" || record.Token != token {
+		t.Fatalf("transferred reservation = %#v, want live child ownership with original token", record)
+	}
+	reserved, err := p.sessionNameReserved(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reserved {
+		t.Fatal("live child reservation was reclaimed after launcher ownership transfer")
+	}
+}
+
+func TestReservationLeaseClosesPreTransferLauncherCrashWindow(t *testing.T) {
+	p := newTestProvider(t)
+	name := testName()
+	token, err := p.reserveSessionName(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.releaseSessionName(name, token) })
+
+	cmd := exec.Command("sleep", "30")
+	if err := p.inheritSessionNameLease(cmd, name, token); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	p.closeParentSessionNameLease(name, token)
+	if err := p.withSessionNameLock(name, func() error {
+		raw, err := os.ReadFile(p.sockNamePath(name))
+		if err != nil {
+			return err
+		}
+		var record sessionNameReservation
+		if err := json.Unmarshal(raw, &record); err != nil {
+			return err
+		}
+		record.OwnerPID = 2147483647
+		record.OwnerStart = "dead-launcher"
+		raw, err = json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		return replaceReservation(p.sockNamePath(name), raw)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := p.sessionNameReserved(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reserved {
+		t.Fatal("reservation was reclaimed while the pre-transfer child held its inherited lease")
+	}
+}
+
+func TestGenerationCleanupDoesNotUnlinkSuccessorSocket(t *testing.T) {
+	p := newTestProvider(t)
+	name := testName()
+	oldToken, err := p.reserveSessionName(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.releaseSessionName(name, oldToken)
+	oldListener, err := net.Listen("unix", p.sockPath(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unixListener, ok := oldListener.(*net.UnixListener); ok {
+		unixListener.SetUnlinkOnClose(false)
+	}
+	if err := os.Remove(p.sockPath(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	newListener, err := net.Listen("unix", p.sockPath(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newListener.Close() //nolint:errcheck
+	if err := p.withSessionNameLock(name, func() error {
+		raw, err := os.ReadFile(p.sockNamePath(name))
+		if err != nil {
+			return err
+		}
+		var record sessionNameReservation
+		if err := json.Unmarshal(raw, &record); err != nil {
+			return err
+		}
+		record.Token = "successor-token"
+		record.Lease = p.sockKey(name) + ".lease-successor-token"
+		raw, err = json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		return replaceReservation(p.sockNamePath(name), raw)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := p.startControlSocket(name, oldToken, &exec.Cmd{}, make(chan struct{})); err == nil {
+		t.Fatal("superseded generation replaced the successor control socket")
+	}
+	p.cleanupSessionGeneration(name, oldToken, oldListener)
+	if _, err := os.Lstat(p.sockPath(name)); err != nil {
+		t.Fatalf("successor socket was unlinked by prior generation cleanup: %v", err)
+	}
+}
+
 func TestStopFailsClosedOnStartupReservationWithoutSocket(t *testing.T) {
 	p := newTestProvider(t)
 	name := testName()
-	if err := p.reserveSessionName(name); err != nil {
+	token, err := p.reserveSessionName(name)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { p.releaseSessionName(name) })
+	t.Cleanup(func() { p.releaseSessionName(name, token) })
 
 	if err := p.Stop(name); err == nil {
 		t.Fatal("Stop reported success for a cross-process startup reservation without a control socket")

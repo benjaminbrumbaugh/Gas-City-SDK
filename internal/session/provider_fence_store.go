@@ -303,18 +303,21 @@ func (s *Store) RecordProviderFence(identity string, until, observedAt time.Time
 	if s == nil || s.store.Store == nil {
 		return fmt.Errorf("provider fence store is unavailable")
 	}
-	_, err := s.store.Create(beads.Bead{
-		Title:  "provider usage fence",
-		Status: "open",
-		Type:   WaitBeadType,
-		Labels: []string{ProviderFenceBeadLabel},
-		Metadata: map[string]string{
-			"kind":                    providerFenceBeadKind,
-			"provider_fence_identity": identity,
-			"fenced_until":            until.UTC().Format(time.RFC3339),
-			"observed_at":             observedAt.UTC().Format(time.RFC3339),
-			"reason":                  strings.TrimSpace(reason),
-		},
+	err := s.withProviderFenceRecord(identity, func() error {
+		_, err := s.store.Create(beads.Bead{
+			Title:  "provider usage fence",
+			Status: "open",
+			Type:   WaitBeadType,
+			Labels: []string{ProviderFenceBeadLabel},
+			Metadata: map[string]string{
+				"kind":                    providerFenceBeadKind,
+				"provider_fence_identity": identity,
+				"fenced_until":            until.UTC().Format(time.RFC3339),
+				"observed_at":             observedAt.UTC().Format(time.RFC3339),
+				"reason":                  strings.TrimSpace(reason),
+			},
+		})
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("recording provider fence %q: %w", identity, err)
