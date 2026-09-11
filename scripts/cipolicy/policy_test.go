@@ -46,7 +46,7 @@ func TestMakeTestCIPolicyRunsStaticScopeContracts(t *testing.T) {
 		t.Fatalf("test-ci-policy recipe must run the focused static-scope contracts with the exact hermetic command:\n%s", want)
 	}
 
-	staticContractPath := filepath.Join("..", "pr_static_scope_contract_ci_policy_test.go")
+	staticContractPath := filepath.Join("..", "pr_static_scope_contract_test.go")
 	staticContract, err := os.ReadFile(staticContractPath)
 	if err != nil {
 		t.Fatalf("read %s: %v", staticContractPath, err)
