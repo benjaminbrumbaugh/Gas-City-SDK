@@ -116,6 +116,21 @@ func (s *AdmissionService) Admit(ctx context.Context, input AdmitInput) (Admissi
 	if err != nil {
 		return admission, err
 	}
+	// An event ID identifies one immutable lifecycle event even when a replay's
+	// authorization evidence selects a different recipient set. Check every
+	// existing record before considering new recipients; checking only matching
+	// idempotency keys would allow a changed event or target fence to accumulate
+	// beside records created for the original admission.
+	existingRecords := make([]DeliveryRecord, 0, len(existing))
+	for _, prior := range existing {
+		existingRecords = append(existingRecords, prior)
+	}
+	sortDeliveryRecords(existingRecords)
+	for _, prior := range existingRecords {
+		if err := checkReplay(prior, normalized); err != nil {
+			return admission, err
+		}
+	}
 	// Check every recipient's existing record against this admission before
 	// creating any new one, so a stale fence on the last recipient cannot leave
 	// behind a freshly written record for a fence that was just rejected.
