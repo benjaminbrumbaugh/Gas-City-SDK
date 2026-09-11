@@ -272,6 +272,19 @@ func TestPreCommitRegeneratesDashboardClientOnSpecChange(t *testing.T) {
 	}
 }
 
+func TestPreCommitAllowsParallelLintRunners(t *testing.T) {
+	repoRoot := repoRoot(t)
+	script, err := os.ReadFile(filepath.Join(repoRoot, ".githooks", "pre-commit"))
+	if err != nil {
+		t.Fatalf("read pre-commit hook: %v", err)
+	}
+
+	const lintInvocation = `make lint-changed LINT_CHANGED_SCOPE=staged LINT_FLAGS="--new-from-rev=HEAD --whole-files --fix --allow-parallel-runners"`
+	if !strings.Contains(string(script), lintInvocation) {
+		t.Fatalf("pre-commit hook must allow parallel golangci-lint runners without changing its staged lint scope or autofix flags; want invocation %q", lintInvocation)
+	}
+}
+
 func TestPreCommitReachesDashboardBlockWhenOnlySpecFileStaged(t *testing.T) {
 	repoRoot := repoRoot(t)
 	hookPath := filepath.Join(repoRoot, ".githooks", "pre-commit")
