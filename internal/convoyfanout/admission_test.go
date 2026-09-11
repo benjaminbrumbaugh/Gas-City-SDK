@@ -545,3 +545,51 @@ func TestDeliveriesIsScopedToOneEvent(t *testing.T) {
 		t.Fatalf("deliveries = %d, want 2", len(first))
 	}
 }
+
+func TestAdmitRejectsEventConflictAcrossChangedRecipientSet(t *testing.T) {
+	now := testTime()
+	service, _ := testAdmissionService()
+	first := testAdmitInput(now)
+	first.LaunchOrigin.Trusted = false
+	first.Subscriptions = nil
+
+	initial, err := service.Admit(context.Background(), first)
+	if err != nil {
+		t.Fatalf("initial default admission: %v", err)
+	}
+	if len(initial.Deliveries) != 1 || initial.Deliveries[0].Recipient.Kind != KindConfiguredDefault {
+		t.Fatalf("initial admission = %#v, want one configured-default delivery", initial.Deliveries)
+	}
+
+	second := first
+	second.Event.ConvoyID = "convoy-b"
+	second.LaunchOrigin.Trusted = true
+	second.LaunchOrigin.Principal = "launcher-a"
+	second.LaunchOrigin.Scope = WorkScope{City: "city-a"}
+	second.LaunchOrigin.Interests = []convoycallback.EventType{convoycallback.EventConvoyCreated}
+	if _, err := service.Admit(context.Background(), second); !errors.Is(err, ErrEventIdentityConflict) {
+		t.Fatalf("changed recipient-set admission error = %v, want ErrEventIdentityConflict", err)
+	}
+}
+
+func TestAdmitRejectsTargetFenceConflictAcrossChangedRecipientSet(t *testing.T) {
+	now := testTime()
+	service, _ := testAdmissionService()
+	first := testAdmitInput(now)
+	first.LaunchOrigin.Trusted = false
+	first.Subscriptions = nil
+
+	if _, err := service.Admit(context.Background(), first); err != nil {
+		t.Fatalf("initial default admission: %v", err)
+	}
+
+	second := first
+	second.Target = TargetFence{TargetID: "target-2", ConfigRevision: 7}
+	second.LaunchOrigin.Trusted = true
+	second.LaunchOrigin.Principal = "launcher-a"
+	second.LaunchOrigin.Scope = WorkScope{City: "city-a"}
+	second.LaunchOrigin.Interests = []convoycallback.EventType{convoycallback.EventConvoyCreated}
+	if _, err := service.Admit(context.Background(), second); !errors.Is(err, ErrStaleTargetFence) {
+		t.Fatalf("changed recipient-set target error = %v, want ErrStaleTargetFence", err)
+	}
+}
