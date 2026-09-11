@@ -15,8 +15,10 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/clock"
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/runtime/acp"
 	sessionauto "github.com/gastownhall/gascity/internal/runtime/auto"
 	"github.com/gastownhall/gascity/internal/sessionlog"
+	"github.com/gastownhall/gascity/internal/testutil"
 )
 
 func immediateStaleKeyDetectionWaiter(context.Context, string) error { return nil }
@@ -1391,6 +1393,53 @@ func TestCreateSessionNamedWithTransport_DefinitiveACPStartFailureClearsRoute(t 
 	}
 	if acpSP.IsRunning("sky") {
 		t.Fatal("ACP backend unexpectedly owns retry after definitive ACP failure")
+	}
+}
+
+func TestCreateSessionNamedWithTransport_ProductionACPFailureClearsAttributionAndRoute(t *testing.T) {
+	store := beads.NewMemStore()
+	defaultSP := runtime.NewFake()
+	acpSP := acp.NewProviderWithDir(filepath.Join(testutil.ShortTempDir(t, "gc-acp-"), "acp"), acp.Config{})
+	autoSP := sessionauto.New(defaultSP, acpSP)
+	mgr := NewManagerWithOptions(store, autoSP)
+
+	_, err := mgr.CreateSession(context.Background(), CreateOptions{
+		ExplicitName: "sky",
+		Template:     "helper",
+		Title:        "first",
+		Provider:     "claude",
+		Transport:    "acp",
+		WorkDir:      t.TempDir(),
+		Hints: runtime.Config{
+			ProviderFenceIdentity: "account:caller",
+		},
+		ExtraMeta: map[string]string{"session_origin": "manual"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "acp provider requires a command") {
+		t.Fatalf("ACP create error = %v, want definite pre-spawn failure", err)
+	}
+	absent, absenceErr := autoSP.SessionDefinitelyAbsent("sky")
+	if absenceErr != nil || !absent {
+		t.Fatalf("post-failure runtime absence = %v, %v; want true, nil", absent, absenceErr)
+	}
+
+	info, err := mgr.CreateSession(context.Background(), CreateOptions{
+		ExplicitName: "sky",
+		Template:     "helper",
+		Title:        "second",
+		Command:      "true",
+		WorkDir:      t.TempDir(),
+		Provider:     "claude",
+		ExtraMeta:    map[string]string{"session_origin": "manual"},
+	})
+	if err != nil {
+		t.Fatalf("default retry after definite production ACP failure: %v", err)
+	}
+	if !defaultSP.IsRunning(info.SessionName) {
+		t.Fatal("default backend did not receive retry after definite production ACP failure")
+	}
+	if acpSP.IsRunning(info.SessionName) {
+		t.Fatal("failed ACP start or stale route owns the retry name")
 	}
 }
 

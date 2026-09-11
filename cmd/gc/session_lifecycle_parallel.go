@@ -1904,6 +1904,15 @@ func startPreparedStartCandidate(
 		running, alive := observeRuntimeProviderLiveness(sp, name, item.cfg.ProcessNames)
 		if running {
 			if alive {
+				requestedProviderFenceIdentity := strings.TrimSpace(item.candidate.tp.ProviderFenceIdentity)
+				if requestedProviderFenceIdentity == "" {
+					requestedProviderFenceIdentity = strings.TrimSpace(item.cfg.ProviderFenceIdentity)
+				}
+				if requestedProviderFenceIdentity != "" &&
+					strings.TrimSpace(item.candidate.info.LaunchProviderFenceIdentity) == "" &&
+					strings.TrimSpace(item.candidate.info.StartedProviderFenceIdentity) == "" {
+					return false, errors.New("live runtime has no authoritative provider account attribution")
+				}
 				if shouldRollbackPendingCreateInfo(item.candidate.info) && !runningSessionMatchesPendingCreateInfo(item.candidate.info, name, sp) {
 					return false, fmt.Errorf("%w: session %q", runtime.ErrSessionExists, name)
 				}
@@ -2131,19 +2140,17 @@ func confirmPendingStart(currentState string) bool {
 	return sessionpkg.StateConfirmsPendingStart(sessionpkg.State(strings.TrimSpace(currentState)))
 }
 
-// startedProviderFenceIdentityForCommit preserves the account identity of an
-// already-running runtime when a warm reuse or recovery confirmation commits
-// refreshed metadata. A concurrent caller's requested identity is only a
-// fallback: the write-ahead or already-committed identity names the runtime
-// that actually won serialized launch ownership.
-func startedProviderFenceIdentityForCommit(info sessionpkg.Info, tp TemplateParams, _ bool) string {
+// startedProviderFenceIdentityForCommit preserves only durable authoritative
+// attribution for the runtime being committed. The current caller's requested
+// identity cannot establish which account owns an already-running runtime.
+func startedProviderFenceIdentityForCommit(info sessionpkg.Info, _ TemplateParams, _ bool) string {
 	if identity := strings.TrimSpace(info.LaunchProviderFenceIdentity); identity != "" {
 		return identity
 	}
 	if identity := strings.TrimSpace(info.StartedProviderFenceIdentity); identity != "" {
 		return identity
 	}
-	return strings.TrimSpace(tp.ProviderFenceIdentity)
+	return ""
 }
 
 func commitStartResultTraced(

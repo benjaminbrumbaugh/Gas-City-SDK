@@ -180,14 +180,37 @@ func (p *Provider) SupportsConditionalStop(name string) bool {
 	return runtime.SupportsConditionalStop(p.route(name), name)
 }
 
-// SessionDefinitelyAbsent delegates to the selected backend when it can make
-// an authoritative cache-bypassing observation.
+// SessionDefinitelyAbsent requires an authoritative absence observation from
+// both backends. Routes are advisory and can be stale, while either backend can
+// still own a same-named runtime.
 func (p *Provider) SessionDefinitelyAbsent(name string) (bool, error) {
-	provider, ok := p.route(name).(runtime.DefinitiveSessionAbsenceProvider)
-	if !ok {
-		return false, runtime.ErrConditionalStopUnsupported
+	p.mu.RLock()
+	isACP := p.routes[name]
+	p.mu.RUnlock()
+	providers := []struct {
+		label    string
+		provider runtime.Provider
+	}{
+		{label: "default", provider: p.defaultSP},
+		{label: "acp", provider: p.acpSP},
 	}
-	return provider.SessionDefinitelyAbsent(name)
+	if isACP {
+		providers[0], providers[1] = providers[1], providers[0]
+	}
+	for _, backend := range providers {
+		checker, ok := backend.provider.(runtime.DefinitiveSessionAbsenceProvider)
+		if !ok {
+			return false, fmt.Errorf("%s backend: %w", backend.label, runtime.ErrConditionalStopUnsupported)
+		}
+		absent, err := checker.SessionDefinitelyAbsent(name)
+		if err != nil {
+			return false, fmt.Errorf("%s backend: proving session absence: %w", backend.label, err)
+		}
+		if !absent {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // Interrupt delegates to the routed backend.

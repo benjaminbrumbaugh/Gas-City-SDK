@@ -38,6 +38,56 @@ func newTestProvider(t *testing.T) *Provider {
 	})
 }
 
+func TestSessionDefinitelyAbsentUsesExclusiveStartupReservation(t *testing.T) {
+	p := newTestProvider(t)
+	name := testName()
+
+	absent, err := p.SessionDefinitelyAbsent(name)
+	if err != nil || !absent {
+		t.Fatalf("initial absence = %v, %v; want true, nil", absent, err)
+	}
+	if err := p.reserveSessionName(name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.releaseSessionName(name) })
+	absent, err = p.SessionDefinitelyAbsent(name)
+	if err != nil {
+		t.Fatalf("reserved absence observation: %v", err)
+	}
+	if absent {
+		t.Fatal("startup reservation was certified absent")
+	}
+
+	if err := p.reserveSessionName(name); !errors.Is(err, runtime.ErrSessionExists) {
+		t.Fatalf("duplicate reservation error = %v, want ErrSessionExists", err)
+	}
+	p.releaseSessionName(name)
+	absent, err = p.SessionDefinitelyAbsent(name)
+	if err != nil || !absent {
+		t.Fatalf("released absence = %v, %v; want true, nil", absent, err)
+	}
+}
+
+func TestStopFailsClosedOnStartupReservationWithoutSocket(t *testing.T) {
+	p := newTestProvider(t)
+	name := testName()
+	if err := p.reserveSessionName(name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.releaseSessionName(name) })
+
+	if err := p.Stop(name); err == nil {
+		t.Fatal("Stop reported success for a cross-process startup reservation without a control socket")
+	}
+	reserved, err := p.sessionNameReserved(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reserved {
+		t.Fatal("Stop removed a startup reservation without proving its owner dead")
+	}
+}
+
 var testCounter atomic.Int64
 
 func testName() string {

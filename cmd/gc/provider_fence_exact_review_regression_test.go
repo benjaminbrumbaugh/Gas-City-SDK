@@ -131,6 +131,50 @@ func TestStartedProviderFenceIdentityForCommitUsesActualRuntimeWinner(t *testing
 	}
 }
 
+func TestStartPreparedCandidateRefusesMatchingUnattributedLiveRuntime(t *testing.T) {
+	const (
+		name          = "test-city--worker"
+		handle        = "gc-session"
+		instanceToken = "0123456789abcdef0123456789abcdef"
+	)
+	sp := runtime.NewFake()
+	if err := sp.Start(context.Background(), name, runtime.Config{Command: "foreign-runtime"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.SetMeta(name, "GC_SESSION_ID", handle); err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.SetMeta(name, "GC_INSTANCE_TOKEN", instanceToken); err != nil {
+		t.Fatal(err)
+	}
+
+	startedFresh, err := startPreparedStartCandidate(
+		context.Background(),
+		preparedStart{
+			candidate: startCandidate{
+				info: sessionpkg.Info{
+					ID:                  handle,
+					SessionNameMetadata: name,
+					MetadataState:       string(sessionpkg.StateStartPending),
+					InstanceToken:       instanceToken,
+				},
+				tp: TemplateParams{ProviderFenceIdentity: "account:caller"},
+			},
+			cfg: runtime.Config{},
+		},
+		"", nil, sp, nil, nil, nil, nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "live runtime has no authoritative provider account attribution") {
+		t.Fatalf("start error = %v, want unattributed-live-runtime refusal", err)
+	}
+	if startedFresh {
+		t.Fatal("unattributed live runtime was reported as freshly started")
+	}
+	if !sp.IsRunning(name) {
+		t.Fatal("unattributed live runtime was stopped")
+	}
+}
+
 type concurrentStateMutationStopProvider struct {
 	runtime.Provider
 	store beads.Store

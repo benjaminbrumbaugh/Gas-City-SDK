@@ -69,9 +69,10 @@ type Provider struct {
 
 // Compile-time check.
 var (
-	_ runtime.Provider                    = (*Provider)(nil)
-	_ runtime.InteractionProvider         = (*Provider)(nil)
-	_ runtime.TransportCapabilityProvider = (*Provider)(nil)
+	_ runtime.Provider                         = (*Provider)(nil)
+	_ runtime.InteractionProvider              = (*Provider)(nil)
+	_ runtime.TransportCapabilityProvider      = (*Provider)(nil)
+	_ runtime.DefinitiveSessionAbsenceProvider = (*Provider)(nil)
 )
 
 // NewProvider returns an ACP [Provider] that stores socket files in
@@ -244,11 +245,25 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		stderrR.Close() //nolint:errcheck
 	}()
 
+	// Publish an exclusive name reservation before the process exists. Together
+	// with the control socket, this closes the cross-process startup gap so an
+	// absence proof cannot overlook a same-name ACP process between cmd.Start and
+	// listener creation.
+	if err := p.reserveSessionName(name); err != nil {
+		_ = stdinPipe.Close()
+		_ = stdoutPipe.Close()
+		stderrW.Close() //nolint:errcheck
+		stderrR.Close() //nolint:errcheck
+		clearSentinel()
+		return err
+	}
+
 	if err := cmd.Start(); err != nil {
 		_ = stdinPipe.Close()
 		_ = stdoutPipe.Close()
 		stderrW.Close() //nolint:errcheck
 		stderrR.Close() //nolint:errcheck
+		p.releaseSessionName(name)
 		clearSentinel()
 		return fmt.Errorf("starting session %q: %w", name, err)
 	}
@@ -262,6 +277,7 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = cmd.Wait()
 		_ = stderrR.Close()
+		p.releaseSessionName(name)
 		clearSentinel()
 		return fmt.Errorf("creating control socket for %q: %w", name, err)
 	}
@@ -534,6 +550,33 @@ func (p *Provider) IsRunning(name string) bool {
 		return sc.alive()
 	}
 	return p.socketAlive(name)
+}
+
+// SessionDefinitelyAbsent proves that no ACP runtime or startup reservation
+// currently owns name. The reservation is created before cmd.Start, so checking
+// it before the socket closes the otherwise-unobservable cross-process startup
+// window. Any filesystem or socket uncertainty fails closed.
+func (p *Provider) SessionDefinitelyAbsent(name string) (bool, error) {
+	p.mu.Lock()
+	sc, ok := p.conns[name]
+	p.mu.Unlock()
+	if ok && sc.alive() {
+		return false, nil
+	}
+
+	reserved, err := p.sessionNameReserved(name)
+	if err != nil {
+		return false, fmt.Errorf("checking ACP session reservation for %q: %w", name, err)
+	}
+	if reserved {
+		return false, nil
+	}
+	if err := p.sendSocketCommand(name, "ping", 500*time.Millisecond); err == nil {
+		return false, nil
+	} else if !isUnavailableSocketError(err) {
+		return false, fmt.Errorf("probing ACP session %q: %w", name, err)
+	}
+	return true, nil
 }
 
 // IsAttached always returns false — ACP sessions have no terminal.
@@ -880,6 +923,45 @@ func (p *Provider) sockNamePath(name string) string {
 	return filepath.Join(p.dir, p.sockKey(name)+".name")
 }
 
+func (p *Provider) sessionNameReserved(name string) (bool, error) {
+	_, err := os.Lstat(p.sockNamePath(name))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
+
+func (p *Provider) reserveSessionName(name string) error {
+	if err := runtime.EnsurePrivateDir(p.dir); err != nil {
+		return fmt.Errorf("preparing ACP session directory: %w", err)
+	}
+	path := p.sockNamePath(name)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%w: session %q has an ACP name reservation", runtime.ErrSessionExists, name)
+		}
+		return fmt.Errorf("reserving ACP session name %q: %w", name, err)
+	}
+	if _, err := io.WriteString(f, name); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return fmt.Errorf("writing ACP session name reservation for %q: %w", name, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return fmt.Errorf("closing ACP session name reservation for %q: %w", name, err)
+	}
+	return nil
+}
+
+func (p *Provider) releaseSessionName(name string) {
+	_ = os.Remove(p.sockNamePath(name))
+}
+
 func (p *Provider) socketNameForEntry(key string) string {
 	data, err := os.ReadFile(filepath.Join(p.dir, key+".name"))
 	if err != nil {
@@ -895,15 +977,9 @@ func (p *Provider) socketNameForEntry(key string) string {
 // startControlSocket creates a unix socket for cross-process commands.
 func (p *Provider) startControlSocket(name string, cmd *exec.Cmd, done <-chan struct{}) (net.Listener, error) {
 	sp := p.sockPath(name)
-	namePath := p.sockNamePath(name)
 	os.Remove(sp) //nolint:errcheck
-	_ = os.Remove(namePath)
-	if err := runtime.WritePrivateFile(namePath, []byte(name)); err != nil {
-		return nil, err
-	}
 	lis, err := net.Listen("unix", sp)
 	if err != nil {
-		os.Remove(namePath) //nolint:errcheck
 		return nil, err
 	}
 	go func() {
@@ -1001,8 +1077,13 @@ func (p *Provider) stopBySocket(name string) error {
 	err := p.sendSocketCommand(name, "stop", 7*time.Second)
 	if err != nil {
 		if isUnavailableSocketError(err) {
-			os.Remove(p.sockPath(name)) //nolint:errcheck
-			_ = os.Remove(p.sockNamePath(name))
+			reserved, reserveErr := p.sessionNameReserved(name)
+			if reserveErr != nil {
+				return fmt.Errorf("checking ACP startup reservation for %q after unavailable control socket: %w", name, reserveErr)
+			}
+			if reserved {
+				return fmt.Errorf("ACP session %q has a startup reservation but no reachable control socket", name)
+			}
 			return nil
 		}
 		return err

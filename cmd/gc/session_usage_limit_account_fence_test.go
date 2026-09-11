@@ -229,8 +229,8 @@ func TestStartedProviderFenceIdentityForCommitPreservesRunningAccount(t *testing
 			want: "account:launch",
 		},
 		{
-			name: "legacy row falls back to desired account",
-			want: "account:desired",
+			name: "unattributed warm runtime never inherits caller account",
+			want: "",
 		},
 	}
 

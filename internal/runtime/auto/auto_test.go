@@ -412,6 +412,38 @@ func TestIsRunningFallsThrough(t *testing.T) {
 	}
 }
 
+func TestSessionDefinitelyAbsentChecksDefaultBehindStaleACPRoute(t *testing.T) {
+	defaultSP := runtime.NewFake()
+	acpSP := runtime.NewFake()
+	if err := defaultSP.Start(context.Background(), "stale-agent", runtime.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	p := New(defaultSP, acpSP)
+	p.RouteACP("stale-agent")
+
+	absent, err := p.SessionDefinitelyAbsent("stale-agent")
+	if err != nil {
+		t.Fatalf("SessionDefinitelyAbsent: %v", err)
+	}
+	if absent {
+		t.Fatal("SessionDefinitelyAbsent certified absence while the fallback default backend owns the name")
+	}
+}
+
+func TestSessionDefinitelyAbsentFailsClosedWhenFallbackCannotProveAbsence(t *testing.T) {
+	defaultSP := runtime.NewFake()
+	acpSP := providerWithoutConditionalStop{Provider: runtime.NewFake()}
+	p := New(defaultSP, acpSP)
+
+	absent, err := p.SessionDefinitelyAbsent("uncertain-agent")
+	if absent {
+		t.Fatal("SessionDefinitelyAbsent certified absence with an unobservable fallback backend")
+	}
+	if !errors.Is(err, runtime.ErrConditionalStopUnsupported) {
+		t.Fatalf("SessionDefinitelyAbsent error = %v, want unsupported definitive observation", err)
+	}
+}
+
 func TestIsDeadRuntimeSessionChecksUnroutedFallbackChecker(t *testing.T) {
 	defaultSP := runtime.NewFake()
 	acpSP := newDeadRuntimeCheckProvider()
