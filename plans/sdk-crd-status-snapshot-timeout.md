@@ -370,6 +370,13 @@ not weaken the timeout or cleanup assertions. Twenty uncached real-signal
 repetitions passed in 41.028s after the final fixture repair; a prior
 one-second run missed fixture startup once under heavier host starvation.
 
+The fixture removes one background sleep and its associated process call from
+the tracked test source. The resource-census gate therefore required the
+checked bootstrap policy, `test/test-resources.toml`, and generated `TESTING.md`
+ledger to lower the all-source, source-debt, and Small-debt call baselines by
+one for both `fixed_sleep` and `subprocess`; the corresponding file baselines
+did not change.
+
 The full `internal/api` package run was attempted with `CGO_ENABLED=0
 GC_FAST_UNIT=0` under shared-host load and failed after 118.733s; the captured
 output was truncated and did not identify this target as the failing test.
