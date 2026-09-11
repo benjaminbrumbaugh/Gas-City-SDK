@@ -812,6 +812,41 @@ func TestWatchConfigDirs_DetectsFileChangeAndSetsDirty(t *testing.T) {
 	}
 }
 
+func TestConfigWatchRegistrationNotificationCoalescesWithoutBlocking(t *testing.T) {
+	registrationComplete := make(chan struct{}, 1)
+	done := make(chan struct{})
+	registrationComplete <- struct{}{}
+
+	finished := make(chan struct{})
+	go func() {
+		notifyConfigWatchRegistration(registrationComplete, done)
+		close(finished)
+	}()
+
+	select {
+	case <-finished:
+	case <-time.After(testutil.GoroutineRaceTimeout):
+		t.Fatal("registration notification blocked when the coalescing channel was full")
+	}
+
+	select {
+	case <-registrationComplete:
+	default:
+		t.Fatal("registration notification channel unexpectedly empty")
+	}
+
+	empty := make(chan struct{}, 1)
+	notifyConfigWatchRegistration(empty, done)
+	select {
+	case <-empty:
+	default:
+		t.Fatal("registration notification was not delivered to an empty channel")
+	}
+
+	close(done)
+	notifyConfigWatchRegistration(registrationComplete, done)
+}
+
 func TestWatchConfigDirs_FileSeedStillWatchesFile(t *testing.T) {
 	old := debounceDelay
 	debounceDelay = 5 * time.Millisecond

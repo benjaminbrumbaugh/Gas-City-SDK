@@ -779,6 +779,22 @@ func isConventionDiscoveryDirName(base string) bool {
 	return false
 }
 
+// notifyConfigWatchRegistration coalesces recursive-watch completions without
+// making the registration goroutine wait for the watcher event loop. A full
+// channel already represents a pending completion, so dropping another signal
+// preserves the debounce trigger while keeping burst registration bounded.
+func notifyConfigWatchRegistration(registrationComplete chan<- struct{}, done <-chan struct{}) {
+	select {
+	case <-done:
+		return
+	default:
+	}
+	select {
+	case registrationComplete <- struct{}{}:
+	default:
+	}
+}
+
 func watchConfigTargets(targets []config.WatchTarget, dirty *atomic.Bool, pokeCh chan struct{}, stderr io.Writer) func() {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -820,10 +836,7 @@ func watchConfigTargets(targets []config.WatchTarget, dirty *atomic.Bool, pokeCh
 			if ok := registrar.addPath(root, true, done); !ok && trackRoot {
 				registrar.unmarkRecursiveRoot(root)
 			}
-			select {
-			case registrationComplete <- struct{}{}:
-			case <-done:
-			}
+			notifyConfigWatchRegistration(registrationComplete, done)
 		}()
 	}
 
