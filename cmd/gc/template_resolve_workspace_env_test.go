@@ -92,6 +92,49 @@ func TestResolveTemplateAgentEnvWinsOverWorkspaceEnv(t *testing.T) {
 	}
 }
 
+func TestResolveTemplatePreservesAgentEnvForStartCommand(t *testing.T) {
+	cityPath := t.TempDir()
+	writeTemplateResolveCityConfig(t, cityPath, "file")
+
+	params := &agentBuildParams{
+		cityName: "city",
+		cityPath: cityPath,
+		workspace: &config.Workspace{
+			Provider: "test",
+			Env: map[string]string{
+				"FROM_WORKSPACE": "ws",
+			},
+		},
+		providers:  map[string]config.ProviderSpec{"test": {Command: "echo", PromptMode: "none"}},
+		lookPath:   func(string) (string, error) { return "/bin/echo", nil },
+		fs:         fsys.OSFS{},
+		beaconTime: time.Unix(0, 0),
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+	agent := &config.Agent{
+		Name:         "worker",
+		StartCommand: "echo",
+		Env: map[string]string{
+			"CUSTOM_AGENT": "yes",
+		},
+	}
+
+	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+	if got := tp.Env["CUSTOM_AGENT"]; got != "yes" {
+		t.Errorf("CUSTOM_AGENT = %q, want %q", got, "yes")
+	}
+	if got := tp.Env["FROM_WORKSPACE"]; got != "ws" {
+		t.Errorf("FROM_WORKSPACE = %q, want %q", got, "ws")
+	}
+	if _, included := tp.ProviderFenceEnv["CUSTOM_AGENT"]; included {
+		t.Error("ProviderFenceEnv contains unrelated role environment")
+	}
+}
+
 func TestResolveTemplateDisablesProductMetricsForManagedAgent(t *testing.T) {
 	cityPath := t.TempDir()
 	writeTemplateResolveCityConfig(t, cityPath, "file")

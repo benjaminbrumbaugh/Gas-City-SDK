@@ -163,12 +163,12 @@ func TestGastown_PipelineGitCommitMerge(t *testing.T) {
 	agents := []gasTownAgent{
 		{
 			Name:         "polecat",
-			StartCommand: "bash " + agentScript("polecat-git.sh"),
+			StartCommand: "bash " + singleQuoteShell(agentScript("polecat-git.sh")),
 			Env:          map[string]string{"GIT_WORK_DIR": polecatRepo, "GC_HANDOFF_TO": "refinery"},
 		},
 		{
 			Name:         "refinery",
-			StartCommand: "bash " + agentScript("refinery-git.sh"),
+			StartCommand: "bash " + singleQuoteShell(agentScript("refinery-git.sh")),
 			Env:          map[string]string{"GIT_WORK_DIR": refineryRepo},
 		},
 	}
