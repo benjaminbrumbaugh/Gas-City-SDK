@@ -2,7 +2,6 @@ package scripts_test
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -95,7 +94,7 @@ printf '%s\n' "$*" >> "$STATIC_PATH_LINT_LOG"
 
 func runStaticPathTestCommand(t *testing.T, dir string, env []string, name string, args ...string) {
 	t.Helper()
-	cmd := exec.Command(name, args...)
+	cmd := testCommand(name, args...)
 	cmd.Dir = dir
 	cmd.Env = env
 	if output, err := cmd.CombinedOutput(); err != nil {
