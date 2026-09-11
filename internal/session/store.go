@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -136,6 +137,56 @@ func (s *Store) BeginDrainAckStopPending(id string, now time.Time) error {
 // via RestartRequestPatch. Replaces the restart-request write in session_reconciler.go.
 func (s *Store) RequestRestart(id, sessionKey string, now time.Time) error {
 	return s.ApplyPatch(id, RestartRequestPatch(sessionKey, now))
+}
+
+// RecordRecoveryState atomically persists controller-owned recovery incident
+// state on a session. Keeping this write behind the session front door prevents
+// worker/controller adapters from owning session metadata vocabulary.
+func (s *Store) RecordRecoveryState(info Info, state RecoveryState) (Info, error) {
+	patch := MetadataPatch{
+		"recovery_incident_id":       state.IncidentID,
+		"recovery_impairment":        state.Impairment,
+		"recovery_detected_at":       formatRecoveryTime(state.DetectedAt),
+		"recovery_hold_until":        formatRecoveryTime(state.HoldUntil),
+		"recovery_attempt":           strconv.Itoa(state.Attempt),
+		"recovery_attempted_targets": strings.Join(state.AttemptedTargets, "\n"),
+		"recovery_cooldown_until":    formatRecoveryTime(state.CooldownUntil),
+		"recovery_outcome":           state.Outcome,
+		"recovery_work_id":           state.WorkID,
+	}
+	previousRecoveryHold := strings.TrimSpace(info.RecoveryHoldUntil)
+	currentHold := strings.TrimSpace(info.HeldUntil)
+	nextRecoveryHold := strings.TrimSpace(patch["recovery_hold_until"])
+	switch {
+	case nextRecoveryHold == "" && previousRecoveryHold != "" && currentHold == previousRecoveryHold:
+		// Clear only the generic hold value this recovery incident installed.
+		patch["held_until"] = ""
+	case nextRecoveryHold != "" && previousRecoveryHold == "" && currentHold == "":
+		// Never overwrite an operator hold or reassert a recovery hold an
+		// operator changed after detection.
+		patch["held_until"] = nextRecoveryHold
+	}
+	return s.UpdateMetadataInfo(info, patch)
+}
+
+// RecoveryState is the durable lifecycle owned by the recovery responder.
+type RecoveryState struct {
+	IncidentID       string
+	Impairment       string
+	DetectedAt       time.Time
+	HoldUntil        time.Time
+	Attempt          int
+	AttemptedTargets []string
+	CooldownUntil    time.Time
+	Outcome          string
+	WorkID           string
+}
+
+func formatRecoveryTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 // ResetConfigDrift records an in-place named-session repair after core config

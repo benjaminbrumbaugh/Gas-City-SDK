@@ -259,6 +259,9 @@ type City struct {
 	Beads BeadsConfig `toml:"beads,omitempty"`
 	// Session configures the session provider backend.
 	Session SessionConfig `toml:"session,omitempty"`
+	// RecoveryResponder optionally routes bounded recovery work for durable,
+	// high-confidence provider/session impairments.
+	RecoveryResponder *RecoveryResponderConfig `toml:"recovery_responder,omitempty"`
 	// Mail configures the mail provider backend.
 	Mail MailConfig `toml:"mail,omitempty"`
 	// Events configures the events provider backend.

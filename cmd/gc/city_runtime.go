@@ -1466,6 +1466,9 @@ func (cr *CityRuntime) tick(
 		cr.beadReconcileTick(ctx, result, sessionBeads, trace, false)
 		recordPhase(TraceSiteControllerTickPhase, "bead_reconcile_tick", phaseStart, traceDesiredStateFields(result))
 	}
+	phaseStart = time.Now()
+	recoveryFields := cr.reconcileRecoveryResponder(ctx, time.Now())
+	recordPhase(TraceSiteControllerTickPhase, "reconcile_recovery_responder", phaseStart, recoveryFields)
 	// Graph stores intentionally do not emit bead.closed, so a step closed
 	// between the durable write and the best-effort journal append would be a
 	// permanent lifecycle gap. The tick repairs only the roots the journal named
