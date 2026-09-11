@@ -55,12 +55,12 @@ current. Do not mutate a stale or ineligible source bead:
 
 ```bash
 CONVOY_STATUS=$(gc convoy status {{convoy_id}} --json)
-BEAD_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
-if [ -z "$BEAD_ID" ]; then
+SOURCE_ID=$(printf '%s' "$CONVOY_STATUS" | jq -r 'if (.children | length) == 1 then .children[0].id else empty end')
+if [ -z "$SOURCE_ID" ]; then
     echo "candidate-review repair requires exactly one source bead" >&2
     exit 1
 fi
-gc bd show "$BEAD_ID" --json | jq '.[0] | {id, status, assignee, metadata}'
+gc bd show "$SOURCE_ID" --json | jq '.[0] | {id, status, assignee, metadata}'
 ```
 
 The correction owner is the exact value in
@@ -90,7 +90,7 @@ export GC_CANDIDATE_REPAIR_TYPECHECK_COMMAND="{{typecheck_command}}"
 export GC_CANDIDATE_REPAIR_LINT_COMMAND="{{lint_command}}"
 export GC_CANDIDATE_REPAIR_TEST_COMMAND="{{test_command}}"
 export GC_CANDIDATE_REPAIR_BUILD_COMMAND="{{build_command}}"
-'{{repair_script}}' "$BEAD_ID"
+'{{repair_script}}' "$SOURCE_ID"
 ```
 
 The worker is bounded by `gc.candidate_review_max_attempts` and leaves
