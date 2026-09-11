@@ -219,7 +219,8 @@ the assignment was dropped during refinement.
 
 ## Verification findings
 
-- Focused watcher unit tests passed normally and under `-race`.
+- Focused watcher unit tests passed normally; the current host cannot build the
+  race-enabled package because ICU headers are unavailable.
 - The real transport proof passed once in the task worktree and concurrently for
   all four reported provider profiles; this observes actual tmux/provider startup,
   not just the watcher helper.
@@ -233,3 +234,18 @@ the assignment was dropped during refinement.
 
 The added test documents the product contract introduced by this fix (coalesced
 completion notification is non-blocking); no existing expectation was weakened.
+
+## Revalidation after resumed claim
+
+- A cold four-process direct run reproduced one codex startup deadline while three
+  profiles passed; five warmed four-process rounds then passed. This confirms the
+  failure is scheduler-sensitive rather than a deterministic transport break.
+- The documented full-load runner passed the current `cmd/gc` shard containing
+  `TestPhase2WorkerCoreRealTransportProof`; its log records that real tmux/provider
+  proof as part of the run. This observes the target transport layer under fanout.
+- The first full-load attempt also exposed stale line-number exclusions in the
+  existing controller deadline lint after the new test was inserted. Updating those
+  coordinates was test maintenance only; the focused lint now passes. No timeout,
+  transport assertion, or provider case was relaxed.
+- The current host cannot compile the race-enabled package because ICU headers are
+  absent (`unicode/regex.h`); the CGO-disabled focused watcher suite remains green.
