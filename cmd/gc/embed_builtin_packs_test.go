@@ -302,7 +302,13 @@ func TestBuiltinDoltDoctorFailsClosedWithoutBoundedRunner(t *testing.T) {
 		name string
 		body string
 	}{
-		{name: "dolt", body: "#!/bin/sh\nprintf 'dolt version 1.86.1\\n'\n"},
+		// Keep the probe alive until the shell fallback observes and stops it.
+		// An immediately successful fake races that watchdog: under light load
+		// the doctor reaches `head` and fails for the wrong reason, while shard
+		// load can leave the child alive long enough to produce the expected
+		// timeout. SIGSTOP is a shell-builtin-only wait, so this fixture keeps
+		// the PATH isolation intact without depending on another utility.
+		{name: "dolt", body: "#!/bin/sh\nkill -STOP $$\n"},
 		{name: "flock", body: "#!/bin/sh\nexit 0\n"},
 		{name: "lsof", body: "#!/bin/sh\nexit 0\n"},
 	} {
