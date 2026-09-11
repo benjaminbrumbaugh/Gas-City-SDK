@@ -408,4 +408,8 @@ were still executing when this evidence was recorded.
 
 This confirms the target-specific repair under the requested loaded package
 composition, while leaving a separately tracked follow-up for the two sibling
-fixtures rather than widening this bead's source scope.
+fixtures rather than widening this bead's source scope. After core shards 1,
+2, and 4 completed and core shard 3's API result was captured, the remaining
+command shards were interrupted to avoid spending additional shared-host
+capacity on unrelated packages; the broad make target is therefore not a
+full-suite pass.
