@@ -50,6 +50,27 @@ func main(){
 	return bin
 }
 
+// waitForPaneText polls a real pane until it contains want. Waiting on the
+// pane's observable state avoids making startup readiness depend on a fixed
+// wall-clock sleep, while preserving the test's real-tmux boundary.
+func waitForPaneText(t *testing.T, capture func() (string, error), want, what string) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		content, err := capture()
+		if err != nil {
+			t.Fatalf("capture while waiting for %s: %v", what, err)
+		}
+		if strings.Contains(content, want) {
+			return content
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s:\n%s", what, content)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // TestDismissModelSwitchModalIfPresentClearsModalOnRealTmux proves ga-3syh's fix
 // end-to-end on real tmux: a session showing the mid-session model-switch modal
 // is dismissed to "Keep current model" (Down+Enter) so it stops hanging.
@@ -69,25 +90,14 @@ func TestDismissModelSwitchModalIfPresentClearsModalOnRealTmux(t *testing.T) {
 		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
 	}
 	defer func() { _ = tm.KillSession(sessionName) }()
-	time.Sleep(500 * time.Millisecond)
 
+	capture := func() (string, error) { return tm.CapturePaneAll(sessionName) }
 	// Precondition: the pane shows the model-switch modal.
-	pre, err := tm.CapturePaneAll(sessionName)
-	if err != nil {
-		t.Fatalf("CapturePaneAll: %v", err)
-	}
-	if !strings.Contains(pre, "Keep current model") || !strings.Contains(pre, "Switch to ") {
+	pre := waitForPaneText(t, capture, "Keep current model", "the model-switch modal")
+	if !strings.Contains(pre, "Switch to ") {
 		t.Fatalf("precondition: model-switch modal not shown:\n%s", pre)
 	}
 
 	tm.DismissModelSwitchModalIfPresent(sessionName)
-	time.Sleep(500 * time.Millisecond)
-
-	post, err := tm.CapturePaneAll(sessionName)
-	if err != nil {
-		t.Fatalf("CapturePaneAll: %v", err)
-	}
-	if !strings.Contains(post, "MODEL_KEPT") {
-		t.Fatalf("modal was not dismissed (no MODEL_KEPT after DismissModelSwitchModalIfPresent):\n%s", post)
-	}
+	waitForPaneText(t, capture, "MODEL_KEPT", "the modal to be dismissed")
 }
