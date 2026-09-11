@@ -59,9 +59,12 @@ func TestReadinessRegistrySync(t *testing.T) {
 }
 
 // pinProbeSearchPath confines findProbeBinary to homeDir-relative install
-// dirs so probe tests cannot accidentally resolve binaries from the host.
+// dirs so probe tests cannot accidentally resolve binaries from the host. It
+// also clears the explicit Node override so tests that stage a temporary node
+// exercise discovery rather than an ambient shell configuration.
 func pinProbeSearchPath(t *testing.T, homeDir string) {
 	t.Helper()
+	t.Setenv("ZCODE_NODE_BIN", "")
 	originalPathEnv := providerProbePathEnv
 	originalGOOS := providerProbeGOOS
 	providerProbePathEnv = filepath.Join(homeDir, "empty-path")
