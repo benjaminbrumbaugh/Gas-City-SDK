@@ -20,9 +20,11 @@
 # Coverage: outer-job load subtraction (zero/mid/saturating load), the
 # min_auto_jobs=2 floor, a small machine skipping load adjustment
 # entirely, fractional-load truncation (not rounding), a malformed
-# GC_TEST_LOCAL_LOADAVG failing by name, a live-host regression guard that
-# the default path actually reads /proc/loadavg (skipped when strace is
-# unavailable), inner-parallelism arithmetic (clean division, the real
+# GC_TEST_LOCAL_LOADAVG failing by name, a deterministic Darwin regression
+# guard that the default path actually invokes sysctl vm.loadavg, and a
+# live-host regression guard that the default Linux path actually reads
+# /proc/loadavg (skipped when strace is unavailable), inner-parallelism
+# arithmetic (clean division, the real
 # ga-04m84s repro numbers, job-count-exceeds-outer-jobs, the trivial 1x1
 # case, the GC_TEST_INNER_P override, a malformed GC_TEST_INNER_P failing by
 # name), and the test-local-parallel wiring described above.
@@ -55,6 +57,55 @@ assert_contains() {
 # /proc/meminfo or cgroup budget.
 HUGE_MEM_KIB=$((64 * 1024 * 1024))
 
+# The Darwin source is a command boundary, so exercise it with a deterministic
+# fake command rather than making the self-test depend on the host's current
+# load. The platform seam selects Darwin; the load override stays unset so
+# this proves the default source path. Keep the fixture on disk-backed storage
+# because /tmp is a shared, size-capped tmpfs on the test fleet.
+DARWIN_SYSCTL_DIR="$(mktemp -d -p /var/tmp gc-test-local-sysctl.XXXXXX)"
+trap 'rm -rf "$DARWIN_SYSCTL_DIR"' EXIT
+cat >"$DARWIN_SYSCTL_DIR/sysctl" <<'EOF'
+#!/usr/bin/env bash
+
+if [[ "$#" -ne 2 || "$1" != "-n" || "$2" != "vm.loadavg" ]]; then
+  echo "unexpected sysctl arguments: $*" >&2
+  exit 1
+fi
+
+touch "$GC_TEST_LOCAL_FAKE_SYSCTL_CALLED"
+printf '%s\n' "$GC_TEST_LOCAL_FAKE_SYSCTL_OUTPUT"
+EOF
+chmod +x "$DARWIN_SYSCTL_DIR/sysctl"
+
+run_darwin_job_count() {
+    env -u GC_TEST_LOCAL_LOADAVG \
+        GC_TEST_LOCAL_PLATFORM=Darwin \
+        GC_TEST_LOCAL_CPUS=16 \
+        GC_TEST_LOCAL_MEMORY_KIB="$HUGE_MEM_KIB" \
+        GC_TEST_LOCAL_FAKE_SYSCTL_CALLED="$DARWIN_SYSCTL_DIR/called" \
+        GC_TEST_LOCAL_FAKE_SYSCTL_OUTPUT="$1" \
+        PATH="$DARWIN_SYSCTL_DIR:$PATH" \
+        "$JOB_COUNT"
+}
+
+GOT="$(run_darwin_job_count '{ 10.25 11.25 12.25 }')"
+assert_eq "loadavg.darwin_sysctl_subtracts_from_cpus" "$GOT" "6"
+assert_true "loadavg.darwin_default_path_invokes_vm_loadavg" test -f "$DARWIN_SYSCTL_DIR/called"
+
+GOT="$(run_darwin_job_count '{ 28.25 29.25 30.25 }')"
+assert_eq "loadavg.darwin_sysctl_floors_at_min_auto_jobs" "$GOT" "2"
+
+rm -f "$DARWIN_SYSCTL_DIR/called"
+GOT="$(env \
+    GC_TEST_LOCAL_LOADAVG=10 \
+    GC_TEST_LOCAL_PLATFORM=Darwin \
+    GC_TEST_LOCAL_CPUS=16 \
+    GC_TEST_LOCAL_MEMORY_KIB="$HUGE_MEM_KIB" \
+    PATH="$DARWIN_SYSCTL_DIR:$PATH" \
+    "$JOB_COUNT")"
+assert_eq "loadavg.explicit_override_precedes_darwin_source" "$GOT" "6"
+assert_true "loadavg.explicit_override_skips_darwin_source" test ! -e "$DARWIN_SYSCTL_DIR/called"
+
 # ============================================================
 # Part A — scripts/test-local-job-count (real subprocess, pinned cpus/memory)
 # ============================================================
@@ -81,6 +132,8 @@ assert_contains "loadavg.malformed_names_var" "$MALFORMED_OUT" "GC_TEST_LOCAL_LO
 
 assert_true "loadavg.script_defines_min_auto_jobs_2" grep -qE 'min_auto_jobs=2' "$JOB_COUNT"
 assert_true "loadavg.script_references_seam" grep -q 'GC_TEST_LOCAL_LOADAVG' "$JOB_COUNT"
+assert_true "loadavg.script_references_platform_seam" grep -q 'GC_TEST_LOCAL_PLATFORM' "$JOB_COUNT"
+assert_true "loadavg.script_references_darwin_source" grep -q 'vm.loadavg' "$JOB_COUNT"
 
 # Regression guard: the default (no-override) path must actually read
 # /proc/loadavg, mirroring how detect_memory_kib is already proven to read
@@ -92,7 +145,7 @@ assert_true "loadavg.script_references_seam" grep -q 'GC_TEST_LOCAL_LOADAVG' "$J
 # inherits the real host's core count and so false-fails on a small host.
 # GC_TEST_LOCAL_LOADAVG stays unset, which is what gives the guard its
 # teeth: it still proves the default path reads /proc/loadavg.
-if command -v strace >/dev/null 2>&1; then
+if [[ "$(uname -s)" != "Darwin" ]] && command -v strace >/dev/null 2>&1; then
     # Captured into a variable rather than piped live into grep: a piped
     # `grep -q` closes its end of the pipe as soon as it finds a match, and
     # under pipefail that early close can race strace's own exit — SIGPIPEing
@@ -105,7 +158,7 @@ if command -v strace >/dev/null 2>&1; then
         record_fail "loadavg.default_path_opens_proc_loadavg" "/proc/loadavg not opened by the default (no-override) path"
     fi
 else
-    echo "  skip loadavg.default_path_opens_proc_loadavg — strace not installed"
+    echo "  skip loadavg.default_path_opens_proc_loadavg — non-Linux platform or strace not installed"
 fi
 
 # ============================================================
