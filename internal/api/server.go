@@ -34,6 +34,18 @@ func (s *Server) runBackground(run func(context.Context)) {
 	}()
 }
 
+// runSessionBackground owns a detached session lifecycle operation without
+// imposing the short external-message timeout. Session startup already has its
+// own provider and commandable-wait bounds, and historically outlived the
+// accepting request.
+func (s *Server) runSessionBackground(run func(context.Context)) {
+	s.backgroundTasks.Add(1)
+	go func() {
+		defer s.backgroundTasks.Done()
+		run(context.Background())
+	}()
+}
+
 func (s *Server) waitForBackground() {
 	s.backgroundTasks.Wait()
 }

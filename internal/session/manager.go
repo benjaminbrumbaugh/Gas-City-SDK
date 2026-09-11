@@ -849,17 +849,26 @@ func (m *Manager) createStarted(ctx context.Context, spec CreateOptions) (Info, 
 	resume := spec.Resume
 	hints := spec.Hints
 	extraMeta := spec.ExtraMeta
-	launchProviderFenceIdentity := strings.TrimSpace(extraMeta["launch_provider_fence_identity"])
+	launchProviderFenceIdentity := strings.TrimSpace(hints.ProviderFenceIdentity)
+	if launchProviderFenceIdentity == "" {
+		launchProviderFenceIdentity = strings.TrimSpace(extraMeta["launch_provider_fence_identity"])
+	}
 	if launchProviderFenceIdentity != "" {
 		fences, fenceErr := NewStore(beads.SessionStore{Store: m.store}).ActiveProviderFences(time.Now().UTC())
 		if fenceErr != nil {
 			return Info{}, fmt.Errorf("checking provider account fence before direct start: %w", fenceErr)
 		}
 		for _, fence := range fences {
-			if fence.Identity == launchProviderFenceIdentity {
+			if ProviderFenceIdentityMatches(fence.Identity, launchProviderFenceIdentity) {
 				return Info{}, fmt.Errorf("provider account is fenced until %s", fence.Until.UTC().Format(time.RFC3339))
 			}
 		}
+		launchMeta := make(map[string]string, len(extraMeta)+1)
+		for key, value := range extraMeta {
+			launchMeta[key] = value
+		}
+		launchMeta["launch_provider_fence_identity"] = launchProviderFenceIdentity
+		extraMeta = launchMeta
 	}
 
 	alias, err := ValidateAlias(alias)

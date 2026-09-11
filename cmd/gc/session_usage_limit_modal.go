@@ -17,9 +17,21 @@ func providerUsageFenceIdentity(tp TemplateParams) string {
 }
 
 const (
-	legacyProviderUsageFenceIdentity   = "legacy:any-provider-account"
+	legacyProviderUsageFenceIdentity   = sessionpkg.LegacyGlobalProviderFenceIdentity
 	unscopedProviderUsageFenceIdentity = "unscoped:no-provider-account"
 )
+
+func activeProviderUsageFence(fences map[string]time.Time, currentIdentity string, now time.Time) (string, time.Time, bool) {
+	var matchedIdentity string
+	var matchedUntil time.Time
+	for identity, until := range fences {
+		if sessionpkg.ProviderFenceIdentityMatches(identity, currentIdentity) && now.Before(until) && until.After(matchedUntil) {
+			matchedIdentity = identity
+			matchedUntil = until
+		}
+	}
+	return matchedIdentity, matchedUntil, matchedIdentity != ""
+}
 
 // providerUsageFenceIdentityForRuntime attributes a live observation to the
 // account that actually launched the runtime. Desired configuration is the

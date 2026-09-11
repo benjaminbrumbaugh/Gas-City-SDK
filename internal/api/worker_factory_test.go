@@ -10,6 +10,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/convergence"
 	"github.com/gastownhall/gascity/internal/events"
+	"github.com/gastownhall/gascity/internal/providerfence"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/worker"
@@ -1058,6 +1059,75 @@ func TestWorkerFactorySessionByIDUsesResolvedCommandAndResumeSettingsOnResume(t 
 	}
 	if got, want := start.Command, "/bin/echo --resume-resolved "+info.SessionKey; got != want {
 		t.Fatalf("start command = %q, want %q", got, want)
+	}
+}
+
+func TestWorkerFactorySessionByIDRecomputesProviderFenceIdentityOnResume(t *testing.T) {
+	const accountSecret = "api-resume-current-account-secret"
+	t.Setenv("API_RESUME_CURRENT_ACCOUNT", accountSecret)
+	fs := newSessionFakeState(t)
+	fs.cfg.Agents[0].Provider = "resolved-worker"
+	fs.cfg.Providers["resolved-worker"] = config.ProviderSpec{
+		DisplayName:   "Resolved Worker",
+		Command:       "/bin/echo",
+		SessionIDFlag: "--session-id-resolved",
+		Env:           map[string]string{"STUB_API_KEY": "$API_RESUME_CURRENT_ACCOUNT"},
+	}
+
+	srv := New(fs)
+	mgr := session.NewManagerWithOptions(fs.cityBeadStore, fs.sp)
+	resolved := &config.ResolvedProvider{Name: "resolved-worker"}
+	staleIdentity, err := providerfence.IdentityForCityWithStore(fs.cityPath, fs.cityBeadStore, resolved, map[string]string{
+		"STUB_API_KEY": "previous-api-account-secret",
+	})
+	if err != nil {
+		t.Fatalf("seed prior provider identity: %v", err)
+	}
+	info, err := mgr.CreateSession(context.Background(), session.CreateOptions{
+		BeadOnly: true, Template: "myrig/worker", Title: "Chat", Command: "/bin/echo",
+		WorkDir: t.TempDir(), Provider: "resolved-worker",
+		Resume: session.ProviderResume{SessionIDFlag: "--session-id-resolved"},
+		ExtraMeta: map[string]string{
+			"session_origin":                  "manual",
+			"started_provider_fence_identity": staleIdentity,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateBeadOnly: %v", err)
+	}
+
+	factory, err := srv.workerFactory(fs.cityBeadStore)
+	if err != nil {
+		t.Fatalf("workerFactory: %v", err)
+	}
+	handle, err := factory.SessionByID(info.ID)
+	if err != nil {
+		t.Fatalf("SessionByID(%q): %v", info.ID, err)
+	}
+	if err := handle.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	start := fs.sp.LastStartConfig(info.SessionName)
+	if start == nil {
+		t.Fatal("reconstructed handle did not start a runtime")
+	}
+	if got := start.Env["STUB_API_KEY"]; got != accountSecret {
+		t.Fatalf("effective launch account = %q, want current process-expanded value", got)
+	}
+	if got := start.ProviderFenceIdentity; !strings.HasPrefix(got, "account:hmac-sha256:") || got == staleIdentity {
+		t.Fatalf("ProviderFenceIdentity = %q, want newly attested current-account identity", got)
+	}
+	row, err := fs.cityBeadStore.Get(info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := row.Metadata["started_provider_fence_identity"]; got != start.ProviderFenceIdentity {
+		t.Fatalf("started identity = %q, want launched identity %q", got, start.ProviderFenceIdentity)
+	}
+	for key, value := range row.Metadata {
+		if strings.Contains(value, accountSecret) {
+			t.Fatalf("metadata %q retained provider account secret", key)
+		}
 	}
 }
 

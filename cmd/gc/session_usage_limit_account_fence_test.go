@@ -28,6 +28,30 @@ func (s *failProviderFenceClearOnceStore) Update(id string, opts beads.UpdateOpt
 	return s.Store.Update(id, opts)
 }
 
+func (s *failProviderFenceClearOnceStore) UpdateIfMatch(id string, expectedRevision int64, opts beads.UpdateOpts) error {
+	writer, ok := beads.ConditionalWriterFor(s.Store)
+	if !ok {
+		return beads.ErrConditionalWriteUnsupported
+	}
+	return writer.UpdateIfMatch(id, expectedRevision, opts)
+}
+
+func (s *failProviderFenceClearOnceStore) CloseIfMatch(id string, expectedRevision int64) error {
+	writer, ok := beads.ConditionalWriterFor(s.Store)
+	if !ok {
+		return beads.ErrConditionalWriteUnsupported
+	}
+	return writer.CloseIfMatch(id, expectedRevision)
+}
+
+func (s *failProviderFenceClearOnceStore) DeleteIfMatch(id string, expectedRevision int64) error {
+	writer, ok := beads.ConditionalWriterFor(s.Store)
+	if !ok {
+		return beads.ErrConditionalWriteUnsupported
+	}
+	return writer.DeleteIfMatch(id, expectedRevision)
+}
+
 func (s *failProviderFenceClearOnceStore) CompareAndSetMetadataKey(id, key, expected, next string) (bool, error) {
 	writer, ok := beads.MetadataCASWriterFor(s.Store)
 	if !ok {

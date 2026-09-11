@@ -499,12 +499,14 @@ func (s *Server) resolveWorkerSessionRuntimeWithMetadata(info session.Info, _ st
 		}
 	}
 	sessionEnv := cityAnchoredSessionEnv(s.state.CityPath(), configuredWorkspaceSessionEnv(s.state.Config()), resolved.Env)
+	store := s.state.SessionsBeadStore()
 	runtimeCfg, err := worker.NormalizeResolvedRuntime(worker.ResolvedRuntime{
-		Command:    command,
-		WorkDir:    firstNonEmptyString(info.WorkDir, workDir),
-		Provider:   firstNonEmptyString(info.Provider, resolved.Name),
-		SessionEnv: sessionEnv,
-		Hints:      sessionResumeHints(resolved, firstNonEmptyString(workDir, info.WorkDir), sessionEnv, mcpServers, sessionResumeInteractive(metadata)),
+		Command:                      command,
+		WorkDir:                      firstNonEmptyString(info.WorkDir, workDir),
+		Provider:                     firstNonEmptyString(info.Provider, resolved.Name),
+		SessionEnv:                   sessionEnv,
+		Hints:                        sessionResumeHints(resolved, firstNonEmptyString(workDir, info.WorkDir), sessionEnv, mcpServers, sessionResumeInteractive(metadata)),
+		ResolveProviderFenceIdentity: providerFenceIdentityResolverForLaunch(s.state.CityPath(), store.Store, resolved, sessionEnv),
 		Resume: session.ProviderResume{
 			ResumeFlag:    firstNonEmptyString(resolved.ResumeFlag, info.ResumeFlag),
 			ResumeStyle:   firstNonEmptyString(resolved.ResumeStyle, info.ResumeStyle),

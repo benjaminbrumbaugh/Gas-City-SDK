@@ -2982,6 +2982,95 @@ func TestHandleProviderSessionCreateRejectsAsync(t *testing.T) {
 	}
 }
 
+func TestHandleProviderSessionCreateAttestsCurrentProviderFenceIdentity(t *testing.T) {
+	const accountSecret = "api-current-account-secret"
+	t.Setenv("API_CURRENT_ACCOUNT", accountSecret)
+	fs := newSessionFakeState(t)
+	provider := fs.cfg.Providers["test-agent"]
+	provider.Env = map[string]string{"STUB_API_KEY": "$API_CURRENT_ACCOUNT"}
+	fs.cfg.Providers["test-agent"] = provider
+	srv := New(fs)
+	req := httptest.NewRequest(http.MethodPost, cityURL(fs, "/sessions"), nil)
+	rec := httptest.NewRecorder()
+	srv.createProviderSession(rec, req, fs.SessionsBeadStore(), sessionCreateRequest{
+		Kind: "provider",
+		Name: "test-agent",
+	}, "test-agent", "", "")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	rows, err := fs.cityBeadStore.ListByLabel(session.LabelSession, 0)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("created session rows = %d, err = %v; want one", len(rows), err)
+	}
+	row := rows[0]
+	start := fs.sp.LastStartConfig(row.Metadata["session_name"])
+	if start == nil {
+		t.Fatal("provider create did not start a runtime")
+	}
+	if got := start.Env["STUB_API_KEY"]; got != accountSecret {
+		t.Fatalf("effective launch account = %q, want current process-expanded value", got)
+	}
+	if got := start.ProviderFenceIdentity; !strings.HasPrefix(got, "account:hmac-sha256:") {
+		t.Fatalf("ProviderFenceIdentity = %q, want opaque current-account identity", got)
+	}
+	if got := row.Metadata["started_provider_fence_identity"]; got != start.ProviderFenceIdentity {
+		t.Fatalf("started identity = %q, want launched identity %q", got, start.ProviderFenceIdentity)
+	}
+	if got := row.Metadata["launch_provider_fence_identity"]; got != "" {
+		t.Fatalf("launch identity = %q, want cleared after successful create", got)
+	}
+	for key, value := range row.Metadata {
+		if strings.Contains(value, accountSecret) {
+			t.Fatalf("metadata %q retained provider account secret", key)
+		}
+	}
+}
+
+func TestHumaProviderSessionCreateAttestsCurrentProviderFenceIdentity(t *testing.T) {
+	const accountSecret = "huma-api-current-account-secret"
+	t.Setenv("API_CURRENT_ACCOUNT", accountSecret)
+	fs := newSessionFakeState(t)
+	provider := fs.cfg.Providers["test-agent"]
+	provider.Env = map[string]string{"STUB_API_KEY": "$API_CURRENT_ACCOUNT"}
+	fs.cfg.Providers["test-agent"] = provider
+	srv := New(fs)
+	h := newTestCityHandlerWith(t, fs, srv)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newPostRequest(cityURL(fs, "/sessions"), strings.NewReader(`{"kind":"provider","name":"test-agent"}`)))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	accepted := decodeAsyncAccepted(t, rec.Body)
+	success, failure := waitForSessionCreateResult(t, fs.eventProv, accepted.RequestID)
+	if success == nil {
+		t.Fatalf("provider create failed: %s: %s", failure.ErrorCode, failure.ErrorMessage)
+	}
+	row, err := fs.cityBeadStore.Get(success.Session.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", success.Session.ID, err)
+	}
+	start := fs.sp.LastStartConfig(row.Metadata["session_name"])
+	if start == nil {
+		t.Fatal("provider create did not start a runtime")
+	}
+	if got := start.Env["STUB_API_KEY"]; got != accountSecret {
+		t.Fatalf("effective launch account = %q, want current process-expanded value", got)
+	}
+	if got := start.ProviderFenceIdentity; !strings.HasPrefix(got, "account:hmac-sha256:") {
+		t.Fatalf("ProviderFenceIdentity = %q, want opaque current-account identity", got)
+	}
+	if got := row.Metadata["started_provider_fence_identity"]; got != start.ProviderFenceIdentity {
+		t.Fatalf("started identity = %q, want launched identity %q", got, start.ProviderFenceIdentity)
+	}
+	for key, value := range row.Metadata {
+		if strings.Contains(value, accountSecret) {
+			t.Fatalf("metadata %q retained provider account secret", key)
+		}
+	}
+}
+
 func TestMaterializeNamedSession_RebrandedSingletonKeepsTemplateWorkDirIdentity(t *testing.T) {
 	fs := newSessionFakeState(t)
 	fs.cfg.Agents = []config.Agent{{

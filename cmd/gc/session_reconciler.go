@@ -4016,8 +4016,13 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				fmt.Fprintf(stderr, "session reconciler: durable provider fence store unavailable; skipping respawn for %s\n", name) //nolint:errcheck
 				continue
 			}
-			if fenceIdentity := providerUsageFenceIdentity(target.tp); fenceIdentity != "" {
-				if until, fenced := providerUsageFences[fenceIdentity]; fenced && clk.Now().Before(until) {
+			fenceIdentity := providerUsageFenceIdentity(target.tp)
+			if fenceIdentity != "" || target.tp.ResolvedProvider != nil {
+				if matchedIdentity, until, fenced := activeProviderUsageFence(providerUsageFences, fenceIdentity, clk.Now()); fenced {
+					if matchedIdentity == legacyProviderUsageFenceIdentity {
+						fmt.Fprintf(stderr, "session reconciler: legacy provider account fence active until %s; skipping respawn for %s\n", until.UTC().Format(time.RFC3339), name) //nolint:errcheck
+						continue
+					}
 					phProvider := target.tp.ResolvedProvider.Name
 					fmt.Fprintf(stderr, "session reconciler: provider %q account fenced by usage-limit observation until %s; skipping respawn for %s\n", phProvider, until.UTC().Format(time.RFC3339), name) //nolint:errcheck
 					if trace != nil {
@@ -4026,12 +4031,6 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 							"until":    until.UTC().Format(time.RFC3339),
 						})
 					}
-					continue
-				}
-			}
-			if target.tp.ResolvedProvider != nil {
-				if until, fenced := providerUsageFences[legacyProviderUsageFenceIdentity]; fenced && clk.Now().Before(until) {
-					fmt.Fprintf(stderr, "session reconciler: legacy provider account fence active until %s; skipping respawn for %s\n", until.UTC().Format(time.RFC3339), name) //nolint:errcheck
 					continue
 				}
 			}

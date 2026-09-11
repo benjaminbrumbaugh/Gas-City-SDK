@@ -157,9 +157,11 @@ func TestProviderFenceStartDoesNotRelabelWinnerAfterPriorClaimRelease(t *testing
 	mgrA := NewManagerWithOptions(mem, sp)
 	info, err := mgrA.CreateSession(context.Background(), CreateOptions{
 		BeadOnly: true, Template: "worker", Title: "worker", Command: "true", WorkDir: t.TempDir(),
-		ExtraMeta: map[string]string{"state": string(StateSuspended)},
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.SetMetadata(info.ID, "launch_provider_fence_identity", "account:loser"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -196,5 +198,82 @@ func TestProviderFenceStartDoesNotRelabelWinnerAfterPriorClaimRelease(t *testing
 	}
 	if got := current.Metadata["launch_provider_fence_identity"]; got != "" {
 		t.Fatalf("launch provider identity = %q, want no delayed staging left behind", got)
+	}
+}
+
+func TestProviderFenceStartDoesNotClaimUnattributedLiveRuntime(t *testing.T) {
+	mem := beads.NewMemStore()
+	sp := runtime.NewFake()
+	mgr := NewManagerWithOptions(mem, sp)
+	info, err := mgr.CreateSession(context.Background(), CreateOptions{
+		BeadOnly: true, Template: "worker", Title: "worker", Command: "true", WorkDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.Start(context.Background(), info.SessionName, runtime.Config{Command: "winner"}); err != nil {
+		t.Fatal(err)
+	}
+
+	err = mgr.Start(context.Background(), info.ID, "true", runtime.Config{ProviderFenceIdentity: "account:late-caller"})
+	if err == nil || !strings.Contains(err.Error(), "live runtime has no authoritative provider account attribution") {
+		t.Fatalf("Start error = %v, want unattributed-live-runtime refusal", err)
+	}
+	got, getErr := mgr.Get(info.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if got.State != StateStartPending {
+		t.Fatalf("state = %q, want start_pending unchanged", got.State)
+	}
+	if got.StartedProviderFenceIdentity != "" || got.LaunchProviderFenceIdentity != "" {
+		t.Fatalf("provider attribution changed: started=%q launch=%q", got.StartedProviderFenceIdentity, got.LaunchProviderFenceIdentity)
+	}
+	if !sp.IsRunning(info.SessionName) {
+		t.Fatal("unattributed live runtime was stopped")
+	}
+}
+
+func TestLegacyGlobalProviderFenceBlocksIdentityAwareDirectStarts(t *testing.T) {
+	for _, mode := range []string{"resume", "create"} {
+		t.Run(mode, func(t *testing.T) {
+			mem := beads.NewMemStore()
+			sp := runtime.NewFake()
+			mgr := NewManagerWithOptions(mem, sp)
+			now := time.Now().UTC()
+			if err := NewStore(beads.SessionStore{Store: mem}).RecordProviderFence(
+				"legacy:any-provider-account",
+				now.Add(time.Hour),
+				now,
+				"usage_limit_modal",
+			); err != nil {
+				t.Fatal(err)
+			}
+
+			var err error
+			switch mode {
+			case "resume":
+				var info Info
+				info, err = mgr.CreateSession(context.Background(), CreateOptions{
+					BeadOnly: true, Template: "worker", Title: "worker", Command: "true", WorkDir: t.TempDir(),
+				})
+				if err == nil {
+					err = mgr.Start(context.Background(), info.ID, "true", runtime.Config{ProviderFenceIdentity: "account:current"})
+				}
+			case "create":
+				_, err = mgr.CreateSession(context.Background(), CreateOptions{
+					Template: "worker", Title: "worker", Command: "true", WorkDir: t.TempDir(),
+					ExtraMeta: map[string]string{"launch_provider_fence_identity": "account:current"},
+				})
+			}
+			if err == nil || !strings.Contains(err.Error(), "provider account is fenced until") {
+				t.Fatalf("direct %s error = %v, want active legacy provider fence refusal", mode, err)
+			}
+			for _, call := range sp.Calls {
+				if call.Method == "Start" {
+					t.Fatalf("direct %s launched provider despite active legacy fence: %#v", mode, sp.Calls)
+				}
+			}
+		})
 	}
 }

@@ -521,17 +521,11 @@ func (m *Manager) commitPendingContinuationReset(id string, b beads.Bead) (int, 
 func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, sessName, resumeCommand string, hints runtime.Config) error {
 	transport, transportVerified := m.transportForBead(b, sessName)
 	unroute := m.routeACPIfNeeded(b.Metadata["provider"], transport, sessName)
-	if State(b.Metadata["state"]) != StateSuspended && m.sp.IsRunning(sessName) {
+	if strings.TrimSpace(hints.ProviderFenceIdentity) == "" && State(b.Metadata["state"]) != StateSuspended && m.sp.IsRunning(sessName) {
 		if b.Metadata["transport"] == "" && transportVerified {
 			m.persistTransport(id, b.Metadata["provider"], transport)
 		}
-		if err := m.confirmLiveSessionState(id, &b); err != nil {
-			return err
-		}
-		return nil
-	}
-	if resumeCommand == "" {
-		return fmt.Errorf("%w: %s", ErrResumeRequired, id)
+		return m.confirmLiveSessionState(id, &b)
 	}
 	launchClaim, alreadyRunning, err := m.prepareProviderFenceStart(id, &b, hints.ProviderFenceIdentity)
 	if err != nil {
@@ -544,6 +538,9 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 			m.persistTransport(id, b.Metadata["provider"], freshTransport)
 		}
 		return m.confirmLiveSessionState(id, &b)
+	}
+	if resumeCommand == "" {
+		return fmt.Errorf("%w: %s", ErrResumeRequired, id)
 	}
 	failedStart := func(startErr error) error {
 		absent, clearErr := m.clearLaunchProviderFenceIdentityIfDefinitelyAbsent(id, sessName, b.Metadata["launch_provider_fence_identity"])
@@ -823,13 +820,20 @@ func (m *Manager) prepareProviderFenceStart(id string, b *beads.Bead, identity s
 	if (freshState == StateActive || freshState == StateAwake) && m.sp.IsRunning(freshName) {
 		return claim, true, nil
 	}
+	if freshState != StateSuspended && m.sp.IsRunning(freshName) {
+		if strings.TrimSpace(fresh.Metadata["launch_provider_fence_identity"]) == "" &&
+			strings.TrimSpace(fresh.Metadata["started_provider_fence_identity"]) == "" {
+			return releaseOnError(errors.New("live runtime has no authoritative provider account attribution"))
+		}
+		return claim, true, nil
+	}
 	current := strings.TrimSpace(b.Metadata["launch_provider_fence_identity"])
 	fences, err := NewStore(beads.SessionStore{Store: m.store}).ActiveProviderFences(time.Now().UTC())
 	if err != nil {
 		return releaseOnError(fmt.Errorf("checking provider account fence before session start: %w", err))
 	}
 	for _, fence := range fences {
-		if fence.Identity == identity {
+		if ProviderFenceIdentityMatches(fence.Identity, identity) {
 			return releaseOnError(fmt.Errorf("provider account is fenced until %s", fence.Until.UTC().Format(time.RFC3339)))
 		}
 	}

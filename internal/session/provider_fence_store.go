@@ -16,6 +16,11 @@ import (
 // role cannot erase an active account quarantine.
 const ProviderFenceBeadLabel = "gc:provider-fence"
 
+// LegacyGlobalProviderFenceIdentity is the fail-closed identity used by
+// pre-account-attribution provider fences. It blocks every identity-aware
+// provider start until the legacy fence expires.
+const LegacyGlobalProviderFenceIdentity = "legacy:any-provider-account"
+
 const providerFenceBeadKind = "provider_usage_fence"
 
 const (
@@ -47,6 +52,18 @@ type ProviderFence struct {
 	Until      time.Time
 	ObservedAt time.Time
 	Reason     string
+}
+
+// ProviderFenceIdentityMatches centralizes the compatibility rule shared by
+// direct starts and reconciler starts: an exact account fence is isolated to
+// that account, while a legacy global fence applies to every provider account.
+func ProviderFenceIdentityMatches(recordedIdentity, currentIdentity string) bool {
+	recordedIdentity = strings.TrimSpace(recordedIdentity)
+	if recordedIdentity == LegacyGlobalProviderFenceIdentity {
+		return true
+	}
+	currentIdentity = strings.TrimSpace(currentIdentity)
+	return currentIdentity != "" && recordedIdentity == currentIdentity
 }
 
 // ActiveProviderFences reads the durable provider-fence records. The returned

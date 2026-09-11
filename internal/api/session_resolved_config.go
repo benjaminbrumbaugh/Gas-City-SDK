@@ -3,7 +3,9 @@ package api
 import (
 	"fmt"
 
+	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/providerfence"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/worker"
@@ -17,6 +19,7 @@ func resolvedSessionConfigForProvider(
 	resolved *config.ResolvedProvider,
 	command, workDir string,
 	mcpServers []runtime.MCPServerConfig,
+	stores ...beads.Store,
 ) (worker.ResolvedSessionConfig, error) {
 	if resolved == nil {
 		return worker.ResolvedSessionConfig{}, fmt.Errorf("%w: resolved provider is required", worker.ErrHandleConfig)
@@ -39,6 +42,10 @@ func resolvedSessionConfigForProvider(
 		resolvedCommand = resolved.ACPCommandString()
 	}
 	sessionEnv := cityAnchoredSessionEnv(cityPath, workspaceEnv, resolved.Env)
+	var store beads.Store
+	if len(stores) > 0 {
+		store = stores[0]
+	}
 	return worker.NormalizeResolvedSessionConfig(worker.ResolvedSessionConfig{
 		Alias:        alias,
 		ExplicitName: explicitName,
@@ -57,7 +64,21 @@ func resolvedSessionConfigForProvider(
 				ResumeCommand: resolved.ResumeCommand,
 				SessionIDFlag: resolved.SessionIDFlag,
 			},
-			Hints: sessionCreateHints(resolved, sessionEnv, mcpServers),
+			Hints:                        sessionCreateHints(resolved, sessionEnv, mcpServers),
+			ResolveProviderFenceIdentity: providerFenceIdentityResolverForLaunch(cityPath, store, resolved, sessionEnv),
 		},
 	})
+}
+
+func providerFenceIdentityResolverForLaunch(cityPath string, store beads.Store, resolved *config.ResolvedProvider, sessionEnv map[string]string) func() (string, error) {
+	if store == nil || resolved == nil {
+		return nil
+	}
+	return func() (string, error) {
+		identity, err := providerfence.IdentityForCityWithStore(cityPath, store, resolved, providerfence.AccountEnv(sessionEnv))
+		if err != nil {
+			return "", fmt.Errorf("provider account identity: %w", err)
+		}
+		return identity, nil
+	}
 }

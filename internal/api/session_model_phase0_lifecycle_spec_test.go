@@ -345,10 +345,12 @@ func TestPhase0HandleSessionWake_ContinuityEligibleArchivedBeadRequestsStart(t *
 	unblockStart := make(chan struct{})
 	provider := &blockingStartProvider{Fake: runtime.NewFake(), unblock: unblockStart}
 	wrappedState := &stateWithSessionProvider{fakeState: fs, provider: provider}
-	t.Cleanup(func() { close(unblockStart) })
 
 	srv = New(wrappedState)
 	h := newTestCityHandlerWith(t, wrappedState, srv)
+	// Release the deliberately blocked runtime before the handler helper waits
+	// for its owned background wake during cleanup.
+	t.Cleanup(func() { close(unblockStart) })
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, newPostRequest(cityURL(fs, "/session/"+id+"/wake"), nil))
 	if rec.Code != http.StatusOK {
