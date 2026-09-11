@@ -51,6 +51,27 @@ func (s *getErrStore) Get(_ string) (beads.Bead, error) {
 	return beads.Bead{}, s.err
 }
 
+type readyErrStore struct {
+	beads.Store
+	err error
+}
+
+func (s readyErrStore) Ready(...beads.ReadyQuery) ([]beads.Bead, error) {
+	return nil, s.err
+}
+
+type listGetQuerier struct {
+	store beads.Store
+}
+
+func (q listGetQuerier) Get(id string) (beads.Bead, error) {
+	return q.store.Get(id)
+}
+
+func (q listGetQuerier) List(query beads.ListQuery) ([]beads.Bead, error) {
+	return q.store.List(query)
+}
+
 func newFakeRunner() *fakeRunner { return &fakeRunner{} }
 
 func (r *fakeRunner) on(prefix string, err error) {
@@ -3939,6 +3960,146 @@ func TestDoSlingBatchSkipsClosedChildren(t *testing.T) {
 	}
 	if result.Skipped != 1 {
 		t.Errorf("Skipped = %d, want 1 (closed child)", result.Skipped)
+	}
+}
+
+func TestDoSlingBatchSkipsDependencyBlockedChildren(t *testing.T) {
+	for _, depType := range []string{"blocks", "waits-for", "conditional-blocks"} {
+		t.Run(depType, func(t *testing.T) {
+			runner := newFakeRunner()
+			cfg := &config.City{Workspace: config.Workspace{Name: "test"}}
+			a := config.Agent{Name: "agent", MaxActiveSessions: intPtr(1)}
+			deps := testDeps(cfg, runtime.NewFake(), runner.run)
+			store := deps.Store
+
+			convoy, err := store.Create(beads.Bead{Title: "convoy", Type: "convoy"})
+			if err != nil {
+				t.Fatalf("create convoy: %v", err)
+			}
+			blocker, err := store.Create(beads.Bead{Title: "blocker", Type: "task", Status: "open"})
+			if err != nil {
+				t.Fatalf("create blocker: %v", err)
+			}
+			blocked, err := store.Create(beads.Bead{Title: "blocked", Type: "task", ParentID: convoy.ID, Status: "open"})
+			if err != nil {
+				t.Fatalf("create blocked child: %v", err)
+			}
+			ready, err := store.Create(beads.Bead{Title: "ready", Type: "task", ParentID: convoy.ID, Status: "open"})
+			if err != nil {
+				t.Fatalf("create ready child: %v", err)
+			}
+			if err := store.DepAdd(blocked.ID, blocker.ID, depType); err != nil {
+				t.Fatalf("add %s dependency: %v", depType, err)
+			}
+
+			result, err := DoSlingBatch(SlingOpts{Target: a, BeadOrFormula: convoy.ID}, deps, store)
+			if err != nil {
+				t.Fatalf("DoSlingBatch with blocked child: %v", err)
+			}
+			if result.Routed != 1 || result.Skipped != 1 {
+				t.Fatalf("result = %+v, want one routed and one skipped child", result)
+			}
+			if len(runner.calls) != 1 || !strings.Contains(runner.calls[0], ready.ID) || strings.Contains(runner.calls[0], blocked.ID) {
+				t.Fatalf("route calls = %#v, want only ready child %s and no blocked child %s", runner.calls, ready.ID, blocked.ID)
+			}
+			var blockedResult SlingChildResult
+			for _, child := range result.Children {
+				if child.BeadID == blocked.ID {
+					blockedResult = child
+				}
+			}
+			if blockedResult.Routed || !blockedResult.Skipped || blockedResult.Status != "open" {
+				t.Fatalf("blocked child result = %+v, want skipped open child", blockedResult)
+			}
+			persistedBlocked, err := store.Get(blocked.ID)
+			if err != nil {
+				t.Fatalf("read blocked child after skipped route: %v", err)
+			}
+			if got := persistedBlocked.Metadata["gc.routed_to"]; got != "" {
+				t.Fatalf("blocked child gc.routed_to = %q, want unset after skipped route", got)
+			}
+
+			if err := store.Close(blocker.ID); err != nil {
+				t.Fatalf("close blocker: %v", err)
+			}
+			runner.calls = nil
+			result, err = DoSlingBatch(SlingOpts{Target: a, BeadOrFormula: convoy.ID}, deps, store)
+			if err != nil {
+				t.Fatalf("DoSlingBatch after closing blocker: %v", err)
+			}
+			if result.Routed != 2 || len(runner.calls) != 2 {
+				t.Fatalf("after closing blocker result = %+v, calls = %#v; want both children routed", result, runner.calls)
+			}
+			for _, childID := range []string{blocked.ID, ready.ID} {
+				found := false
+				for _, call := range runner.calls {
+					if strings.Contains(call, childID) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("route calls = %#v, want child %s after blocker closes", runner.calls, childID)
+				}
+			}
+		})
+	}
+}
+
+func TestDoSlingBatchForceRoutesDependencyBlockedChild(t *testing.T) {
+	runner := newFakeRunner()
+	cfg := &config.City{Workspace: config.Workspace{Name: "test"}}
+	a := config.Agent{Name: "agent", MaxActiveSessions: intPtr(1)}
+	deps := testDeps(cfg, runtime.NewFake(), runner.run)
+	store := deps.Store
+
+	convoy, err := store.Create(beads.Bead{Title: "convoy", Type: "convoy"})
+	if err != nil {
+		t.Fatalf("create convoy: %v", err)
+	}
+	blocker, err := store.Create(beads.Bead{Title: "blocker", Type: "task", Status: "open"})
+	if err != nil {
+		t.Fatalf("create blocker: %v", err)
+	}
+	blocked, err := store.Create(beads.Bead{Title: "blocked", Type: "task", ParentID: convoy.ID, Status: "open"})
+	if err != nil {
+		t.Fatalf("create blocked child: %v", err)
+	}
+	if err := store.DepAdd(blocked.ID, blocker.ID, "blocks"); err != nil {
+		t.Fatalf("add blocking dependency: %v", err)
+	}
+
+	result, err := DoSlingBatch(SlingOpts{Target: a, BeadOrFormula: convoy.ID, Force: true}, deps, store)
+	if err != nil {
+		t.Fatalf("DoSlingBatch with force: %v", err)
+	}
+	if result.Routed != 1 || len(runner.calls) != 1 || !strings.Contains(runner.calls[0], blocked.ID) {
+		t.Fatalf("result = %+v, calls = %#v; --force should route blocked child", result, runner.calls)
+	}
+}
+
+func TestDoSlingBatchReadinessFailurePreventsRouting(t *testing.T) {
+	runner := newFakeRunner()
+	cfg := &config.City{Workspace: config.Workspace{Name: "test"}}
+	a := config.Agent{Name: "agent", MaxActiveSessions: intPtr(1)}
+	deps := testDeps(cfg, runtime.NewFake(), runner.run)
+	store := deps.Store
+	convoy, err := store.Create(beads.Bead{Title: "convoy", Type: "convoy"})
+	if err != nil {
+		t.Fatalf("create convoy: %v", err)
+	}
+	if _, err := store.Create(beads.Bead{Title: "child", Type: "task", ParentID: convoy.ID, Status: "open"}); err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	readinessErr := errors.New("ready projection unavailable")
+	deps.Store = readyErrStore{Store: store, err: readinessErr}
+
+	_, err = DoSlingBatch(SlingOpts{Target: a, BeadOrFormula: convoy.ID}, deps, listGetQuerier{store: store})
+	if err == nil || !errors.Is(err, readinessErr) || !strings.Contains(err.Error(), "checking ready children") {
+		t.Fatalf("DoSlingBatch error = %v, want readiness context wrapping %v", err, readinessErr)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("route calls = %#v, want none after readiness failure", runner.calls)
 	}
 }
 

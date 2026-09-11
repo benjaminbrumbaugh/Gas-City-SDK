@@ -1533,6 +1533,9 @@ func listContainerChildren(querier BeadChildQuerier, containerID string, include
 
 // DoSlingBatch handles convoy expansion before delegating to DoSling.
 func DoSlingBatch(opts SlingOpts, deps SlingDeps, querier BeadChildQuerier) (SlingResult, error) {
+	if err := validateDeps(deps); err != nil {
+		return SlingResult{}, err
+	}
 	a := opts.Target
 
 	// Formula mode, nil querier → delegate directly.
@@ -1614,6 +1617,39 @@ func DoSlingBatch(opts SlingOpts, deps SlingDeps, querier BeadChildQuerier) (Sli
 
 	if len(open) == 0 {
 		return SlingResult{}, fmt.Errorf("%s %s has no open children", b.Type, b.ID)
+	}
+
+	if !opts.Force {
+		// Use the child querier's canonical Ready projection when it exposes
+		// one, so a split query view cannot make blocked children appear
+		// eligible (or hide ready children that the batch just listed).
+		readyQuerier, ok := querier.(interface {
+			Ready(...beads.ReadyQuery) ([]beads.Bead, error)
+		})
+		if !ok {
+			// BeadChildQuerier predates dependency-aware batch routing and does
+			// not require Ready. Keep adapters on the canonical dependency store
+			// until they expose the same readiness projection.
+			readyQuerier = deps.Store
+		}
+		readyChildren, err := readyQuerier.Ready()
+		if err != nil {
+			return SlingResult{}, fmt.Errorf("checking ready children of %s: %w", b.ID, err)
+		}
+		readyIDs := make(map[string]struct{}, len(readyChildren))
+		for _, child := range readyChildren {
+			readyIDs[child.ID] = struct{}{}
+		}
+
+		eligible := open[:0]
+		for _, child := range open {
+			if _, ok := readyIDs[child.ID]; ok {
+				eligible = append(eligible, child)
+				continue
+			}
+			skipped = append(skipped, child)
+		}
+		open = eligible
 	}
 
 	// Cross-rig guard on container.
