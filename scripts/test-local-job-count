@@ -146,6 +146,23 @@ detect_loadavg() {
     return
   fi
 
+  local platform="${GC_TEST_LOCAL_PLATFORM:-$(uname -s 2>/dev/null || true)}"
+  if [[ "$platform" == "Darwin" ]]; then
+    local loadavg
+    loadavg="$(sysctl -n vm.loadavg 2>/dev/null | awk '{
+      for (i = 1; i <= NF; i++) {
+        gsub(/[{}]/, "", $i)
+        if ($i ~ /^[0-9]+([.][0-9]+)?$/) {
+          print $i
+          exit
+        }
+      }
+    }')" || return 1
+    [[ "$loadavg" =~ ^[0-9]+(\.[0-9]+)?$ ]] || return 1
+    printf '%s\n' "$loadavg"
+    return
+  fi
+
   local loadavg_file="/proc/loadavg"
   [[ -r "$loadavg_file" ]] || return 1
   awk '{ print $1; exit }' "$loadavg_file" 2>/dev/null
