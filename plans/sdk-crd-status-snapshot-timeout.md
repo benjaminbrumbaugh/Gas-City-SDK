@@ -1,7 +1,7 @@
 # sdk-crd status-snapshot timeout flake plan
 
 counter: 0
-status: planning
+status: verified
 work_bead: sdk-crd
 base: origin/main
 
@@ -387,3 +387,25 @@ sweep passed the core and command shards and failed an unrelated tmux modal
 precondition; its two formula shards were interrupted after remaining
 stalled. These outcomes are recorded as environment/load evidence, not as
 proof of the repaired target.
+
+## Current-session verification (2026-09-11 PT)
+
+The repaired target passed 10/10 uncached real-signal repetitions with
+`CGO_ENABLED=0 GC_FAST_UNIT=0` (`20.727s`). The first invocation without
+`GC_FAST_UNIT=0` skipped the real-process test and is not counted as evidence.
+
+The loaded `make test-integration-shards-parallel` run used
+`LOCAL_TEST_JOBS=2` while other Go test waves were active on the host. Core
+shard 3 reached `internal/api` and reported no failure for
+`TestStatusSessionSnapshotKillsBdChildOnTimeout`. It did report the two
+unchanged sibling fixtures
+`TestStatusListStoreWithTimeoutKillsBdChildOnTimeout` and
+`TestStatusReadyStoreWithTimeoutKillsBdChildOnTimeout` failing at their PID
+readiness wait (5.21s and 5.37s); this is evidence of the same broader
+load-sensitive fixture class, not evidence that the assigned session-snapshot
+target survived cancellation. Core shard 4 passed. The remaining runner jobs
+were still executing when this evidence was recorded.
+
+This confirms the target-specific repair under the requested loaded package
+composition, while leaving a separately tracked follow-up for the two sibling
+fixtures rather than widening this bead's source scope.
