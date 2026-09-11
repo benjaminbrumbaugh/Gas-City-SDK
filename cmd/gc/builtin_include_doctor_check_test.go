@@ -954,6 +954,7 @@ func TestEnsureBundledImportBindingSemanticEquivalence(t *testing.T) {
 // check must not report them as manual or it can block the later automatic
 // rewrite.
 func TestDoDoctorFixConvergesWave1CityRootImportsThroughImportState(t *testing.T) {
+	clearGCEnv(t)
 	t.Setenv("GC_BEADS", "file")
 	t.Setenv("GC_DOLT", "skip")
 	coreSource, ok := builtinpacks.CanonicalImportSource("core")
