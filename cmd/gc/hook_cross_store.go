@@ -14,6 +14,10 @@ import (
 type hookStore struct {
 	dir string
 	env []string
+	// storeRef is the private source/claim identity shared with gc ready's
+	// invocation-local row annotation. It is empty on legacy test seams and is
+	// then derived from the scoped environment when possible.
+	storeRef string
 	// command overrides the shared work query for this store, and is empty on
 	// every store production builds: one command is run against each leg in
 	// turn. It was set by scopeFederatedHookStores when that pinned the
@@ -105,7 +109,7 @@ type hookStoreRunner func(command, dir string, env []string) (string, error)
 // (conformanceClaimRouting); closing the gap makes the claim stop being a bd
 // subprocess call, and I15 pins the see-but-cannot-claim asymmetry until it does.
 func hookWorkQueryStores(cityPath string, cfg *config.City, a *config.Agent, agentForQuery, workDir string, queryEnv []string, identityOverrides map[string]string) []hookStore {
-	stores := []hookStore{{dir: workDir, env: queryEnv}}
+	stores := []hookStore{newHookStore(workDir, queryEnv)}
 	if agentIsCrossStoreEligible(a) {
 		return appendRigHookStores(stores, cityPath, cfg, a, identityOverrides)
 	}
@@ -182,10 +186,10 @@ func appendOneRigHookStore(stores []hookStore, cityPath string, cfg *config.City
 			rigEnv[k] = v
 		}
 	}
-	return append(stores, hookStore{
-		dir: agentCommandDir(cityPath, &view, cfg.Rigs),
-		env: mergeRuntimeEnv(os.Environ(), rigEnv),
-	})
+	return append(stores, newHookStore(
+		agentCommandDir(cityPath, &view, cfg.Rigs),
+		mergeRuntimeEnv(os.Environ(), rigEnv),
+	))
 }
 
 // appendCityHookStore appends the CITY store as a best-effort federated entry
@@ -216,10 +220,15 @@ func appendCityHookStore(stores []hookStore, cityPath string, cfg *config.City, 
 			cityEnv[k] = v
 		}
 	}
-	return append(stores, hookStore{
-		dir: cityPath,
-		env: mergeRuntimeEnv(os.Environ(), cityEnv),
-	})
+	return append(stores, newHookStore(cityPath, mergeRuntimeEnv(os.Environ(), cityEnv)))
+}
+
+func newHookStore(dir string, env []string) hookStore {
+	store := hookStore{dir: dir, env: env}
+	if ref, ok := hookStoreAffinityRefFromEnv(env); ok {
+		store.storeRef = ref
+	}
+	return store
 }
 
 // rigScopedHookRig returns the rig whose store a rig-scoped agent must ALSO

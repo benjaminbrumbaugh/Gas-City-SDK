@@ -413,6 +413,13 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 		overrides["GC_SESSION_ORIGIN"] = ""
 		overrides["GC_TEMPLATE"] = ""
 	}
+	if opts.Claim && !agentIsCrossStoreEligible(&a) {
+		overrides[hookClaimStoreSourceEnv] = "1"
+	} else {
+		// Override an inherited marker so a plain hook query never changes the
+		// public gc ready payload merely because its parent ran a claim.
+		overrides[hookClaimStoreSourceEnv] = "0"
+	}
 	queryEnv := mergeRuntimeEnv(os.Environ(), overrides)
 	failureTemplate, emitFailureEvent := hookWorkQueryFailureTemplate(len(args) > 0, sessionTemplateContext, a.QualifiedName())
 
@@ -483,13 +490,14 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 	routeTargets := hookClaimRouteTargets(hookClaimPrimaryRouteTarget(&a), resolvedAgentName, strings.TrimSpace(overrides["GC_TEMPLATE"]))
 	if opts.Claim {
 		claimOpts := hookClaimOptions{
-			Assignee:           assignee,
-			SessionID:          sessionID,
-			IdentityCandidates: identityCandidates,
-			RouteTargets:       routeTargets,
-			Env:                queryEnv,
-			DrainAck:           opts.DrainAck,
-			JSON:               opts.JSON,
+			Assignee:             assignee,
+			SessionID:            sessionID,
+			IdentityCandidates:   identityCandidates,
+			RouteTargets:         routeTargets,
+			Env:                  queryEnv,
+			DrainAck:             opts.DrainAck,
+			JSON:                 opts.JSON,
+			EnforceStoreAffinity: !agentIsCrossStoreEligible(&a),
 		}
 		return claimHookWork(cityPath, workQuery, workDir, queryEnv, stores, claimOpts, emitQueryFailure, stdout, stderr)
 	}
@@ -715,6 +723,15 @@ func claimHookWorkWithRunner(workQuery, workDir string, queryEnv []string, store
 		storeOpts.Env = queryEnv
 		if len(claimStore.env) > 0 {
 			storeOpts.Env = claimStore.env
+		}
+		// The selected store is the only valid claim destination for this
+		// iteration. Do not carry provenance from a prior fallback leg when
+		// this leg has no derived reference.
+		storeOpts.ClaimStoreRef = ""
+		storeOpts.ClaimStoreRefKnown = false
+		if ref, known := hookStoreAffinityRef(claimStore); known {
+			storeOpts.ClaimStoreRef = ref
+			storeOpts.ClaimStoreRefKnown = true
 		}
 		storeDir := workDir
 		if dir := strings.TrimSpace(claimStore.dir); dir != "" {

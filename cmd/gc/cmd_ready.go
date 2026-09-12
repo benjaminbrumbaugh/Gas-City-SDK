@@ -119,6 +119,24 @@ func toReadyBeads(items []beads.Bead, blockers map[string][]readyBeadBlocker) []
 	return out
 }
 
+func toReadyBeadsWithStoreSources(items []beads.Bead, blockers map[string][]readyBeadBlocker, owners map[string]readyLeg) []readyBead {
+	out := make([]readyBead, 0, len(items))
+	for _, b := range items {
+		row := toReadyBead(b)
+		row.BlockedBy = blockers[b.ID]
+		if owner, ok := owners[b.ID]; ok && owner.label != "" {
+			metadata := make(map[string]string, len(row.Metadata)+1)
+			for key, value := range row.Metadata {
+				metadata[key] = value
+			}
+			metadata[hookClaimStoreMetadataKey] = owner.label
+			row.Metadata = metadata
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
 func toReadyBead(b beads.Bead) readyBead {
 	return readyBead{
 		ID:           b.ID,
@@ -161,14 +179,15 @@ func toReadyBeadDeps(deps []beads.Dep) []readyBeadDep {
 // tiers on every leg unconditionally (beads.FederatedReadTier), so the flag
 // selects nothing. See newReadyCmd.
 type readyOpts struct {
-	assignee       string
-	unassigned     bool
-	metadataFields []string
-	excludeTypes   []string
-	excludeLabels  []string
-	sortOrder      string
-	limit          int
-	status         string
+	assignee        string
+	unassigned      bool
+	metadataFields  []string
+	excludeTypes    []string
+	excludeLabels   []string
+	sortOrder       string
+	limit           int
+	status          string
+	includeStoreRef bool
 }
 
 // newReadyCmd builds `gc ready`: the in-process, city-wide claimable-work reader
@@ -254,6 +273,10 @@ func registerReadyFlags(cmd *cobra.Command, opts *readyOpts, includeEphemeral, j
 }
 
 func cmdReady(opts readyOpts, stdout, stderr io.Writer) int {
+	// Hook claim is the only consumer that needs source provenance. Keep this
+	// detail out of direct `gc ready` output so its public bd-compatible wire
+	// shape remains unchanged.
+	opts.includeStoreRef = hookClaimStoreSourceEnabled()
 	cityPath, err := resolveCity()
 	if err != nil {
 		fmt.Fprintf(stderr, "gc ready: %v\n", err) //nolint:errcheck // best-effort stderr
@@ -318,7 +341,7 @@ func readyBeadsForOpts(legs []readyLeg, opts readyOpts) ([]readyBead, error) {
 	if err != nil {
 		return nil, err
 	}
-	items, owners, err := readReadyCandidates(legs, status)
+	items, owners, err := readReadyCandidates(legs, status, opts.includeStoreRef)
 	if err != nil {
 		return nil, err
 	}
@@ -330,11 +353,17 @@ func readyBeadsForOpts(legs []readyLeg, opts readyOpts) ([]readyBead, error) {
 	// Enrich AFTER the bound, so the dependency reads are paid only for the rows
 	// actually emitted. The crash-recovery tier asks for --limit=1, which makes
 	// this one dependency read on the one row that matters.
-	blockers, err := readyBlockedByForRows(items, owners)
-	if err != nil {
-		return nil, err
+	var blockers map[string][]readyBeadBlocker
+	if status == readyStatusInProgress {
+		blockers, err = readyBlockedByForRows(items, owners)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return toReadyBeads(items, blockers), nil
+	if !opts.includeStoreRef {
+		return toReadyBeads(items, blockers), nil
+	}
+	return toReadyBeadsWithStoreSources(items, blockers, owners), nil
 }
 
 // readyBlockedByForRows resolves each row's blocking dependencies through the
@@ -348,10 +377,11 @@ func readyBeadsForOpts(legs []readyLeg, opts readyOpts) ([]readyBead, error) {
 // blockers live in the same store the step does, so the leg that answered is the
 // leg that can answer this too.
 //
-// owners is empty on every arm but in_progress, which makes this a no-op there.
-// The ready arm needs nothing: the store's own Ready() already applied
-// readiness, so a row it returned is by construction unblocked, and computing
-// blocked_by for it would be one dependency read per row to restate that.
+// Ownership is now retained on every arm when the caller needs hook provenance,
+// but blocker enrichment remains limited to in_progress. The ready arm needs
+// nothing: the store's own Ready() already applied readiness, so a row it
+// returned is by construction unblocked, and computing blocked_by for it would
+// be one dependency read per row to restate that.
 //
 // A dependency read that FAILS is returned, not swallowed. Reporting a gated
 // bead as unblocked is what re-serves work no worker can advance; the federation
@@ -405,13 +435,16 @@ func readyBlockedByForRows(items []beads.Bead, owners map[string]readyLeg) (map[
 // TierBoth and the relocated class leg has no such layer, so the merged answer
 // would be one question asked of the work stores and a narrower one asked of the
 // store that holds the execution DAG. See beads.FederatedReadTier.
-// It also reports, for the crash-recovery arm only, which leg served each row,
-// so the blocked_by enrichment can ask the store that actually holds the bead.
+// It also reports which leg served each row, so blocked_by enrichment and hook
+// claim provenance can refer to the store that actually returned the bead.
 // Ownership is recorded at MERGE time rather than re-probed afterwards: the
 // merge is first-leg-wins, and a co-resident bead that is open in one leg and
 // in_progress in another would resolve to the wrong store under a fresh probe.
-func readReadyCandidates(legs []readyLeg, status string) ([]beads.Bead, map[string]readyLeg, error) {
+func readReadyCandidates(legs []readyLeg, status string, includeStoreRef bool) ([]beads.Bead, map[string]readyLeg, error) {
 	if status == "" {
+		if includeStoreRef {
+			return federateReadyBeadsWithOwner(legs, beads.ReadyQuery{TierMode: beads.FederatedReadTier})
+		}
 		items, err := federateReadyBeads(legs, beads.ReadyQuery{TierMode: beads.FederatedReadTier})
 		return items, nil, err
 	}
@@ -423,11 +456,11 @@ func readReadyCandidates(legs []readyLeg, status string) ([]beads.Bead, map[stri
 		// exactly the stale answer that re-dispatches work already in flight.
 		Live: status == readyStatusInProgress,
 	}
-	if status != readyStatusInProgress {
-		items, err := federateListBeads(legs, query)
-		return items, nil, err
+	if includeStoreRef || status == readyStatusInProgress {
+		return federateListBeadsWithOwner(legs, query)
 	}
-	return federateListBeadsWithOwner(legs, query)
+	items, err := federateListBeads(legs, query)
+	return items, nil, err
 }
 
 // readyStatusSelector validates --status and returns the status to list, or ""

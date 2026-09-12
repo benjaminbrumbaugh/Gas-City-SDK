@@ -148,6 +148,15 @@ type hookClaimOptions struct {
 	Env                []string
 	DrainAck           bool
 	JSON               bool
+	// ClaimStoreRef is the physical store selected for the mutation. It is
+	// populated by the federated claim loop so candidates annotated by the
+	// built-in ready reader can be checked before the claim CAS.
+	ClaimStoreRef      string
+	ClaimStoreRefKnown bool
+	// EnforceStoreAffinity limits source-annotated federated candidates to the
+	// store selected for this rig-scoped claim. City-scoped agents intentionally
+	// retain their cross-store claim behavior.
+	EnforceStoreAffinity bool
 }
 
 // continuationPinAssignee returns the identity a continuation sibling is pinned
@@ -352,8 +361,19 @@ func tryHookClaim(workQuery, dir string, opts *hookClaimOptions, ops *hookClaimO
 	for _, skip := range skipped {
 		fmt.Fprintf(stderr, "gc hook --claim: skipping undecodable bead %s: %v\n", skip.ID, skip.Err) //nolint:errcheck
 	}
+	claimStore := hookStore{dir: dir, env: opts.Env, storeRef: opts.ClaimStoreRef}
+	if !opts.ClaimStoreRefKnown {
+		if ref, known := hookStoreAffinityRef(claimStore); known {
+			opts.ClaimStoreRef = ref
+			opts.ClaimStoreRefKnown = true
+		}
+	}
+	var affinitySkipped bool
+	if opts.EnforceStoreAffinity {
+		candidates, affinitySkipped = filterHookClaimCandidatesByStore(candidates, claimStore, ops.ClassRoute, stderr)
+	}
 	if len(candidates) == 0 {
-		return hookClaimResult{}
+		return hookClaimResult{claimsErrored: affinitySkipped}
 	}
 
 	if result, bead, ok := hookClaimExistingAssignment(candidates, *opts); ok {
@@ -370,6 +390,9 @@ func tryHookClaim(workQuery, dir string, opts *hookClaimOptions, ops *hookClaimO
 	// tier: both tiers feed ONE shared drain, and dropping the flag here would
 	// launder an assigned-tier write failure into a healthy no_work.
 	if !eligibleResult.terminal && readyResult.claimsErrored {
+		eligibleResult.claimsErrored = true
+	}
+	if !eligibleResult.terminal && affinitySkipped {
 		eligibleResult.claimsErrored = true
 	}
 	return eligibleResult
@@ -2361,7 +2384,7 @@ func hookClaimMatchesRoute(candidate beads.Bead, routeTargets []string) bool {
 		if hookRouteIdentitiesEqual(routedTo, target) {
 			return true
 		}
-		if routedTo == "" && kind == beadmeta.KindWorkflow && hookRouteIdentitiesEqual(runTarget, target) {
+		if hookClaimRouteState(candidate) == hookRouteUnrouted && kind == beadmeta.KindWorkflow && hookRouteIdentitiesEqual(runTarget, target) {
 			return true
 		}
 	}
@@ -2389,7 +2412,8 @@ func hookCandidateVisible(candidate beads.Bead, identities, routeTargets []strin
 }
 
 func hookClaimRoute(candidate beads.Bead) string {
-	if routedTo := strings.TrimSpace(candidate.Metadata[beadmeta.RoutedToMetadataKey]); routedTo != "" {
+	if hookClaimRouteState(candidate) == hookRouteRouted {
+		routedTo := strings.TrimSpace(candidate.Metadata[beadmeta.RoutedToMetadataKey])
 		return routedTo
 	}
 	if strings.TrimSpace(candidate.Metadata[beadmeta.KindMetadataKey]) == beadmeta.KindWorkflow {

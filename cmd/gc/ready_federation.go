@@ -271,6 +271,27 @@ func federateReadyBeads(legs []readyLeg, q beads.ReadyQuery) ([]beads.Bead, erro
 	})
 }
 
+func federateReadyBeadsWithOwner(legs []readyLeg, q beads.ReadyQuery) ([]beads.Bead, map[string]readyLeg, error) {
+	// Keep the owner map beside the merge so provenance follows the same
+	// first-leg-wins rule as the returned rows.
+	var merged []beads.Bead
+	owner := make(map[string]readyLeg)
+	for _, leg := range legs {
+		rows, err := beads.HandlesFor(leg.store).Live.Ready(q)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s store: %w", leg.label, err)
+		}
+		for _, bead := range rows {
+			if _, seen := owner[bead.ID]; seen {
+				continue
+			}
+			owner[bead.ID] = leg
+			merged = append(merged, bead)
+		}
+	}
+	return merged, owner, nil
+}
+
 // federateListBeads reads a status-scoped list from every leg and merges it. It
 // backs the --status arm, where a graph step assigned to a worker that died
 // lives in the relocated store.
@@ -287,14 +308,8 @@ func federateListBeads(legs []readyLeg, q beads.ListQuery) ([]beads.Bead, error)
 }
 
 // federateListBeadsWithOwner is federateListBeads plus a record of which leg
-// served each merged row.
-//
-// It is separate rather than a widened federateListBeads because only the
-// crash-recovery arm needs the ownership map, and every other caller would then
-// carry a map it discards. The merge rule is the same one federateBeadLegs
-// applies — first leg to return an id wins — restated here rather than shared,
-// because sharing it would mean threading a per-leg callback through the read
-// closure that federateBeadLegs deliberately keeps store-shaped.
+// served each merged row. The merge rule is first leg to return an id wins,
+// matching federateBeadLegs.
 func federateListBeadsWithOwner(legs []readyLeg, q beads.ListQuery) ([]beads.Bead, map[string]readyLeg, error) {
 	var merged []beads.Bead
 	owner := make(map[string]readyLeg)
