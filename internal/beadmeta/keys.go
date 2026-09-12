@@ -148,12 +148,17 @@ const (
 	FormulaSourceMetadataKey             = "gc.formula_source"
 	GCExemptMetadataKey                  = "gc.gc_exempt"
 	Graphv2RootKeyMetadataKey            = "gc.graphv2_root_key"
-	IdempotencyKeyMetadataKey            = "gc.idempotency_key"
-	InputConvoyIDMetadataKey             = "gc.input_convoy_id"
-	InstantiatingMetadataKey             = "gc.instantiating"
-	IterationMetadataKey                 = "gc.iteration"
-	ItemRootKeyMetadataKey               = "gc.item_root_key"
-	KindMetadataKey                      = "gc.kind"
+	// HookClaimStoreMetadataKey is an invocation-local source-store annotation
+	// carried by the built-in ready JSON used by gc hook --claim. It is never
+	// persisted to a bead; declaring it here keeps the metadata-shaped wire
+	// field on the same compiler-checked vocabulary as engine metadata keys.
+	HookClaimStoreMetadataKey = "gc.hook_store"
+	IdempotencyKeyMetadataKey = "gc.idempotency_key"
+	InputConvoyIDMetadataKey  = "gc.input_convoy_id"
+	InstantiatingMetadataKey  = "gc.instantiating"
+	IterationMetadataKey      = "gc.iteration"
+	ItemRootKeyMetadataKey    = "gc.item_root_key"
+	KindMetadataKey           = "gc.kind"
 	// CompletionFactsConvergedMetadataKey stamps a graph.v2 workflow root whose
 	// completion facts the completions backstop has fully reconciled.
 	CompletionFactsConvergedMetadataKey  = "gc.completion_facts_converged"
@@ -458,6 +463,7 @@ var KnownMetadataKeys = []string{
 	FormulaSourceMetadataKey,
 	GCExemptMetadataKey,
 	Graphv2RootKeyMetadataKey,
+	HookClaimStoreMetadataKey,
 	IdempotencyKeyMetadataKey,
 	InputConvoyIDMetadataKey,
 	InstantiatingMetadataKey,

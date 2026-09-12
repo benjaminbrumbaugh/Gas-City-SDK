@@ -19,7 +19,7 @@ const hookClaimStoreSourceEnv = "GC_HOOK_CLAIM_STORE_SOURCE"
 // hookClaimStoreMetadataKey is an invocation-local metadata key emitted by the
 // built-in federated ready reader. It exists only on the decoded work-query
 // candidate and is never written to a bead.
-const hookClaimStoreMetadataKey = "gc.hook_store"
+const hookClaimStoreMetadataKey = beadmeta.HookClaimStoreMetadataKey
 
 type hookRouteState uint8
 
