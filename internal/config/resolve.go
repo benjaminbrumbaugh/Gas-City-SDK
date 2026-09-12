@@ -44,6 +44,7 @@ func ResolveProvider(agent *Agent, ws *Workspace, cityProviders map[string]Provi
 			Lifecycle:  agent.Lifecycle,
 			PromptMode: mode,
 			PromptFlag: agent.PromptFlag,
+			Env:        cloneStringMap(agent.Env),
 		}
 		if agent.ReadyDelayMs != nil {
 			resolved.ReadyDelayMs = *agent.ReadyDelayMs
@@ -71,7 +72,11 @@ func ResolveProvider(agent *Agent, ws *Workspace, cityProviders map[string]Provi
 	if name == "" {
 		// No provider name — check workspace start_command escape hatch.
 		if ws != nil && ws.StartCommand != "" {
-			return &ResolvedProvider{Command: ws.StartCommand, PromptMode: "none"}, nil
+			return &ResolvedProvider{
+				Command:    ws.StartCommand,
+				PromptMode: "none",
+				Env:        cloneStringMap(agent.Env),
+			}, nil
 		}
 		return nil, fmt.Errorf("%w: provider is required; set agent.provider or workspace.provider to a key in [providers]", ErrProviderNotFound)
 	}

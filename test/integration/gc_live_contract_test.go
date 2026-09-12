@@ -21,6 +21,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/testutil"
 	"github.com/pb33f/libopenapi"
 	openapivalidator "github.com/pb33f/libopenapi-validator"
 )
@@ -137,9 +138,10 @@ func TestGCLiveContract_BeadsAndEvents(t *testing.T) {
 		t.Fatalf("rig create response = %+v, want created rig %q", createdRig, rigName)
 	}
 	createdRigDetail := liveContractJSON[contractRig](t, baseURL, validator, http.MethodGet, cityBase+"/rig/"+url.PathEscape(rigName), nil, http.StatusOK)
-	if createdRigDetail.Name != rigName || createdRigDetail.Path != rigDir {
-		t.Fatalf("rig detail after create = %+v, want name=%q path=%q", createdRigDetail, rigName, rigDir)
+	if createdRigDetail.Name != rigName {
+		t.Fatalf("rig detail after create = %+v, want name=%q", createdRigDetail, rigName)
 	}
+	testutil.AssertSamePath(t, createdRigDetail.Path, rigDir)
 
 	liveContractJSON[struct {
 		Status   string `json:"status"`
