@@ -13,6 +13,28 @@ func (c *CachingStore) Create(b Bead) (Bead, error) {
 	})
 }
 
+// CreateDeterministic forwards only to a backing store with the atomic
+// deterministic-create capability, then absorbs the created or adopted row.
+// There is deliberately no fallback to Create.
+func (c *CachingStore) CreateDeterministic(key string, b Bead) (Bead, bool, error) {
+	if c == nil || c.backing == nil {
+		return Bead{}, false, fmt.Errorf("deterministic create through cache: %w", ErrDeterministicCreateUnsupported)
+	}
+	sequence := c.reserveMutationSequence()
+	created, inserted, err := CreateDeterministically(c.backing, key, b)
+	if err != nil {
+		c.releaseMutationReservation()
+		return Bead{}, false, err
+	}
+	return c.absorbOrderedAuthoritativeCreated(created, inserted, sequence), inserted, nil
+}
+
+// SupportsDeterministicCreate reports whether the cache's backing store can
+// honor atomic deterministic create-or-adopt.
+func (c *CachingStore) SupportsDeterministicCreate() bool {
+	return c != nil && SupportsDeterministicCreate(c.backing)
+}
+
 // CreateWithStorage passes through a policy-selected storage class to backing
 // stores that support table-specific creates, then updates the cache.
 func (c *CachingStore) CreateWithStorage(b Bead, storage StorageClass) (Bead, error) {
@@ -30,13 +52,69 @@ func (c *CachingStore) createWith(create func() (Bead, error)) (Bead, error) {
 	if err != nil {
 		return created, err
 	}
+	return c.absorbCreated(created, true), nil
+}
 
+// reserveMutationSequence orders an in-flight deterministic write against
+// overlapping local mutations without publishing a bead fence before the
+// backing operation succeeds.
+func (c *CachingStore) reserveMutationSequence() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mutationSeq++
+	c.reservedMutations++
+	return c.mutationSeq
+}
+
+func (c *CachingStore) releaseMutationReservation() {
+	c.mu.Lock()
+	c.reservedMutations--
+	c.mu.Unlock()
+}
+
+// absorbOrderedAuthoritativeCreated caches an atomic create result only when no
+// newer local mutation or deletion of that ID committed while the create call
+// was returning.
+func (c *CachingStore) absorbOrderedAuthoritativeCreated(created Bead, notify bool, sequence uint64) Bead {
+	c.mu.Lock()
+	c.reservedMutations--
+	if !c.noteReservedLocalMutationLocked(created.ID, sequence) {
+		c.mu.Unlock()
+		if notify {
+			c.notifyChange("bead.created", created)
+		}
+		return created
+	}
+	c.absorbFreshLocked(created.ID, created, time.Now(), absorbOpts{
+		depsMode:   depsFromFields,
+		seqMode:    seqKeep,
+		clearDirty: true,
+	})
+	c.markFreshLocked(time.Now())
+	c.updateStatsLocked()
+	c.mu.Unlock()
+
+	if notify {
+		c.notifyChange("bead.created", created)
+	}
+	return created
+}
+
+// absorbCreated refreshes a successful ordinary create before caching it.
+func (c *CachingStore) absorbCreated(created Bead, notify bool) Bead {
 	if fresh, err := c.backing.Get(created.ID); err == nil {
 		created = fresh
 	} else if !errors.Is(err, ErrNotFound) {
 		c.recordProblem("refresh bead after create", fmt.Errorf("%s: %w", created.ID, err))
 	}
+	return c.absorbAuthoritativeCreated(created, notify)
+}
 
+// absorbAuthoritativeCreated caches the exact snapshot returned by an atomic
+// deterministic create-or-adopt operation. A later Get is not part of that
+// decision and may expose lagged or conflicting state, so it must not replace
+// the authoritative result.
+func (c *CachingStore) absorbAuthoritativeCreated(created Bead, notify bool) Bead {
 	c.mu.Lock()
 	c.noteLocalMutationLocked(created.ID)
 	c.absorbFreshLocked(created.ID, created, time.Now(), absorbOpts{
@@ -48,8 +126,10 @@ func (c *CachingStore) createWith(create func() (Bead, error)) (Bead, error) {
 	c.updateStatsLocked()
 	c.mu.Unlock()
 
-	c.notifyChange("bead.created", created)
-	return created, nil
+	if notify {
+		c.notifyChange("bead.created", created)
+	}
+	return created
 }
 
 // Update passes through to the backing store and refreshes the cache.

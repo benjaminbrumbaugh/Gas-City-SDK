@@ -1,0 +1,187 @@
+{
+  "schema_version": "routing/v3",
+  "correlation_id": "bead-42",
+  "workload": {
+    "profile_source": "caller",
+    "operation": "generate",
+    "artifact": "code",
+    "complexity": "medium",
+    "consequence": "medium",
+    "execution_shape": "one_shot",
+    "reasoning_requirement": "medium",
+    "minimum_context_tokens": 32768,
+    "expected_input_tokens": 4096,
+    "expected_output_tokens": 2048,
+    "required_tools": [],
+    "structured_output": "none",
+    "required_input_modalities": [
+      "text"
+    ],
+    "required_output_modalities": [
+      "text"
+    ]
+  },
+  "constraints": {
+    "policy": {
+      "data_handling": {
+        "remote_disclosure": "permitted"
+      },
+      "residency": {
+        "allowed_regions": null
+      },
+      "providers": {
+        "allowed_provider_ids": null,
+        "denied_provider_ids": []
+      },
+      "spend": {
+        "max_cost_micros": null,
+        "currency": null
+      }
+    },
+    "work": {
+      "allowed_target_ids": [
+        "anthropic-personal-max-opus-5-high"
+      ],
+      "model_id": null,
+      "target_id": null
+    }
+  },
+  "objectives": {
+    "quality": 50,
+    "latency": 25,
+    "cost": 25
+  },
+  "preferences": {
+    "preferred_provider_id": null,
+    "preferred_model_id": null
+  },
+  "candidates": [
+    {
+      "candidate_id": "pair-opus-5-personal-max",
+      "model": {
+        "canonical_model": "anthropic/claude-opus-5",
+        "serve_as": "claude-opus-5",
+        "variant_ref": "full-precision",
+        "reasoning_effort": "low",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "max_context_tokens": 200000,
+        "max_output_tokens": 8192,
+        "supports_tools": true,
+        "supports_structured_output": true,
+        "supports_streaming": true
+      },
+      "execution_target": {
+        "target_id": "anthropic-personal-max-opus-5-high",
+        "fabric_kind": "cloud_endpoint",
+        "provider_id": "anthropic",
+        "account_ref": "personal-max",
+        "admission_model": "immediate",
+        "activation_model": "always_on",
+        "capacity_model": "concurrency_slots",
+        "deployment_max_context_tokens": 200000,
+        "deployment_max_output_tokens": 8192,
+        "residency": "us",
+        "data_handling": "remote_provider",
+        "isolation": "shared_tenant",
+        "resource_profile": null,
+        "config_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "adapter_id": "claude-code-harness",
+        "adapter_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "invocation_binding": {
+          "binding_kind": "adapter_handle",
+          "binding_ref": "anthropic-personal-max",
+          "adapter_id": "claude-code-harness",
+          "adapter_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "economics": {
+        "pricing_model": "included_in_subscription",
+        "currency": null,
+        "input_price_micros": null,
+        "output_price_micros": null,
+        "unit_price_micros": null,
+        "allocation_unit": null,
+        "price_basis": "posted",
+        "volatility": "fixed"
+      },
+      "model_assessment_ref": "assess-opus-5",
+      "entitlement_ref": "ent-personal-max",
+      "observation_ref": "obs-personal-max"
+    }
+  ],
+  "model_assessments": [
+    {
+      "record_id": "assess-opus-5",
+      "canonical_model": "anthropic/claude-opus-5",
+      "variant_ref": "full-precision",
+      "operation_fitness": [
+        {
+          "operation": "transform",
+          "fitness": 90
+        }
+      ],
+      "assessed_at_unix": 1000,
+      "expires_at_unix": 9000,
+      "provenance": "fixture:assessment"
+    }
+  ],
+  "entitlements": [
+    {
+      "record_id": "ent-personal-max",
+      "account_ref": "personal-max",
+      "enabled": true,
+      "authorization_state": "authorized",
+      "billing_mode": "subscription",
+      "allocation_balance": null,
+      "observed_at_unix": 1000,
+      "expires_at_unix": 9000,
+      "provenance": "fixture:entitlement"
+    }
+  ],
+  "observations": [
+    {
+      "record_id": "obs-personal-max",
+      "target_id": "anthropic-personal-max-opus-5-high",
+      "reachable": {
+        "known": true,
+        "value": true
+      },
+      "authenticated": {
+        "known": true,
+        "value": true
+      },
+      "circuit": {
+        "known": true,
+        "value": "closed"
+      },
+      "throttle": {
+        "known": true,
+        "value": "none"
+      },
+      "capacity": {
+        "model": "concurrency_slots",
+        "free_slots": {
+          "known": true,
+          "value": 4
+        },
+        "total_slots": {
+          "known": true,
+          "value": 8
+        }
+      },
+      "queue": null,
+      "startup": null,
+      "live_price": null,
+      "observed_at_unix": 1000,
+      "expires_at_unix": 9000,
+      "provenance": "fixture:observation"
+    }
+  ],
+  "now_unix": 1500,
+  "policy_version": "policy/v3"
+}

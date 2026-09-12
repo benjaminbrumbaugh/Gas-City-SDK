@@ -1191,6 +1191,45 @@ func (s *BdStore) Create(b Bead) (Bead, error) {
 	return s.CreateWithStorage(b, StorageDefault)
 }
 
+// SupportsDeterministicCreate reports whether this BdStore has the local
+// prerequisites needed to attempt an explicit-ID create-only operation.
+func (s *BdStore) SupportsDeterministicCreate() bool {
+	return s != nil && s.runner != nil && s.idPrefix != ""
+}
+
+// CreateDeterministic pins a native-shaped ID in this store's owned namespace.
+// bd's primary-key constraint is the atomic arbiter: a losing or ambiguous
+// create reads the exact ID back and adopts it only when the persisted create
+// tuple matches. It never uses --force, which is reserved for migrations.
+func (s *BdStore) CreateDeterministic(key string, b Bead) (Bead, bool, error) {
+	if s == nil {
+		return Bead{}, false, fmt.Errorf("deterministic create: nil BdStore: %w", ErrDeterministicCreateUnsupported)
+	}
+	want, err := deterministicCreateRequest(s.IDPrefix(), key, b)
+	if err != nil {
+		return Bead{}, false, err
+	}
+	created, createErr := s.Create(want)
+	if createErr == nil {
+		if created.ID != want.ID || !sameDeterministicCreateTuple(created, want) {
+			return Bead{}, false, deterministicCreateConflict(want.ID)
+		}
+		return created, true, nil
+	}
+
+	existing, getErr := s.Get(want.ID)
+	if getErr != nil {
+		if errors.Is(getErr, ErrNotFound) {
+			return Bead{}, false, createErr
+		}
+		return Bead{}, false, errors.Join(createErr, fmt.Errorf("reading deterministic create result %q: %w", want.ID, getErr))
+	}
+	if !sameDeterministicCreateTuple(existing, want) {
+		return Bead{}, false, deterministicCreateConflict(want.ID)
+	}
+	return existing, false, nil
+}
+
 // CreateWithStorage persists a new bead via bd create using a storage tier
 // selected by policy middleware.
 func (s *BdStore) CreateWithStorage(b Bead, storage StorageClass) (Bead, error) {

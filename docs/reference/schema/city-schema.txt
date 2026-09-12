@@ -1163,6 +1163,10 @@
           "$ref": "#/$defs/SessionConfig",
           "description": "Session configures the session provider backend."
         },
+        "recovery_responder": {
+          "$ref": "#/$defs/RecoveryResponderConfig",
+          "description": "RecoveryResponder optionally routes bounded recovery work for durable,\nhigh-confidence provider/session impairments."
+        },
         "mail": {
           "$ref": "#/$defs/MailConfig",
           "description": "Mail configures the mail provider backend."
@@ -2598,6 +2602,42 @@
       "additionalProperties": false,
       "type": "object",
       "description": "ProviderSpec defines a named provider's startup parameters."
+    },
+    "RecoveryResponderConfig": {
+      "properties": {
+        "targets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "minItems": 1
+        },
+        "wayfinder_url": {
+          "type": "string"
+        },
+        "wayfinder_request_file": {
+          "type": "string"
+        },
+        "hold": {
+          "type": "string"
+        },
+        "advisory_timeout": {
+          "type": "string"
+        },
+        "cooldown": {
+          "type": "string"
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "targets"
+      ],
+      "description": "RecoveryResponderConfig enables one-at-a-time ordinary recovery work for deterministic provider/session impairments."
     },
     "Rig": {
       "properties": {

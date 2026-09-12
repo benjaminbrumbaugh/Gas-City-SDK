@@ -458,6 +458,21 @@ func (s *emittingClassStore) DepRemove(issueID, dependsOnID string) error {
 // beads package publishes for it, or with the zero value where the question is
 // a capability question and the honest answer is "no".
 
+// CreateDeterministic forwards atomic create-or-adopt and emits only the
+// insertion; adopting an existing tuple is not a new mutation.
+func (s *emittingClassStore) CreateDeterministic(key string, bead beads.Bead) (beads.Bead, bool, error) {
+	created, inserted, err := beads.CreateDeterministically(s.Store, key, bead)
+	if inserted {
+		s.emitCreated(created, err)
+	}
+	return created, inserted, err
+}
+
+// SupportsDeterministicCreate reports the wrapped engine's effective capability.
+func (s *emittingClassStore) SupportsDeterministicCreate() bool {
+	return beads.SupportsDeterministicCreate(s.Store)
+}
+
 func (s *emittingClassStore) CreateWithStorage(bead beads.Bead, storage beads.StorageClass) (beads.Bead, error) {
 	creator, ok := s.Store.(beads.StorageCreateStore)
 	if !ok {

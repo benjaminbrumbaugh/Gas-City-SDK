@@ -130,6 +130,15 @@ var infoKeyCodec = []infoKeySpec{
 	{"session_health_reason", func(i *Info, v string) { i.HealthReason = v }},
 	{"provider_fence_identity", func(i *Info, v string) { i.ProviderFenceIdentity = v }},
 	{"session_drainable", func(i *Info, v string) { i.Drainable = strings.TrimSpace(v) == "true" }},
+	{"recovery_incident_id", func(i *Info, v string) { i.RecoveryIncidentID = v }},
+	{"recovery_impairment", func(i *Info, v string) { i.RecoveryImpairment = v }},
+	{"recovery_detected_at", func(i *Info, v string) { i.RecoveryDetectedAt = v }},
+	{"recovery_hold_until", func(i *Info, v string) { i.RecoveryHoldUntil = v }},
+	{"recovery_attempt", func(i *Info, v string) { i.RecoveryAttempt = v }},
+	{"recovery_attempted_targets", func(i *Info, v string) { i.RecoveryAttemptedTargets = v }},
+	{"recovery_cooldown_until", func(i *Info, v string) { i.RecoveryCooldownUntil = v }},
+	{"recovery_outcome", func(i *Info, v string) { i.RecoveryOutcome = v }},
+	{"recovery_work_id", func(i *Info, v string) { i.RecoveryWorkID = v }},
 
 	// trigger / brain-parent cluster (canonical gc.* keys via beadmeta)
 	{beadmeta.TriggerBeadIDMetadataKey, func(i *Info, v string) { i.TriggerBeadID = v }},

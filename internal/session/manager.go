@@ -201,6 +201,17 @@ type Info struct {
 	HealthReason          string // session_health_reason (raw)
 	ProviderFenceIdentity string // provider_fence_identity (raw provider preset identity)
 	Drainable             bool   // session_drainable == "true"
+	// Recovery responder state is persisted on the impaired session so controller
+	// restarts adopt one incident and its active ordinary work item.
+	RecoveryIncidentID       string // recovery_incident_id
+	RecoveryImpairment       string // recovery_impairment
+	RecoveryDetectedAt       string // recovery_detected_at (RFC3339)
+	RecoveryHoldUntil        string // recovery_hold_until (RFC3339)
+	RecoveryAttempt          string // recovery_attempt
+	RecoveryAttemptedTargets string // recovery_attempted_targets (newline-delimited)
+	RecoveryCooldownUntil    string // recovery_cooldown_until (RFC3339)
+	RecoveryOutcome          string // recovery_outcome
+	RecoveryWorkID           string // recovery_work_id
 
 	// --- trigger / brain-parent cluster (controller read surface) ---
 	//
