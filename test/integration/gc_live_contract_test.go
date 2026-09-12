@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/testutil"
@@ -1110,25 +1111,58 @@ func liveContractHTTPRequest(baseURL, method, path string, body any) (*http.Requ
 
 func assertLiveContractStreamOpens(t *testing.T, baseURL, path string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Session wake starts the provider asynchronously. During that handoff the
+	// stream precheck can truthfully report no live output; keep observing the
+	// target route until the wake settles, while preserving a bounded failure.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
-	if err != nil {
-		t.Fatalf("build stream request %s: %v", path, err)
-	}
-	req.Header.Set("Accept", "text/event-stream")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET %s stream: %v", path, err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-	if resp.StatusCode != http.StatusOK {
+	var lastStatus int
+	var lastBody string
+	var lastContentType string
+	var lastErr error
+	bo := backoff.NewExponentialBackOff(
+		backoff.WithInitialInterval(250*time.Millisecond),
+		backoff.WithMaxInterval(250*time.Millisecond),
+		backoff.WithMaxElapsedTime(30*time.Second),
+	)
+	err := backoff.Retry(func() error {
+		requestCtx, requestCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer requestCancel()
+		req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, baseURL+path, nil)
+		if err != nil {
+			t.Fatalf("build stream request %s: %v", path, err)
+		}
+		req.Header.Set("Accept", "text/event-stream")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastErr = err
+			return err
+		}
+		lastErr = nil
+		lastStatus = resp.StatusCode
+		lastContentType = resp.Header.Get("Content-Type")
+		if resp.StatusCode == http.StatusOK {
+			_ = resp.Body.Close()
+			if !strings.Contains(lastContentType, "text/event-stream") {
+				t.Fatalf("GET %s stream content-type = %q, want text/event-stream", path, lastContentType)
+			}
+			return nil
+		}
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		t.Fatalf("GET %s stream status = %d, want 200; body: %s", path, resp.StatusCode, string(raw))
+		_ = resp.Body.Close()
+		lastBody = string(raw)
+		if resp.StatusCode != http.StatusNotFound {
+			return backoff.Permanent(fmt.Errorf("GET %s stream status = %d, want 200; body: %s", path, resp.StatusCode, lastBody))
+		}
+		return fmt.Errorf("GET %s stream returned transient 404", path)
+	}, bo)
+	if err == nil {
+		return
 	}
-	if contentType := resp.Header.Get("Content-Type"); !strings.Contains(contentType, "text/event-stream") {
-		t.Fatalf("GET %s stream content-type = %q, want text/event-stream", path, contentType)
+	if lastErr != nil {
+		t.Fatalf("GET %s stream: %v", path, lastErr)
 	}
+	t.Fatalf("GET %s stream status = %d, want 200; body: %s", path, lastStatus, lastBody)
 }
 
 func validateLiveContractResponse(t *testing.T, v openapivalidator.Validator, req *http.Request, resp *http.Response, raw []byte) {
