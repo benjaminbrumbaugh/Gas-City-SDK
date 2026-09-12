@@ -45,6 +45,11 @@ type recoveryConditionalOnlyStore struct {
 	beads.ConditionalWriter
 }
 
+type recoveryDeterministicOnlyStore struct {
+	beads.Store
+	beads.DeterministicCreator
+}
+
 func TestRecoveryResponderUnsupportedDestinationFailsBeforeHoldMutation(t *testing.T) {
 	base := recoveryTestStore(t, "quota_exceeded")
 	store := &recoveryConditionalOnlyStore{Store: base, ConditionalWriter: base}
@@ -61,6 +66,48 @@ func TestRecoveryResponderUnsupportedDestinationFailsBeforeHoldMutation(t *testi
 	if persisted.Metadata["held_until"] != "" || persisted.Metadata["recovery_incident_id"] != "" {
 		t.Fatalf("unsupported destination mutated recovery state: %#v", persisted.Metadata)
 	}
+}
+
+func TestRecoveryResponderUnsupportedWorkFenceFailsBeforeSourceMutation(t *testing.T) {
+	source := recoveryTestStore(t, "quota_exceeded")
+	workBase := beads.NewMemStore()
+	work := &recoveryDeterministicOnlyStore{Store: workBase, DeterministicCreator: workBase}
+	responder := NewRecoveryResponder(session.NewStore(beads.SessionStore{Store: source}), work, RecoveryResponderOptions{
+		Targets: []string{"rig/first"}, HoldDuration: time.Hour,
+	})
+
+	if _, err := responder.Reconcile(context.Background(), time.Now().UTC()); !errors.Is(err, beads.ErrConditionalWriteUnsupported) {
+		t.Fatalf("Reconcile error = %v, want unsupported work fence", err)
+	}
+	persisted, err := source.Get("session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Metadata["held_until"] != "" || persisted.Metadata["recovery_incident_id"] != "" || persisted.Metadata["recovery_responder_lease"] != "" {
+		t.Fatalf("unsupported work fence mutated source state: %#v", persisted.Metadata)
+	}
+	assertRecoveryWorkCount(t, work, 0)
+}
+
+func TestRecoveryResponderIncapableWorkFenceFailsBeforeSourceMutation(t *testing.T) {
+	source := recoveryTestStore(t, "quota_exceeded")
+	work := beads.NewMemStore()
+	work.DisableConditionalWrites = true
+	responder := NewRecoveryResponder(session.NewStore(beads.SessionStore{Store: source}), work, RecoveryResponderOptions{
+		Targets: []string{"rig/first"}, HoldDuration: time.Hour,
+	})
+
+	if _, err := responder.Reconcile(context.Background(), time.Now().UTC()); !errors.Is(err, beads.ErrConditionalWriteUnsupported) {
+		t.Fatalf("Reconcile error = %v, want incapable work fence", err)
+	}
+	persisted, err := source.Get("session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Metadata["held_until"] != "" || persisted.Metadata["recovery_incident_id"] != "" || persisted.Metadata["recovery_responder_lease"] != "" {
+		t.Fatalf("incapable work fence mutated source state: %#v", persisted.Metadata)
+	}
+	assertRecoveryWorkCount(t, work, 0)
 }
 
 func TestHighConfidenceRecoveryImpairmentIsDeterministic(t *testing.T) {
@@ -399,17 +446,19 @@ func TestRecoveryResponderClosesNewWorkWhenSourceClosesBeforeActivation(t *testi
 	}
 }
 
-type recoverySourceAdoptsAfterWorkCreateStore struct {
+type recoveryCompensationAdoptionBarrierStore struct {
 	*beads.MemStore
+	closeStarted     chan struct{}
+	allowClose       chan struct{}
+	closeOnce        sync.Once
+	hideRecoveryWork bool
 }
 
-func (s *recoverySourceAdoptsAfterWorkCreateStore) CreateDeterministic(key string, candidate beads.Bead) (beads.Bead, bool, error) {
+func (s *recoveryCompensationAdoptionBarrierStore) CreateDeterministic(key string, candidate beads.Bead) (beads.Bead, bool, error) {
 	work, created, err := s.MemStore.CreateDeterministic(key, candidate)
 	if err == nil && created && hasRecoveryWorkLabel(candidate.Labels) {
 		if updateErr := s.SetMetadataBatch("session-1", map[string]string{
-			"recovery_incident_id": candidate.Metadata[beadmeta.RecoveryIncidentMetadataKey],
-			"recovery_outcome":     "active",
-			"recovery_work_id":     work.ID,
+			"recovery_responder_lease": "expired-owner\n1970-01-01T00:00:00Z",
 		}); updateErr != nil {
 			return beads.Bead{}, false, updateErr
 		}
@@ -417,22 +466,259 @@ func (s *recoverySourceAdoptsAfterWorkCreateStore) CreateDeterministic(key strin
 	return work, created, err
 }
 
-func TestRecoveryResponderPreservesWorkAdoptedBeforeActivationCAS(t *testing.T) {
-	store := &recoverySourceAdoptsAfterWorkCreateStore{MemStore: recoveryTestStore(t, "quota_exceeded")}
-	responder := NewRecoveryResponder(session.NewStore(beads.SessionStore{Store: store}), store, RecoveryResponderOptions{
-		Targets: []string{"rig/first"}, HoldDuration: time.Hour,
-	})
+func (s *recoveryCompensationAdoptionBarrierStore) ListByMetadata(filters map[string]string, limit int, opts ...beads.QueryOpt) ([]beads.Bead, error) {
+	if s.hideRecoveryWork {
+		if _, ok := filters[beadmeta.RecoverySourceSessionMetadataKey]; ok {
+			return nil, nil
+		}
+		if _, ok := filters[beadmeta.RecoveryIncidentMetadataKey]; ok {
+			return nil, nil
+		}
+	}
+	return s.MemStore.ListByMetadata(filters, limit, opts...)
+}
 
-	report, err := responder.Reconcile(context.Background(), time.Now().UTC())
+func (s *recoveryCompensationAdoptionBarrierStore) waitBeforeCompensatingClose(id string) {
+	if id == "session-1" {
+		return
+	}
+	s.closeOnce.Do(func() {
+		close(s.closeStarted)
+		<-s.allowClose
+	})
+}
+
+func (s *recoveryCompensationAdoptionBarrierStore) Close(id string) error {
+	s.waitBeforeCompensatingClose(id)
+	return s.MemStore.Close(id)
+}
+
+func (s *recoveryCompensationAdoptionBarrierStore) CloseIfMatch(id string, revision int64) error {
+	s.waitBeforeCompensatingClose(id)
+	return s.MemStore.CloseIfMatch(id, revision)
+}
+
+func TestRecoveryResponderDeterministicSuccessorAdoptionFencesCompensatingClose(t *testing.T) {
+	store := &recoveryCompensationAdoptionBarrierStore{
+		MemStore:     recoveryTestStore(t, "quota_exceeded"),
+		closeStarted: make(chan struct{}),
+		allowClose:   make(chan struct{}),
+	}
+	options := RecoveryResponderOptions{Targets: []string{"rig/first"}, HoldDuration: time.Hour}
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	firstResult := make(chan error, 1)
+	go func() {
+		_, err := NewRecoveryResponder(session.NewStore(beads.SessionStore{Store: store}), store, options).
+			Reconcile(context.Background(), now)
+		firstResult <- err
+	}()
+
+	<-store.closeStarted          // Creator checked the source and is about to compensate.
+	store.hideRecoveryWork = true // Force the successor through deterministic-create adoption.
+	report, err := NewRecoveryResponder(session.NewStore(beads.SessionStore{Store: store}), store, options).
+		Reconcile(context.Background(), now.Add(time.Minute))
+	store.hideRecoveryWork = false
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Created != 0 || report.Active != 0 {
-		t.Fatalf("report = %+v, want stale creator to report no activation", report)
+	if report.Active != 1 || report.Created != 0 {
+		t.Fatalf("successor report = %+v, want authoritative adoption", report)
 	}
+	close(store.allowClose)
+	if err := <-firstResult; err != nil {
+		t.Fatal(err)
+	}
+
 	work := onlyRecoveryWork(t, store)
 	if work.Status == "closed" {
-		t.Fatalf("adopted recovery work was closed: %+v", work)
+		t.Fatalf("compensator closed authoritatively adopted work: %+v", work)
+	}
+	info, err := session.NewStore(beads.SessionStore{Store: store}).Get("session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.RecoveryOutcome != "active" || info.RecoveryWorkID != work.ID {
+		t.Fatalf("source did not retain successor adoption: %+v", info)
+	}
+}
+
+type recoveryAdoptionFailureStore struct {
+	*beads.MemStore
+	failSourceActivation    bool
+	closeBeforeReserve      bool
+	reservationCommitErr    error
+	reservationInterference bool
+}
+
+func (s *recoveryAdoptionFailureStore) UpdateIfMatch(id string, revision int64, opts beads.UpdateOpts) error {
+	if s.closeBeforeReserve && id != "session-1" && opts.Metadata[beadmeta.RecoveryAdoptionFenceMetadataKey] != "" {
+		s.closeBeforeReserve = false
+		if err := s.Close(id); err != nil {
+			return err
+		}
+	}
+	if s.failSourceActivation && id == "session-1" && opts.Metadata["recovery_outcome"] == "active" {
+		s.failSourceActivation = false
+		if err := s.SetMetadataBatch(id, map[string]string{
+			"state": "active", "session_health": "healthy", "session_health_reason": "",
+			"session_drainable": "", "provider_terminal_error": "", "provider_terminal_error_at": "",
+			"recovery_outcome": "verified", "recovery_work_id": "", "recovery_hold_until": "", "held_until": "",
+		}); err != nil {
+			return err
+		}
+	}
+	err := s.MemStore.UpdateIfMatch(id, revision, opts)
+	if err == nil && id != "session-1" && opts.Metadata[beadmeta.RecoveryAdoptionFenceMetadataKey] != "" && s.reservationInterference {
+		s.reservationInterference = false
+		if interferenceErr := s.SetMetadata(id, "test.reservation_interference", "true"); interferenceErr != nil {
+			return interferenceErr
+		}
+	}
+	if err == nil && id != "session-1" && opts.Metadata[beadmeta.RecoveryAdoptionFenceMetadataKey] != "" && s.reservationCommitErr != nil {
+		injected := s.reservationCommitErr
+		s.reservationCommitErr = nil
+		return injected
+	}
+	return err
+}
+
+func TestRecoveryResponderFailedAdopterClosesItsReservedWork(t *testing.T) {
+	store := &recoveryAdoptionFailureStore{MemStore: recoveryTestStore(t, "quota_exceeded")}
+	sessions := session.NewStore(beads.SessionStore{Store: store})
+	options := RecoveryResponderOptions{Targets: []string{"rig/first"}, HoldDuration: time.Hour}
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	if _, err := NewRecoveryResponder(sessions, store, options).Reconcile(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetMetadataBatch("session-1", map[string]string{
+		"recovery_outcome": "verified", "recovery_work_id": "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store.failSourceActivation = true
+
+	report, err := NewRecoveryResponder(sessions, store, options).Reconcile(context.Background(), now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report != (RecoveryReport{}) {
+		t.Fatalf("report = %+v, want failed adoption", report)
+	}
+	work := onlyRecoveryWork(t, store)
+	if work.Status != "closed" {
+		t.Fatalf("failed adopter stranded executable work: %+v", work)
+	}
+	info, err := sessions.Get("session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.RecoveryOutcome != "verified" || info.RecoveryWorkID != "" {
+		t.Fatalf("failed adopter changed authoritative source state: %+v", info)
+	}
+}
+
+func TestRecoveryResponderWorkCloseWinningReservationPreventsAdoption(t *testing.T) {
+	store := &recoveryAdoptionFailureStore{MemStore: recoveryTestStore(t, "quota_exceeded")}
+	sessions := session.NewStore(beads.SessionStore{Store: store})
+	options := RecoveryResponderOptions{Targets: []string{"rig/first"}, HoldDuration: time.Hour}
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	if _, err := NewRecoveryResponder(sessions, store, options).Reconcile(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetMetadataBatch("session-1", map[string]string{
+		"recovery_outcome": "verified", "recovery_work_id": "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store.closeBeforeReserve = true
+
+	report, err := NewRecoveryResponder(sessions, store, options).Reconcile(context.Background(), now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report != (RecoveryReport{}) {
+		t.Fatalf("report = %+v, want lost reservation", report)
+	}
+	work := onlyRecoveryWork(t, store)
+	if work.Status != "closed" {
+		t.Fatalf("reservation loser left work open: %+v", work)
+	}
+	info, err := sessions.Get("session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.RecoveryOutcome != "verified" || info.RecoveryWorkID != "" {
+		t.Fatalf("reservation loser activated closed work: %+v", info)
+	}
+}
+
+func TestRecoveryResponderInterveningWorkMutationInvalidatesReservationReadback(t *testing.T) {
+	store := &recoveryAdoptionFailureStore{MemStore: recoveryTestStore(t, "quota_exceeded")}
+	sessions := session.NewStore(beads.SessionStore{Store: store})
+	options := RecoveryResponderOptions{Targets: []string{"rig/first"}, HoldDuration: time.Hour}
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	if _, err := NewRecoveryResponder(sessions, store, options).Reconcile(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetMetadataBatch("session-1", map[string]string{
+		"recovery_outcome": "verified", "recovery_work_id": "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store.reservationInterference = true
+
+	report, err := NewRecoveryResponder(sessions, store, options).Reconcile(context.Background(), now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report != (RecoveryReport{}) {
+		t.Fatalf("report = %+v, want invalidated reservation", report)
+	}
+	work := onlyRecoveryWork(t, store)
+	if work.Status == "closed" || work.Metadata["test.reservation_interference"] != "true" {
+		t.Fatalf("intervening work mutation was overwritten or closed: %+v", work)
+	}
+	info, err := sessions.Get("session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.RecoveryOutcome != "verified" || info.RecoveryWorkID != "" {
+		t.Fatalf("invalidated reservation activated source: %+v", info)
+	}
+}
+
+func TestRecoveryResponderReservationCommitErrorReadbackContinuesAdoption(t *testing.T) {
+	store := &recoveryAdoptionFailureStore{MemStore: recoveryTestStore(t, "quota_exceeded")}
+	sessions := session.NewStore(beads.SessionStore{Store: store})
+	options := RecoveryResponderOptions{Targets: []string{"rig/first"}, HoldDuration: time.Hour}
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	if _, err := NewRecoveryResponder(sessions, store, options).Reconcile(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetMetadataBatch("session-1", map[string]string{
+		"recovery_outcome": "verified", "recovery_work_id": "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store.reservationCommitErr = errors.New("injected ambiguous reservation response")
+
+	report, err := NewRecoveryResponder(sessions, store, options).Reconcile(context.Background(), now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Active != 1 || report.Created != 0 {
+		t.Fatalf("report = %+v, want adopted work after exact reservation readback", report)
+	}
+	work := onlyRecoveryWork(t, store)
+	if work.Status == "closed" || work.Metadata[beadmeta.RecoveryAdoptionFenceMetadataKey] == "" {
+		t.Fatalf("ambiguous committed reservation did not remain active: %+v", work)
+	}
+	info, err := sessions.Get("session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.RecoveryOutcome != "active" || info.RecoveryWorkID != work.ID {
+		t.Fatalf("exact reservation readback did not activate source: %+v", info)
 	}
 }
 

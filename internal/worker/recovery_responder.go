@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -119,6 +121,10 @@ func (r *RecoveryResponder) Reconcile(ctx context.Context, now time.Time) (Recov
 	if !beads.SupportsDeterministicCreate(r.work) {
 		return report, beads.ErrDeterministicCreateUnsupported
 	}
+	workWriter, err := beads.PreflightConditionalWriter(r.work)
+	if err != nil {
+		return report, err
+	}
 	infos, err := r.sessions.List("", "")
 	if err != nil {
 		return report, err
@@ -135,7 +141,7 @@ func (r *RecoveryResponder) Reconcile(ctx context.Context, now time.Time) (Recov
 		if impairment == "" {
 			continue
 		}
-		result, advised, err := r.reconcileIncident(ctx, info, impairment, now.UTC(), advisoryAvailable)
+		result, advised, err := r.reconcileIncident(ctx, info, impairment, now.UTC(), advisoryAvailable, workWriter)
 		if err != nil {
 			return report, fmt.Errorf("recovery responder session %s: %w", info.ID, err)
 		}
@@ -183,7 +189,7 @@ func (r *RecoveryResponder) verifyRecovery(info session.Info) (returnErr error) 
 	return err
 }
 
-func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.Info, impairment string, now time.Time, allowAdvice bool) (report RecoveryReport, advised bool, returnErr error) {
+func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.Info, impairment string, now time.Time, allowAdvice bool, workWriter beads.ConditionalWriter) (report RecoveryReport, advised bool, returnErr error) {
 	// Keep the cheap pre-lease census, but never mutate from its stale session
 	// snapshot. Adoption and creation both serialize through the durable lease.
 	if _, err := r.openRecoveryWorkForSource(info.ID); err != nil {
@@ -222,7 +228,7 @@ func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.
 	if active, err := r.openRecoveryWorkForSource(info.ID); err != nil {
 		return report, false, err
 	} else if active != nil {
-		adopted, nextSnapshot, err := r.adoptRecoveryWork(snapshot, *active, impairment, now)
+		adopted, nextSnapshot, err := r.adoptRecoveryWork(snapshot, *active, impairment, now, workWriter)
 		snapshot = nextSnapshot
 		return adopted, false, err
 	}
@@ -261,7 +267,7 @@ func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.
 	attempt, attemptedTargets, active := recoveryAttempts(works)
 	planned := state.Outcome == "planned"
 	if planned && active != nil {
-		adopted, nextSnapshot, err := r.adoptRecoveryWork(snapshot, *active, impairment, now)
+		adopted, nextSnapshot, err := r.adoptRecoveryWork(snapshot, *active, impairment, now, workWriter)
 		snapshot = nextSnapshot
 		return adopted, false, err
 	}
@@ -298,17 +304,9 @@ func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.
 		state.AttemptedTargets = attemptedTargets
 	}
 	if active != nil {
-		state.WorkID = active.ID
-		state.Outcome = "active"
-		snapshot, err = r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
-		if err != nil {
-			if recoveryFenceLost(err) {
-				return report, false, nil
-			}
-			return report, false, err
-		}
-		report.Active = 1
-		return report, false, nil
+		adopted, nextSnapshot, err := r.adoptRecoveryWork(snapshot, *active, impairment, now, workWriter)
+		snapshot = nextSnapshot
+		return adopted, false, err
 	}
 
 	if !planned && attempt > 0 && state.Outcome != "attempt_closed" && state.Outcome != "exhausted" {
@@ -425,6 +423,16 @@ func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.
 	if err != nil {
 		return report, advised, fmt.Errorf("create ordinary recovery work: %w", err)
 	}
+	if !created {
+		reservedWork, won, reserveErr := r.reserveRecoveryWork(workWriter, work)
+		if reserveErr != nil {
+			return report, advised, fmt.Errorf("reserve deterministic recovery work %s for adoption: %w", work.ID, reserveErr)
+		}
+		if !won {
+			return report, advised, nil
+		}
+		work = reservedWork
+	}
 	state.Attempt = nextAttempt
 	state.AttemptedTargets = append([]string(nil), state.AttemptedTargets...)
 	state.CooldownUntil = time.Time{}
@@ -432,9 +440,18 @@ func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.
 	state.WorkID = work.ID
 	snapshot, err = r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
 	if err != nil {
-		if created && !r.recoveryWorkWasAdopted(info.ID, state.IncidentID, work.ID) {
-			if closeErr := r.work.Close(work.ID); closeErr != nil {
+		if created {
+			closeErr := r.closeUnadoptedRecoveryWork(workWriter, info.ID, state.IncidentID, work)
+			if closeErr != nil {
 				return report, advised, errors.Join(err, fmt.Errorf("close unbound recovery work %s: %w", work.ID, closeErr))
+			}
+		} else {
+			adopted, closeErr := r.compensateRecoveryWorkReservation(workWriter, info.ID, state.IncidentID, work)
+			if closeErr != nil {
+				return report, advised, errors.Join(err, fmt.Errorf("close failed deterministic recovery work adoption %s: %w", work.ID, closeErr))
+			}
+			if adopted {
+				return RecoveryReport{Active: 1}, advised, nil
 			}
 		}
 		if recoveryFenceLost(err) {
@@ -454,6 +471,93 @@ func (r *RecoveryResponder) recoveryWorkWasAdopted(sourceSessionID, incidentID, 
 	current, err := r.sessions.Get(sourceSessionID)
 	return err == nil && !current.Closed && current.RecoveryOutcome == "active" &&
 		current.RecoveryIncidentID == incidentID && current.RecoveryWorkID == workID
+}
+
+func (r *RecoveryResponder) closeUnadoptedRecoveryWork(writer beads.ConditionalWriter, sourceSessionID, incidentID string, work beads.Bead) error {
+	if r.recoveryWorkWasAdopted(sourceSessionID, incidentID, work.ID) {
+		return nil
+	}
+	if err := writer.CloseIfMatch(work.ID, work.Revision); err != nil {
+		if !beads.IsPreconditionFailed(err) {
+			return err
+		}
+		if r.recoveryWorkWasAdopted(sourceSessionID, incidentID, work.ID) {
+			return nil
+		}
+		current, getErr := r.work.Get(work.ID)
+		if getErr != nil {
+			return errors.Join(err, fmt.Errorf("read recovery work after close fence loss: %w", getErr))
+		}
+		if current.Status == "closed" || strings.TrimSpace(current.Metadata[beadmeta.RecoveryAdoptionFenceMetadataKey]) != "" {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func recoveryWorkMatchesReservation(before, current beads.Bead, token string) bool {
+	expected := before
+	expected.Metadata = maps.Clone(before.Metadata)
+	if expected.Metadata == nil {
+		expected.Metadata = beads.StringMap{}
+	}
+	expected.Metadata[beadmeta.RecoveryAdoptionFenceMetadataKey] = token
+	// Revision and UpdatedAt are store-owned effects of the reservation; the
+	// ready projection may also change independently as dependencies settle.
+	expected.Revision = current.Revision
+	expected.UpdatedAt = current.UpdatedAt
+	expected.IsBlocked = current.IsBlocked
+	return reflect.DeepEqual(expected, current)
+}
+
+func (r *RecoveryResponder) reserveRecoveryWork(writer beads.ConditionalWriter, work beads.Bead) (beads.Bead, bool, error) {
+	token := uuid.NewString()
+	err := writer.UpdateIfMatch(work.ID, work.Revision, beads.UpdateOpts{Metadata: map[string]string{
+		beadmeta.RecoveryAdoptionFenceMetadataKey: token,
+	}})
+	if beads.IsPreconditionFailed(err) {
+		return beads.Bead{}, false, nil
+	}
+	current, getErr := r.work.Get(work.ID)
+	if getErr != nil {
+		if err != nil {
+			return beads.Bead{}, false, errors.Join(err, fmt.Errorf("read recovery work reservation: %w", getErr))
+		}
+		return beads.Bead{}, false, fmt.Errorf("read recovery work reservation: %w", getErr)
+	}
+	if current.Status == "closed" || current.Metadata[beadmeta.RecoveryAdoptionFenceMetadataKey] != token ||
+		!recoveryWorkMatchesReservation(work, current, token) {
+		if err != nil {
+			return beads.Bead{}, false, err
+		}
+		return beads.Bead{}, false, nil
+	}
+	// An exact token readback resolves an ambiguous transport error in our favor.
+	return current, true, nil
+}
+
+func (r *RecoveryResponder) compensateRecoveryWorkReservation(writer beads.ConditionalWriter, sourceSessionID, incidentID string, work beads.Bead) (bool, error) {
+	if r.recoveryWorkWasAdopted(sourceSessionID, incidentID, work.ID) {
+		return true, nil
+	}
+	if err := writer.CloseIfMatch(work.ID, work.Revision); err != nil {
+		if !beads.IsPreconditionFailed(err) {
+			return false, err
+		}
+		if r.recoveryWorkWasAdopted(sourceSessionID, incidentID, work.ID) {
+			return true, nil
+		}
+		current, getErr := r.work.Get(work.ID)
+		if getErr != nil {
+			return false, errors.Join(err, fmt.Errorf("read reserved recovery work after close fence loss: %w", getErr))
+		}
+		if current.Status == "closed" {
+			return false, nil
+		}
+		return false, err
+	}
+	return false, nil
 }
 
 func recoveryFenceLost(err error) bool {
@@ -513,7 +617,7 @@ func (r *RecoveryResponder) openRecoveryWorkForSource(sourceSessionID string) (*
 	return active, nil
 }
 
-func (r *RecoveryResponder) adoptRecoveryWork(snapshot session.RecoverySnapshot, active beads.Bead, impairment string, now time.Time) (RecoveryReport, session.RecoverySnapshot, error) {
+func (r *RecoveryResponder) adoptRecoveryWork(snapshot session.RecoverySnapshot, active beads.Bead, impairment string, now time.Time, workWriter beads.ConditionalWriter) (RecoveryReport, session.RecoverySnapshot, error) {
 	info := snapshot.Info
 	incidentID := strings.TrimSpace(active.Metadata[beadmeta.RecoveryIncidentMetadataKey])
 	if err := r.validateRecoveryWork(active, info.ID, incidentID, impairment); err != nil {
@@ -595,8 +699,23 @@ func (r *RecoveryResponder) adoptRecoveryWork(snapshot session.RecoverySnapshot,
 	state.CooldownUntil = time.Time{}
 	state.Outcome = "active"
 	state.WorkID = active.ID
+	reserved, won, err := r.reserveRecoveryWork(workWriter, active)
+	if err != nil {
+		return RecoveryReport{}, snapshot, fmt.Errorf("reserve recovery work %s for adoption: %w", active.ID, err)
+	}
+	if !won {
+		return RecoveryReport{}, snapshot, nil
+	}
+	active = reserved
 	nextSnapshot, err := r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
 	if err != nil {
+		adopted, closeErr := r.compensateRecoveryWorkReservation(workWriter, info.ID, incidentID, active)
+		if closeErr != nil {
+			return RecoveryReport{}, snapshot, errors.Join(err, fmt.Errorf("close failed recovery work adoption %s: %w", active.ID, closeErr))
+		}
+		if adopted {
+			return RecoveryReport{Active: 1}, snapshot, nil
+		}
 		if recoveryFenceLost(err) {
 			return RecoveryReport{}, snapshot, nil
 		}

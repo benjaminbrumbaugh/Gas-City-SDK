@@ -183,6 +183,7 @@ const (
 	PerDispatchModelMetadataKey          = "gc.per_dispatch_model"
 	RalphStepIDMetadataKey               = "gc.ralph_step_id"
 	ReasoningMetadataKey                 = "gc.reasoning"
+	RecoveryAdoptionFenceMetadataKey     = "gc.recovery_adoption_fence"
 	RecoveryAttemptMetadataKey           = "gc.recovery_attempt"
 	RecoveryAttemptIDMetadataKey         = "gc.recovery_attempt_id"
 	RecoveryImpairmentMetadataKey        = "gc.recovery_impairment"

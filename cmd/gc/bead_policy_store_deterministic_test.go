@@ -34,6 +34,27 @@ func TestBeadPolicyStoreForwardsDeterministicCreate(t *testing.T) {
 	if _, _, err := creator.CreateDeterministic("recovery/incident/1", beads.Bead{Title: "different"}); !errors.Is(err, beads.ErrDeterministicCreateConflict) {
 		t.Fatalf("conflict error = %v", err)
 	}
+	writer, err := beads.PreflightConditionalWriter(wrapped)
+	if err != nil {
+		t.Fatalf("policy store does not expose the recovery work fence: %v", err)
+	}
+	if err := writer.UpdateIfMatch(first.ID, first.Revision, beads.UpdateOpts{Metadata: map[string]string{"gc.recovery_adoption_fence": "test-adopter"}}); err != nil {
+		t.Fatalf("reserve through policy store: %v", err)
+	}
+	reserved, err := wrapped.Get(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.CloseIfMatch(reserved.ID, reserved.Revision); err != nil {
+		t.Fatalf("compensate through policy store: %v", err)
+	}
+	closed, err := wrapped.Get(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.Status != "closed" {
+		t.Fatalf("conditional close through policy store left status %q", closed.Status)
+	}
 }
 
 func TestBeadPolicyStoreDeterministicCreateFailsClosed(t *testing.T) {
