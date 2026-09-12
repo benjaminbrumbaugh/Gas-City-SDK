@@ -393,6 +393,13 @@ esac
 	}
 }
 
+func TestNewProviderUsesProductionDefaultTimeout(t *testing.T) {
+	p := NewProvider("mail-provider")
+	if p.timeout != 30*time.Second {
+		t.Fatalf("NewProvider timeout = %v, want 30s", p.timeout)
+	}
+}
+
 // --- JSON wire format ---
 
 func TestMarshalSendInput(t *testing.T) {
