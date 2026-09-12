@@ -430,19 +430,30 @@ func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.
 	state.CooldownUntil = time.Time{}
 	state.Outcome = "active"
 	state.WorkID = work.ID
-	if created {
-		report.Created = 1
-	} else if work.Status != "closed" {
-		report.Active = 1
-	}
 	snapshot, err = r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
 	if err != nil {
+		if created && !r.recoveryWorkWasAdopted(info.ID, state.IncidentID, work.ID) {
+			if closeErr := r.work.Close(work.ID); closeErr != nil {
+				return report, advised, errors.Join(err, fmt.Errorf("close unbound recovery work %s: %w", work.ID, closeErr))
+			}
+		}
 		if recoveryFenceLost(err) {
 			return report, advised, nil
 		}
 		return report, advised, err
 	}
+	if created {
+		report.Created = 1
+	} else if work.Status != "closed" {
+		report.Active = 1
+	}
 	return report, advised, nil
+}
+
+func (r *RecoveryResponder) recoveryWorkWasAdopted(sourceSessionID, incidentID, workID string) bool {
+	current, err := r.sessions.Get(sourceSessionID)
+	return err == nil && !current.Closed && current.RecoveryOutcome == "active" &&
+		current.RecoveryIncidentID == incidentID && current.RecoveryWorkID == workID
 }
 
 func recoveryFenceLost(err error) bool {

@@ -366,6 +366,76 @@ func (s *recoveryCASRaceStore) CreateDeterministic(key string, bead beads.Bead) 
 	return created, inserted, err
 }
 
+type recoverySourceClosesAfterWorkCreateStore struct {
+	*beads.MemStore
+}
+
+func (s *recoverySourceClosesAfterWorkCreateStore) CreateDeterministic(key string, candidate beads.Bead) (beads.Bead, bool, error) {
+	work, created, err := s.MemStore.CreateDeterministic(key, candidate)
+	if err == nil && created && hasRecoveryWorkLabel(candidate.Labels) {
+		if closeErr := s.Close("session-1"); closeErr != nil {
+			return beads.Bead{}, false, closeErr
+		}
+	}
+	return work, created, err
+}
+
+func TestRecoveryResponderClosesNewWorkWhenSourceClosesBeforeActivation(t *testing.T) {
+	store := &recoverySourceClosesAfterWorkCreateStore{MemStore: recoveryTestStore(t, "quota_exceeded")}
+	responder := NewRecoveryResponder(session.NewStore(beads.SessionStore{Store: store}), store, RecoveryResponderOptions{
+		Targets: []string{"rig/first"}, HoldDuration: time.Hour,
+	})
+
+	report, err := responder.Reconcile(context.Background(), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Created != 0 || report.Active != 0 {
+		t.Fatalf("report = %+v, want no executable recovery work", report)
+	}
+	works := allRecoveryWork(t, store)
+	if len(works) != 1 || works[0].Status != "closed" {
+		t.Fatalf("recovery work = %+v, want one compensated closed task", works)
+	}
+}
+
+type recoverySourceAdoptsAfterWorkCreateStore struct {
+	*beads.MemStore
+}
+
+func (s *recoverySourceAdoptsAfterWorkCreateStore) CreateDeterministic(key string, candidate beads.Bead) (beads.Bead, bool, error) {
+	work, created, err := s.MemStore.CreateDeterministic(key, candidate)
+	if err == nil && created && hasRecoveryWorkLabel(candidate.Labels) {
+		if updateErr := s.SetMetadataBatch("session-1", map[string]string{
+			"recovery_incident_id": candidate.Metadata[beadmeta.RecoveryIncidentMetadataKey],
+			"recovery_outcome":     "active",
+			"recovery_work_id":     work.ID,
+		}); updateErr != nil {
+			return beads.Bead{}, false, updateErr
+		}
+	}
+	return work, created, err
+}
+
+func TestRecoveryResponderPreservesWorkAdoptedBeforeActivationCAS(t *testing.T) {
+	store := &recoverySourceAdoptsAfterWorkCreateStore{MemStore: recoveryTestStore(t, "quota_exceeded")}
+	responder := NewRecoveryResponder(session.NewStore(beads.SessionStore{Store: store}), store, RecoveryResponderOptions{
+		Targets: []string{"rig/first"}, HoldDuration: time.Hour,
+	})
+
+	report, err := responder.Reconcile(context.Background(), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Created != 0 || report.Active != 0 {
+		t.Fatalf("report = %+v, want stale creator to report no activation", report)
+	}
+	work := onlyRecoveryWork(t, store)
+	if work.Status == "closed" {
+		t.Fatalf("adopted recovery work was closed: %+v", work)
+	}
+}
+
 func TestRecoveryResponderConcurrentInstancesLeaseAndAdoptOneDeterministicAttempt(t *testing.T) {
 	base := recoveryTestStore(t, "quota_exceeded")
 	store := &recoveryCASRaceStore{
@@ -1058,8 +1128,8 @@ func TestRecoveryResponderCreationCannotOverwriteConcurrentVerification(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Created != 1 {
-		t.Fatalf("report = %+v, want deterministic work creation", report)
+	if report.Created != 0 || report.Active != 0 {
+		t.Fatalf("report = %+v, want stale creator to report no activation", report)
 	}
 	info, err := sessions.Get("session-1")
 	if err != nil {
@@ -1069,7 +1139,10 @@ func TestRecoveryResponderCreationCannotOverwriteConcurrentVerification(t *testi
 		info.ProviderTerminalError != "" || info.Drainable {
 		t.Fatalf("stale creator overwrote concurrent verification: %+v", info)
 	}
-	assertRecoveryWorkCount(t, store, 1)
+	work := onlyRecoveryWork(t, store)
+	if work.Status != "closed" {
+		t.Fatalf("unbound recovery work remained executable: %+v", work)
+	}
 }
 
 type recoveryAdoptionRaceStore struct {
