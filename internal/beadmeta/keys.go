@@ -184,6 +184,7 @@ const (
 	RalphStepIDMetadataKey               = "gc.ralph_step_id"
 	ReasoningMetadataKey                 = "gc.reasoning"
 	RecoveryAttemptMetadataKey           = "gc.recovery_attempt"
+	RecoveryAttemptIDMetadataKey         = "gc.recovery_attempt_id"
 	RecoveryImpairmentMetadataKey        = "gc.recovery_impairment"
 	RecoveryIncidentMetadataKey          = "gc.recovery_incident"
 	RecoverySourceSessionMetadataKey     = "gc.recovery_source_session"

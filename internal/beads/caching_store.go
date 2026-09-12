@@ -40,6 +40,7 @@ type CachingStore struct {
 	state               cacheState
 	lastFreshAt         time.Time
 	mutationSeq         uint64
+	reservedMutations   uint64
 	observationRevision uint64
 	primePartialErr     error
 
@@ -403,6 +404,19 @@ func (c *CachingStore) noteLocalMutationLocked(ids ...string) uint64 {
 	return seq
 }
 
+// noteReservedLocalMutationLocked publishes an earlier sequence reservation
+// only when no later mutation of this bead has already installed a fence.
+// Caller must hold c.mu.
+func (c *CachingStore) noteReservedLocalMutationLocked(id string, seq uint64) bool {
+	if c.beadSeq[id] > seq || c.deletedSeq[id] > seq {
+		return false
+	}
+	c.advanceObservationLocked()
+	c.beadSeq[id] = seq
+	c.localBeadAt[id] = time.Now()
+	return true
+}
+
 // absorbDepsMode selects how absorbFreshLocked sources the deps row for a bead.
 type absorbDepsMode int
 
@@ -505,7 +519,7 @@ func (c *CachingStore) absorbFreshLocked(id string, bead Bead, now time.Time, op
 	delete(c.deletedSeq, id)
 	switch opts.seqMode {
 	case seqClearGuarded:
-		if !recentLocalMutation(c.localBeadAt[id], now) {
+		if c.reservedMutations == 0 && !recentLocalMutation(c.localBeadAt[id], now) {
 			delete(c.beadSeq, id)
 			delete(c.localBeadAt, id)
 		}

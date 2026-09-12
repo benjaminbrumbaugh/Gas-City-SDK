@@ -1,9 +1,12 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/fsys"
 )
 
 func TestRecoveryResponderConfigProgressiveActivationAndDurations(t *testing.T) {
@@ -33,6 +36,71 @@ max_attempts = 2
 	}
 	if r.WayfinderRequestFile != ".gc/wayfinder-recovery.json" {
 		t.Fatalf("wayfinder request file = %q", r.WayfinderRequestFile)
+	}
+}
+
+func TestLoadWithIncludesRecoveryResponderTablePrecedence(t *testing.T) {
+	fs := fsys.NewFake()
+	fs.Files["/city/city.toml"] = []byte(`
+include = ["first.toml", "second.toml"]
+
+[[agent]]
+name = "root"
+dir = "rig"
+
+[[agent]]
+name = "first"
+dir = "rig"
+
+[[agent]]
+name = "second"
+dir = "rig"
+
+[recovery_responder]
+targets = ["rig/root"]
+wayfinder_url = "http://127.0.0.1:9876"
+wayfinder_request_file = ".gc/root-request.json"
+hold = "20m"
+max_attempts = 1
+`)
+	fs.Files["/city/first.toml"] = []byte(`
+[recovery_responder]
+targets = ["rig/first"]
+cooldown = "2m"
+max_attempts = 1
+`)
+	fs.Files["/city/second.toml"] = []byte(`
+[recovery_responder]
+targets = ["rig/second"]
+advisory_timeout = "1s"
+`)
+
+	cfg, _, err := LoadWithIncludes(fs, "/city/city.toml")
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	want := &RecoveryResponderConfig{
+		Targets:         []string{"rig/second"},
+		AdvisoryTimeout: "1s",
+	}
+	if !reflect.DeepEqual(cfg.RecoveryResponder, want) {
+		t.Fatalf("RecoveryResponder = %#v, want later include table %#v", cfg.RecoveryResponder, want)
+	}
+}
+
+func TestLoadWithIncludesAbsentRecoveryResponderStaysDisabled(t *testing.T) {
+	fs := fsys.NewFake()
+	fs.Files["/city/city.toml"] = []byte(`include = ["fragment.toml"]`)
+	fs.Files["/city/fragment.toml"] = []byte(`[workspace]
+name = "included"
+`)
+
+	cfg, _, err := LoadWithIncludes(fs, "/city/city.toml")
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	if cfg.RecoveryResponder != nil {
+		t.Fatalf("absent recovery_responder activated responder: %#v", cfg.RecoveryResponder)
 	}
 }
 

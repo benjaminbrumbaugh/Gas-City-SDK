@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -30,7 +29,7 @@ func (cr *CityRuntime) reconcileRecoveryResponder(ctx context.Context, now time.
 	}
 	responder := worker.NewRecoveryResponder(
 		sessionpkg.NewStore(cr.sessionsBeadStore()),
-		cr.graphBeadStore().Store,
+		cr.cityWorkStore().Store,
 		worker.RecoveryResponderOptions{
 			Targets: cfg.Targets, HoldDuration: cfg.HoldDuration(),
 			AdvisoryTimeout: cfg.AdvisoryTimeoutDuration(), Cooldown: cfg.CooldownDuration(),
@@ -51,37 +50,56 @@ func recoveryAdvisorForConfig(cityPath string, cfg *config.RecoveryResponderConf
 	if cfg == nil || strings.TrimSpace(cfg.WayfinderURL) == "" {
 		return nil, nil
 	}
-	requestPath, err := recoveryWayfinderRequestPath(cityPath, cfg.WayfinderRequestFile)
+	_, _, _, err := recoveryWayfinderRequestCandidate(cityPath, cfg.WayfinderRequestFile)
 	if err != nil {
 		return nil, err
 	}
-	template, err := os.ReadFile(requestPath)
-	if err != nil {
-		return nil, fmt.Errorf("read Wayfinder request template %q: %w", requestPath, err)
+	return fileRecoveryAdvisor{
+		baseURL:               cfg.WayfinderURL,
+		cityPath:              cityPath,
+		configuredRequestPath: cfg.WayfinderRequestFile,
+	}, nil
+}
+
+type fileRecoveryAdvisor struct {
+	baseURL               string
+	cityPath              string
+	configuredRequestPath string
+}
+
+func (a fileRecoveryAdvisor) Recommend(ctx context.Context, request worker.RecoveryRequest) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
-	advisor, err := worker.NewWayfinderRecoveryAdvisor(cfg.WayfinderURL, template)
+	root, requestPath, raw, err := recoveryWayfinderRequestCandidate(a.cityPath, a.configuredRequestPath)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return advisor, nil
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	relativePath, err := filepath.Rel(root, requestPath)
+	if err != nil {
+		return "", fmt.Errorf("relativize Wayfinder request template %q: %w", raw, err)
+	}
+	template, err := readRecoveryWayfinderTemplateAt(root, relativePath)
+	if err != nil {
+		return "", fmt.Errorf("read Wayfinder request template %q: %w", raw, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	advisor, err := worker.NewWayfinderRecoveryAdvisor(a.baseURL, template)
+	if err != nil {
+		return "", err
+	}
+	return advisor.Recommend(ctx, request)
 }
 
 func recoveryWayfinderRequestPath(cityPath, configured string) (string, error) {
-	root := pathutil.NormalizePathForCompare(strings.TrimSpace(cityPath))
-	if root == "" {
-		return "", fmt.Errorf("cannot resolve Wayfinder request template without city root")
-	}
-	raw := strings.TrimSpace(configured)
-	if raw == "" {
-		return "", fmt.Errorf("wayfinder_request_file is required")
-	}
-	candidate := raw
-	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(root, candidate)
-	}
-	candidate = pathutil.NormalizePathForCompare(candidate)
-	if !pathutil.PathWithin(root, candidate) {
-		return "", fmt.Errorf("wayfinder request template %q is outside city root", raw)
+	root, candidate, raw, err := recoveryWayfinderRequestCandidate(cityPath, configured)
+	if err != nil {
+		return "", err
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -97,4 +115,24 @@ func recoveryWayfinderRequestPath(cityPath, configured string) (string, error) {
 		return "", fmt.Errorf("wayfinder request template %q resolves outside city root", raw)
 	}
 	return resolvedCandidate, nil
+}
+
+func recoveryWayfinderRequestCandidate(cityPath, configured string) (root, candidate, raw string, err error) {
+	root = pathutil.NormalizePathForCompare(strings.TrimSpace(cityPath))
+	if root == "" {
+		return "", "", "", fmt.Errorf("cannot resolve Wayfinder request template without city root")
+	}
+	raw = strings.TrimSpace(configured)
+	if raw == "" {
+		return "", "", "", fmt.Errorf("wayfinder_request_file is required")
+	}
+	candidate = raw
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(root, candidate)
+	}
+	candidate = pathutil.NormalizePathForCompare(candidate)
+	if !pathutil.PathWithin(root, candidate) {
+		return "", "", "", fmt.Errorf("wayfinder request template %q is outside city root", raw)
+	}
+	return root, candidate, raw, nil
 }

@@ -11,13 +11,15 @@ package beads
 // wraps the SAME underlying store value the call site already used — no new
 // backend, no extra caching or policy layer — so behavior is byte-identical.
 //
-// Optional capabilities (e.g. Counter, GraphApplyStore, GraphApplyFor,
+// Most optional capabilities (e.g. Counter, GraphApplyStore, GraphApplyFor,
 // StorageCreateStore, Backing/ReadyLive) are NOT promoted through the embedding:
 // a type assertion on a typed store value asserts on the wrapper, not the
-// underlying store, and will fail. Access optional capabilities by asserting on
+// underlying store, and will fail. Access those capabilities by asserting on
 // the embedded .Store field instead (e.g. `c, ok := s.Store.(beads.Counter)`).
 // Likewise pass the unwrapped .Store field when calling a generic Store helper
-// that is shared across multiple classes.
+// that is shared across multiple classes. DeterministicCreator and conditional-
+// write resolution are explicit exceptions below because silently losing either
+// safety capability at this wrapper would make a correct caller fail or degrade.
 
 // WorkStore is a strongly-typed view over a single Store holding work beads
 // (the city's general task ledger). It is backed by the same underlying store
@@ -73,12 +75,74 @@ type NudgesStore struct {
 	Store
 }
 
+// CreateDeterministic preserves the optional capability through typed class
+// wrappers. Each method fails closed through CreateDeterministically when the
+// embedded store does not implement the atomic operation.
+func (s WorkStore) CreateDeterministic(key string, b Bead) (Bead, bool, error) {
+	return CreateDeterministically(s.Store, key, b)
+}
+
+// SupportsDeterministicCreate reports whether the wrapped work store supports
+// atomic deterministic create-or-adopt.
+func (s WorkStore) SupportsDeterministicCreate() bool {
+	return SupportsDeterministicCreate(s.Store)
+}
+
+// CreateDeterministic forwards an atomic deterministic create to the graph store.
+func (s GraphStore) CreateDeterministic(key string, b Bead) (Bead, bool, error) {
+	return CreateDeterministically(s.Store, key, b)
+}
+
+// SupportsDeterministicCreate reports the graph store's backing capability.
+func (s GraphStore) SupportsDeterministicCreate() bool { return SupportsDeterministicCreate(s.Store) }
+
+// CreateDeterministic forwards an atomic deterministic create to the session store.
+func (s SessionStore) CreateDeterministic(key string, b Bead) (Bead, bool, error) {
+	return CreateDeterministically(s.Store, key, b)
+}
+
+// SupportsDeterministicCreate reports the session store's backing capability.
+func (s SessionStore) SupportsDeterministicCreate() bool { return SupportsDeterministicCreate(s.Store) }
+
+// CreateDeterministic forwards an atomic deterministic create to the mail store.
+func (s MailStore) CreateDeterministic(key string, b Bead) (Bead, bool, error) {
+	return CreateDeterministically(s.Store, key, b)
+}
+
+// SupportsDeterministicCreate reports the mail store's backing capability.
+func (s MailStore) SupportsDeterministicCreate() bool { return SupportsDeterministicCreate(s.Store) }
+
+// CreateDeterministic forwards an atomic deterministic create to the orders store.
+func (s OrdersStore) CreateDeterministic(key string, b Bead) (Bead, bool, error) {
+	return CreateDeterministically(s.Store, key, b)
+}
+
+// SupportsDeterministicCreate reports the orders store's backing capability.
+func (s OrdersStore) SupportsDeterministicCreate() bool { return SupportsDeterministicCreate(s.Store) }
+
+// CreateDeterministic forwards an atomic deterministic create to the nudges store.
+func (s NudgesStore) CreateDeterministic(key string, b Bead) (Bead, bool, error) {
+	return CreateDeterministically(s.Store, key, b)
+}
+
+// SupportsDeterministicCreate reports the nudges store's backing capability.
+func (s NudgesStore) SupportsDeterministicCreate() bool { return SupportsDeterministicCreate(s.Store) }
+
+var (
+	_ DeterministicCreator = WorkStore{}
+	_ DeterministicCreator = GraphStore{}
+	_ DeterministicCreator = SessionStore{}
+	_ DeterministicCreator = MailStore{}
+	_ DeterministicCreator = OrdersStore{}
+	_ DeterministicCreator = NudgesStore{}
+)
+
 // The typed class wrappers declare their embedded store as the
 // conditional-writes resolution target, so ResolveConditionalWriter works on
-// a typed handle without the caller remembering to unwrap — the one optional
-// capability where forgetting the unwrap would not fail loudly but silently
-// resolve unset→legacy (fatal under require). All other optional capabilities
-// keep the assert-on-.Store convention above.
+// a typed handle without the caller remembering to unwrap — one of the safety
+// capabilities where forgetting the unwrap would not merely hide an optional
+// optimization but could silently resolve unset→legacy (fatal under require).
+// Most other optional capabilities keep the assert-on-.Store convention above.
 
 // ConditionalWritesResolveTarget declares the wrapped store as the
 // conditional-writes resolution target.

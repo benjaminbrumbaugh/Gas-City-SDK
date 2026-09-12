@@ -1176,6 +1176,11 @@ func mergeFragment(base, fragment *City, fragMeta toml.MetaData, fragPath string
 	if fragMeta.IsDefined("api") {
 		base.API = fragment.API
 	}
+	// A recovery_responder table replaces the preceding table wholesale;
+	// include order therefore gives later fragments explicit precedence.
+	if fragMeta.IsDefined("recovery_responder") {
+		base.RecoveryResponder = fragment.RecoveryResponder
+	}
 	mergeSessionSleep(base, fragment, fragMeta, fragPath, prov)
 	if fragMeta.IsDefined("convergence") {
 		base.Convergence = fragment.Convergence

@@ -2,10 +2,13 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
@@ -21,6 +24,7 @@ const (
 	maxRecoveryHold            = 24 * time.Hour
 	maxRecoveryAdvisoryTimeout = 5 * time.Second
 	maxRecoveryCooldown        = 24 * time.Hour
+	recoveryCreationLease      = 30 * time.Second
 )
 
 // RecoveryAdvisor may recommend one of the candidates supplied in the request.
@@ -57,7 +61,6 @@ type RecoveryReport struct {
 
 // RecoveryResponder turns durable impairments into serialized ordinary work.
 type RecoveryResponder struct {
-	mu       sync.Mutex
 	sessions *session.Store
 	work     beads.Store
 	options  RecoveryResponderOptions
@@ -84,9 +87,12 @@ func HighConfidenceRecoveryImpairment(info session.Info) string {
 	if strings.TrimSpace(info.HealthState) != "unhealthy" {
 		return ""
 	}
-	switch strings.TrimSpace(info.ProviderTerminalError) {
+	terminalError := strings.TrimSpace(info.ProviderTerminalError)
+	switch terminalError {
 	case "model_not_found", "quota_exceeded":
-		return strings.TrimSpace(info.ProviderTerminalError)
+		if info.Drainable && strings.TrimSpace(info.HealthReason) == terminalError {
+			return terminalError
+		}
 	}
 	if strings.TrimSpace(info.HealthReason) == "usage_limit_modal" && strings.TrimSpace(info.QuarantinedUntil) != "" {
 		return "usage_limit_modal"
@@ -110,20 +116,17 @@ func (r *RecoveryResponder) Reconcile(ctx context.Context, now time.Time) (Recov
 	if r.sessions == nil || r.work == nil {
 		return report, fmt.Errorf("recovery responder: missing session or work store")
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	if !beads.SupportsDeterministicCreate(r.work) {
+		return report, beads.ErrDeterministicCreateUnsupported
+	}
 	infos, err := r.sessions.List("", "")
 	if err != nil {
 		return report, err
 	}
+	advisoryAvailable := true
 	for _, info := range infos {
 		if recoveryVerifiedByReconciledState(info) {
-			state := recoveryStateFromInfo(info)
-			state.Outcome = "verified"
-			state.WorkID = ""
-			state.HoldUntil = time.Time{}
-			state.CooldownUntil = time.Time{}
-			if _, err := r.sessions.RecordRecoveryState(info, state); err != nil {
+			if err := r.verifyRecovery(info); err != nil {
 				return report, fmt.Errorf("verify recovery for session %s: %w", info.ID, err)
 			}
 			continue
@@ -132,9 +135,12 @@ func (r *RecoveryResponder) Reconcile(ctx context.Context, now time.Time) (Recov
 		if impairment == "" {
 			continue
 		}
-		result, err := r.reconcileIncident(ctx, info, impairment, now.UTC())
+		result, advised, err := r.reconcileIncident(ctx, info, impairment, now.UTC(), advisoryAvailable)
 		if err != nil {
 			return report, fmt.Errorf("recovery responder session %s: %w", info.ID, err)
+		}
+		if advised {
+			advisoryAvailable = false
 		}
 		report.Created += result.Created
 		report.Active += result.Active
@@ -144,112 +150,303 @@ func (r *RecoveryResponder) Reconcile(ctx context.Context, now time.Time) (Recov
 	return report, nil
 }
 
-func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.Info, impairment string, now time.Time) (RecoveryReport, error) {
-	var report RecoveryReport
+func (r *RecoveryResponder) verifyRecovery(info session.Info) (returnErr error) {
+	leaseNow := time.Now().UTC()
+	snapshot, acquired, err := r.sessions.AcquireRecoveryResponderLease(
+		info.ID, uuid.NewString(), leaseNow, leaseNow.Add(recoveryCreationLease),
+	)
+	if err != nil {
+		return fmt.Errorf("acquire verification lease: %w", err)
+	}
+	if !acquired {
+		return nil
+	}
+	defer func() {
+		if err := r.sessions.ReleaseRecoveryResponderLease(snapshot); err != nil && returnErr == nil {
+			returnErr = fmt.Errorf("release verification lease: %w", err)
+		}
+	}()
+
+	fresh := snapshot.Info
+	if !recoveryVerifiedByReconciledState(fresh) {
+		return nil
+	}
+	state := recoveryStateFromInfo(fresh)
+	state.Outcome = "verified"
+	state.WorkID = ""
+	state.HoldUntil = time.Time{}
+	state.CooldownUntil = time.Time{}
+	snapshot, err = r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
+	if recoveryFenceLost(err) {
+		return nil
+	}
+	return err
+}
+
+func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.Info, impairment string, now time.Time, allowAdvice bool) (report RecoveryReport, advised bool, returnErr error) {
+	// Keep the cheap pre-lease census, but never mutate from its stale session
+	// snapshot. Adoption and creation both serialize through the durable lease.
+	if _, err := r.openRecoveryWorkForSource(info.ID); err != nil {
+		return report, false, err
+	}
+
+	leaseNow := time.Now().UTC()
+	snapshot, acquired, err := r.sessions.AcquireRecoveryResponderLease(
+		info.ID, uuid.NewString(), leaseNow, leaseNow.Add(recoveryCreationLease),
+	)
+	if err != nil {
+		return report, false, fmt.Errorf("acquire creation lease: %w", err)
+	}
+	if !acquired {
+		// The winner owns every recovery-state mutation. A loser may report the
+		// already-created work, but must not adopt it from a stale snapshot.
+		if active, listErr := r.openRecoveryWorkForSource(info.ID); listErr != nil {
+			return report, false, listErr
+		} else if active != nil {
+			return RecoveryReport{Active: 1}, false, nil
+		}
+		return report, false, nil
+	}
+	defer func() {
+		if err := r.sessions.ReleaseRecoveryResponderLease(snapshot); err != nil && returnErr == nil {
+			returnErr = fmt.Errorf("release creation lease: %w", err)
+		}
+	}()
+
+	// Lease acquisition returns the only snapshot authorized for writes. Every
+	// branch below advances and retains that snapshot after a successful CAS.
+	info = snapshot.Info
+	if HighConfidenceRecoveryImpairment(info) != impairment {
+		return report, false, nil
+	}
+	if active, err := r.openRecoveryWorkForSource(info.ID); err != nil {
+		return report, false, err
+	} else if active != nil {
+		adopted, nextSnapshot, err := r.adoptRecoveryWork(snapshot, *active, impairment, now)
+		snapshot = nextSnapshot
+		return adopted, false, err
+	}
+
 	state := recoveryStateFromInfo(info)
 	if state.IncidentID == "" || state.Impairment != impairment || state.Outcome == "verified" {
 		state = session.RecoveryState{
-			IncidentID: "recovery-" + uuid.NewString(),
+			IncidentID: deterministicRecoveryIncidentID(info, impairment),
 			Impairment: impairment,
 			DetectedAt: now,
 			HoldUntil:  now.Add(r.options.HoldDuration),
 			Outcome:    "detected",
 		}
-		var err error
-		info, err = r.sessions.RecordRecoveryState(info, state)
+		snapshot, err = r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
 		if err != nil {
-			return report, err
+			if recoveryFenceLost(err) {
+				return report, false, nil
+			}
+			return report, false, err
 		}
+		info = snapshot.Info
 	}
+	if HighConfidenceRecoveryImpairment(info) != impairment {
+		return report, false, nil
+	}
+	state = recoveryStateFromInfo(info)
 
 	works, err := r.work.ListByMetadata(map[string]string{beadmeta.RecoveryIncidentMetadataKey: state.IncidentID}, 0, beads.IncludeClosed)
 	if err != nil {
-		return report, fmt.Errorf("list incident work: %w", err)
+		return report, false, fmt.Errorf("list incident work: %w", err)
+	}
+	works, err = r.validRecoveryWorks(works, info.ID, state.IncidentID, impairment)
+	if err != nil {
+		return report, false, err
 	}
 	attempt, attemptedTargets, active := recoveryAttempts(works)
-	state.Attempt = attempt
-	state.AttemptedTargets = attemptedTargets
+	planned := state.Outcome == "planned"
+	if planned && active != nil {
+		adopted, nextSnapshot, err := r.adoptRecoveryWork(snapshot, *active, impairment, now)
+		snapshot = nextSnapshot
+		return adopted, false, err
+	}
+	if planned {
+		if attempt == state.Attempt && slices.Equal(state.AttemptedTargets, attemptedTargets) {
+			// Creation committed but active-state writeback was lost, and the
+			// exact deterministic attempt is no longer active. Advance from the
+			// bound tuple instead of trying to recreate an open row over it.
+			state.Attempt = attempt
+			state.AttemptedTargets = append([]string(nil), attemptedTargets...)
+			state.WorkID = ""
+			state.Outcome = "attempt_closed"
+			state.CooldownUntil = now.Add(r.options.Cooldown)
+			snapshot, err = r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
+			if err != nil {
+				if recoveryFenceLost(err) {
+					return report, false, nil
+				}
+				return report, false, err
+			}
+			report.CoolingDown++
+			return report, true, nil
+		}
+		if state.Attempt != attempt+1 || state.Attempt > r.options.MaxAttempts || len(state.AttemptedTargets) != len(attemptedTargets)+1 ||
+			!slices.Equal(state.AttemptedTargets[:len(attemptedTargets)], attemptedTargets) ||
+			!containsRecoveryTarget(r.options.Targets, state.AttemptedTargets[len(state.AttemptedTargets)-1]) ||
+			containsRecoveryTarget(attemptedTargets, state.AttemptedTargets[len(state.AttemptedTargets)-1]) {
+			return report, false, fmt.Errorf("invalid persisted recovery plan for incident %q", state.IncidentID)
+		}
+		attempt = state.Attempt
+		attemptedTargets = append([]string(nil), state.AttemptedTargets...)
+	} else {
+		state.Attempt = attempt
+		state.AttemptedTargets = attemptedTargets
+	}
 	if active != nil {
 		state.WorkID = active.ID
 		state.Outcome = "active"
-		if _, err := r.sessions.RecordRecoveryState(info, state); err != nil {
-			return report, err
+		snapshot, err = r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
+		if err != nil {
+			if recoveryFenceLost(err) {
+				return report, false, nil
+			}
+			return report, false, err
 		}
 		report.Active = 1
-		return report, nil
+		return report, false, nil
 	}
 
-	if attempt > 0 && state.Outcome != "attempt_closed" && state.Outcome != "exhausted" {
+	if !planned && attempt > 0 && state.Outcome != "attempt_closed" && state.Outcome != "exhausted" {
 		if attempt >= r.options.MaxAttempts || len(attemptedTargets) >= len(r.options.Targets) {
 			state.Outcome = "exhausted"
 			state.CooldownUntil = time.Time{}
-			if _, err := r.sessions.RecordRecoveryState(info, state); err != nil {
-				return report, err
+			snapshot, err = r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
+			if err != nil {
+				if recoveryFenceLost(err) {
+					return report, false, nil
+				}
+				return report, false, err
 			}
 			report.Exhausted = 1
-			return report, nil
+			return report, false, nil
 		}
 		state.Outcome = "attempt_closed"
 		state.WorkID = ""
 		state.CooldownUntil = now.Add(r.options.Cooldown)
-		if _, err := r.sessions.RecordRecoveryState(info, state); err != nil {
-			return report, err
+		snapshot, err = r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
+		if err != nil {
+			if recoveryFenceLost(err) {
+				return report, false, nil
+			}
+			return report, false, err
 		}
 		report.CoolingDown = 1
-		return report, nil
+		return report, false, nil
 	}
 	if state.Outcome == "attempt_closed" && now.Before(state.CooldownUntil) {
 		report.CoolingDown = 1
-		return report, nil
+		return report, false, nil
 	}
-	if attempt >= r.options.MaxAttempts || len(attemptedTargets) >= len(r.options.Targets) {
+	if !planned && (attempt >= r.options.MaxAttempts || len(attemptedTargets) >= len(r.options.Targets)) {
 		state.Outcome = "exhausted"
 		state.CooldownUntil = time.Time{}
-		if _, err := r.sessions.RecordRecoveryState(info, state); err != nil {
-			return report, err
+		snapshot, err = r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
+		if err != nil {
+			if recoveryFenceLost(err) {
+				return report, false, nil
+			}
+			return report, false, err
 		}
 		report.Exhausted = 1
-		return report, nil
+		return report, false, nil
 	}
 
-	candidates := remainingRecoveryTargets(r.options.Targets, attemptedTargets)
-	target := r.recommend(ctx, RecoveryRequest{
-		CorrelationID: state.IncidentID,
-		Now:           now,
-		Targets:       append([]string(nil), candidates...),
-	})
-	if !containsRecoveryTarget(candidates, target) {
-		target = candidates[0]
+	var nextAttempt int
+	var attemptIdentity, target string
+	if planned {
+		nextAttempt = state.Attempt
+		target = state.AttemptedTargets[len(state.AttemptedTargets)-1]
+		attemptIdentity = deterministicRecoveryAttemptID(state.IncidentID, nextAttempt)
+	} else {
+		candidates := remainingRecoveryTargets(r.options.Targets, attemptedTargets)
+		if r.options.Advisor != nil && !allowAdvice {
+			// One potentially blocking advisory decision is permitted per controller
+			// tick. Leave this incident durable for the next tick rather than silently
+			// bypassing the configured advisor.
+			return report, false, nil
+		}
+		nextAttempt = attempt + 1
+		attemptIdentity = deterministicRecoveryAttemptID(state.IncidentID, nextAttempt)
+		target = r.recommend(ctx, RecoveryRequest{
+			CorrelationID: attemptIdentity,
+			Now:           now,
+			Targets:       append([]string(nil), candidates...),
+		})
+		advised = r.options.Advisor != nil
+		if !containsRecoveryTarget(candidates, target) {
+			target = candidates[0]
+		}
+		// Persist the immutable attempt tuple before the cross-store create. A
+		// successor that fences this lease must reuse this exact attempt/target,
+		// so concurrent creators converge on one deterministic work row.
+		state.Attempt = nextAttempt
+		state.AttemptedTargets = append(append([]string(nil), attemptedTargets...), target)
+		state.Outcome = "planned"
+		state.WorkID = ""
+		snapshot, err = r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
+		if err != nil {
+			if recoveryFenceLost(err) {
+				return report, advised, nil
+			}
+			return report, advised, err
+		}
 	}
-	nextAttempt := attempt + 1
-	work, err := r.work.Create(beads.Bead{
+	// Revalidate and extend the lease immediately before the external work-store
+	// mutation. An expired or superseded holder cannot create a new tuple.
+	renewNow := time.Now().UTC()
+	snapshot, err = r.sessions.RenewRecoveryResponderLease(snapshot, renewNow, renewNow.Add(recoveryCreationLease))
+	if err != nil {
+		if recoveryFenceLost(err) {
+			return report, advised, nil
+		}
+		return report, advised, err
+	}
+	candidate := beads.Bead{
 		Title:       fmt.Sprintf("Recover impaired session %s", info.ID),
 		Type:        "task",
-		Description: recoveryWorkDescription(info, state.IncidentID, impairment),
+		Description: recoveryWorkDescription(info.ID, state.IncidentID, impairment, target),
 		Labels:      []string{RecoveryWorkLabel},
 		Metadata: beads.StringMap{
 			beadmeta.RoutedToMetadataKey:              target,
+			beadmeta.RecoveryAttemptIDMetadataKey:     attemptIdentity,
 			beadmeta.RecoveryAttemptMetadataKey:       strconv.Itoa(nextAttempt),
 			beadmeta.RecoveryImpairmentMetadataKey:    impairment,
 			beadmeta.RecoveryIncidentMetadataKey:      state.IncidentID,
 			beadmeta.RecoverySourceSessionMetadataKey: info.ID,
 			beadmeta.RecoveryTargetMetadataKey:        target,
 		},
-	})
+	}
+	work, created, err := beads.CreateDeterministically(r.work, attemptIdentity, candidate)
 	if err != nil {
-		return report, fmt.Errorf("create ordinary recovery work: %w", err)
+		return report, advised, fmt.Errorf("create ordinary recovery work: %w", err)
 	}
 	state.Attempt = nextAttempt
-	state.AttemptedTargets = attemptedTargets
-	state.AttemptedTargets = append(state.AttemptedTargets, target)
+	state.AttemptedTargets = append([]string(nil), state.AttemptedTargets...)
 	state.CooldownUntil = time.Time{}
 	state.Outcome = "active"
 	state.WorkID = work.ID
-	if _, err := r.sessions.RecordRecoveryState(info, state); err != nil {
-		return report, err
+	if created {
+		report.Created = 1
+	} else if work.Status != "closed" {
+		report.Active = 1
 	}
-	report.Created = 1
-	return report, nil
+	snapshot, err = r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
+	if err != nil {
+		if recoveryFenceLost(err) {
+			return report, advised, nil
+		}
+		return report, advised, err
+	}
+	return report, advised, nil
+}
+
+func recoveryFenceLost(err error) bool {
+	return beads.IsPreconditionFailed(err) || errors.Is(err, session.ErrRecoveryResponderLeaseLost)
 }
 
 func (r *RecoveryResponder) recommend(ctx context.Context, request RecoveryRequest) string {
@@ -271,11 +468,186 @@ func (r *RecoveryResponder) recommend(ctx context.Context, request RecoveryReque
 	case <-adviceCtx.Done():
 		return ""
 	case result := <-resultCh:
-		if result.err != nil {
+		// If completion and timeout become ready together, the deadline owns the
+		// result deterministically rather than scheduler select order.
+		if adviceCtx.Err() != nil || result.err != nil {
 			return ""
 		}
 		return result.target
 	}
+}
+
+func (r *RecoveryResponder) openRecoveryWorkForSource(sourceSessionID string) (*beads.Bead, error) {
+	works, err := r.work.ListByMetadata(map[string]string{
+		beadmeta.RecoverySourceSessionMetadataKey: sourceSessionID,
+	}, 0, beads.IncludeClosed)
+	if err != nil {
+		return nil, fmt.Errorf("list source recovery work: %w", err)
+	}
+	var active *beads.Bead
+	for _, work := range works {
+		if work.Status != "closed" && hasRecoveryWorkLabel(work.Labels) {
+			incidentID := strings.TrimSpace(work.Metadata[beadmeta.RecoveryIncidentMetadataKey])
+			impairment := strings.TrimSpace(work.Metadata[beadmeta.RecoveryImpairmentMetadataKey])
+			if err := r.validateRecoveryWork(work, sourceSessionID, incidentID, impairment); err != nil {
+				return nil, err
+			}
+			if active != nil {
+				return nil, fmt.Errorf("multiple active recovery attempts for source session %q", sourceSessionID)
+			}
+			candidate := work
+			active = &candidate
+		}
+	}
+	return active, nil
+}
+
+func (r *RecoveryResponder) adoptRecoveryWork(snapshot session.RecoverySnapshot, active beads.Bead, impairment string, now time.Time) (RecoveryReport, session.RecoverySnapshot, error) {
+	info := snapshot.Info
+	incidentID := strings.TrimSpace(active.Metadata[beadmeta.RecoveryIncidentMetadataKey])
+	if err := r.validateRecoveryWork(active, info.ID, incidentID, impairment); err != nil {
+		return RecoveryReport{}, snapshot, err
+	}
+	if info.RecoveryOutcome == "planned" {
+		plan := recoveryStateFromInfo(info)
+		activeAttempt := parseRecoveryAttempt(active.Metadata[beadmeta.RecoveryAttemptMetadataKey])
+		activeTarget := strings.TrimSpace(active.Metadata[beadmeta.RecoveryTargetMetadataKey])
+		if incidentID != plan.IncidentID || activeAttempt != plan.Attempt || len(plan.AttemptedTargets) == 0 || activeTarget != plan.AttemptedTargets[len(plan.AttemptedTargets)-1] {
+			return RecoveryReport{}, snapshot, fmt.Errorf("active recovery work %q conflicts with persisted recovery plan", active.ID)
+		}
+	}
+	works, err := r.work.List(beads.ListQuery{
+		Metadata:      map[string]string{beadmeta.RecoveryIncidentMetadataKey: incidentID},
+		IncludeClosed: true,
+		Live:          true,
+	})
+	if err != nil {
+		return RecoveryReport{}, snapshot, fmt.Errorf("list adopted incident work: %w", err)
+	}
+	works, err = r.validRecoveryWorks(works, info.ID, incidentID, impairment)
+	if err != nil {
+		return RecoveryReport{}, snapshot, err
+	}
+	attempt, attemptedTargets, authoritativeActive := recoveryAttempts(works)
+	if info.RecoveryOutcome == "planned" {
+		plan := recoveryStateFromInfo(info)
+		if authoritativeActive == nil {
+			if attempt != plan.Attempt || !slices.Equal(attemptedTargets, plan.AttemptedTargets) {
+				return RecoveryReport{}, snapshot, fmt.Errorf("closed recovery work history conflicts with persisted recovery plan")
+			}
+			plan.WorkID = ""
+			plan.Outcome = "attempt_closed"
+			plan.CooldownUntil = now.Add(r.options.Cooldown)
+			nextSnapshot, recordErr := r.sessions.RecordRecoveryStateIfCurrent(snapshot, plan)
+			if recordErr != nil {
+				if recoveryFenceLost(recordErr) {
+					return RecoveryReport{}, snapshot, nil
+				}
+				return RecoveryReport{}, snapshot, recordErr
+			}
+			return RecoveryReport{CoolingDown: 1}, nextSnapshot, nil
+		}
+		active = *authoritativeActive
+		activeAttempt := parseRecoveryAttempt(active.Metadata[beadmeta.RecoveryAttemptMetadataKey])
+		activeTarget := strings.TrimSpace(active.Metadata[beadmeta.RecoveryTargetMetadataKey])
+		if strings.TrimSpace(active.Metadata[beadmeta.RecoveryIncidentMetadataKey]) != plan.IncidentID || activeAttempt != plan.Attempt || len(plan.AttemptedTargets) == 0 || activeTarget != plan.AttemptedTargets[len(plan.AttemptedTargets)-1] {
+			return RecoveryReport{}, snapshot, fmt.Errorf("active recovery work %q conflicts with persisted recovery plan", active.ID)
+		}
+	} else if authoritativeActive != nil {
+		active = *authoritativeActive
+	}
+	if attempt == 0 {
+		attempt = parseRecoveryAttempt(active.Metadata[beadmeta.RecoveryAttemptMetadataKey])
+		if target := strings.TrimSpace(active.Metadata[beadmeta.RecoveryTargetMetadataKey]); target != "" {
+			attemptedTargets = []string{target}
+		}
+	}
+	state := recoveryStateFromInfo(info)
+	if state.IncidentID != incidentID {
+		state = session.RecoveryState{
+			IncidentID: incidentID,
+			Impairment: strings.TrimSpace(active.Metadata[beadmeta.RecoveryImpairmentMetadataKey]),
+			DetectedAt: now,
+			HoldUntil:  now.Add(r.options.HoldDuration),
+		}
+	} else if state.Outcome == "verified" {
+		// A verified incident releases its hold. If the same still-open work is
+		// adopted after the impairment recurs, bound the renewed recovery window
+		// from this recurrence rather than leaving the session unheld.
+		state.HoldUntil = now.Add(r.options.HoldDuration)
+	}
+	if state.Impairment == "" {
+		state.Impairment = impairment
+	}
+	state.Attempt = attempt
+	state.AttemptedTargets = attemptedTargets
+	state.CooldownUntil = time.Time{}
+	state.Outcome = "active"
+	state.WorkID = active.ID
+	nextSnapshot, err := r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
+	if err != nil {
+		if recoveryFenceLost(err) {
+			return RecoveryReport{}, snapshot, nil
+		}
+		return RecoveryReport{}, snapshot, err
+	}
+	return RecoveryReport{Active: 1}, nextSnapshot, nil
+}
+
+func (r *RecoveryResponder) validRecoveryWorks(works []beads.Bead, sourceSessionID, incidentID, impairment string) ([]beads.Bead, error) {
+	valid := make([]beads.Bead, 0, len(works))
+	for _, work := range works {
+		if !hasRecoveryWorkLabel(work.Labels) || strings.TrimSpace(work.Metadata[beadmeta.RecoverySourceSessionMetadataKey]) != sourceSessionID {
+			continue
+		}
+		if err := r.validateRecoveryWork(work, sourceSessionID, incidentID, impairment); err != nil {
+			return nil, err
+		}
+		valid = append(valid, work)
+	}
+	return valid, nil
+}
+
+func (r *RecoveryResponder) validateRecoveryWork(work beads.Bead, sourceSessionID, incidentID, impairment string) error {
+	attempt := parseRecoveryAttempt(work.Metadata[beadmeta.RecoveryAttemptMetadataKey])
+	target := strings.TrimSpace(work.Metadata[beadmeta.RecoveryTargetMetadataKey])
+	if strings.TrimSpace(incidentID) == "" || strings.TrimSpace(impairment) == "" || attempt <= 0 || attempt > r.options.MaxAttempts ||
+		!containsRecoveryTarget(r.options.Targets, target) || work.Type != "task" ||
+		work.Title != fmt.Sprintf("Recover impaired session %s", sourceSessionID) ||
+		work.Description != recoveryWorkDescription(sourceSessionID, incidentID, impairment, target) ||
+		len(work.Labels) != 1 || work.Labels[0] != RecoveryWorkLabel ||
+		strings.TrimSpace(work.Metadata[beadmeta.RecoverySourceSessionMetadataKey]) != sourceSessionID ||
+		strings.TrimSpace(work.Metadata[beadmeta.RecoveryIncidentMetadataKey]) != incidentID ||
+		strings.TrimSpace(work.Metadata[beadmeta.RecoveryImpairmentMetadataKey]) != impairment ||
+		strings.TrimSpace(work.Metadata[beadmeta.RecoveryAttemptIDMetadataKey]) != deterministicRecoveryAttemptID(incidentID, attempt) ||
+		strings.TrimSpace(work.Metadata[beadmeta.RoutedToMetadataKey]) != target {
+		return fmt.Errorf("recovery work %q conflicts with its deterministic attempt tuple", work.ID)
+	}
+	return nil
+}
+
+func hasRecoveryWorkLabel(labels []string) bool {
+	for _, label := range labels {
+		if label == RecoveryWorkLabel {
+			return true
+		}
+	}
+	return false
+}
+
+func deterministicRecoveryIncidentID(info session.Info, impairment string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		info.ID,
+		strings.TrimSpace(impairment),
+		strings.TrimSpace(info.RecoveryIncidentID),
+		strings.TrimSpace(info.RecoveryOutcome),
+	}, "\x00")))
+	return "recovery-" + hex.EncodeToString(sum[:])
+}
+
+func deterministicRecoveryAttemptID(incidentID string, attempt int) string {
+	sum := sha256.Sum256([]byte(incidentID + "\x00" + strconv.Itoa(attempt)))
+	return "recovery-attempt-" + hex.EncodeToString(sum[:])
 }
 
 func recoveryStateFromInfo(info session.Info) session.RecoveryState {
@@ -318,8 +690,8 @@ func recoveryAttempts(works []beads.Bead) (int, []string, *beads.Bead) {
 	return maxAttempt, ordered, active
 }
 
-func recoveryWorkDescription(info session.Info, incidentID, impairment string) string {
-	return fmt.Sprintf("Investigate and remediate recovery incident %s for session %s (runtime %s, provider %s). The deterministic impairment is %s. Use normal Gas City work/session APIs; report evidence and close this task when the attempt is complete.", incidentID, info.ID, strings.TrimSpace(info.SessionName), strings.TrimSpace(info.Provider), impairment)
+func recoveryWorkDescription(sourceSessionID, incidentID, impairment, target string) string {
+	return fmt.Sprintf("Investigate and remediate recovery incident %s for source session %s. The deterministic impairment is %s and the bound recovery target is %s. Use normal Gas City work/session APIs; report evidence and close this task when the attempt is complete.", incidentID, sourceSessionID, impairment, target)
 }
 
 func boundedPositive(value, fallback, maximum time.Duration) time.Duration {
