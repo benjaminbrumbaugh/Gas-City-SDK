@@ -237,30 +237,42 @@ func releaseOrphanedPoolAssignments(
 			if wb.Status != "in_progress" {
 				continue
 			}
-		} else if exactOwnerGone = poolClaimExactOwnerIsGone(store, wb, openSessionBeadIDs); !exactOwnerGone {
+		} else {
 			workStoreRef := ""
 			if storeRefAware {
 				workStoreRef = assignedWorkStoreRefs[i]
 			}
-			if openSessionOwnsWork(legacyOpenIdentifiers, openIdentifiers, assignee, workStoreRef, storeRefAware) {
+			// An explicit named-session handoff is authoritative even when the
+			// previous pool claim's exact owner is gone. The handoff can cross a
+			// reconciliation snapshot while stale gc.session_id remains, and the
+			// old pool route can remain visible until its separate cleanup lands.
+			// Letting exact-owner reclaim run first would reopen the refinery's
+			// bead and allow a new pool session to claim it.
+			if assigneePreservesConfiguredNamedSession(cfg, cityPath, assignee, workStoreRef, storeRefAware) {
 				continue
 			}
-			if assigneePreservesNamedSessionRoute(cfg, cityPath, template, assignee, workStoreRef, storeRefAware) {
-				continue
-			}
-			if liveOpenSessionAssignmentExists(sessionStore.Store, assignee) {
-				continue
-			}
-			// The sessions binding is not the only ledger that can hold a session
-			// bead. Graph-resident run sessions (gcg-session-*) are written into
-			// the same store as the work they drive, so on a city whose graph
-			// binding is separate from the sessions binding the probe above is
-			// structurally blind to every graph-run assignee and releases live
-			// claims. A session bead of that shape lives in the work bead's own
-			// owner store, so probing that one store after the sessions store
-			// misses closes the gap without enumerating every attached store.
-			if ownerStore != nil && liveOpenSessionAssignmentExists(ownerStore, assignee) {
-				continue
+			exactOwnerGone = poolClaimExactOwnerIsGone(store, wb, openSessionBeadIDs)
+			if !exactOwnerGone {
+				if openSessionOwnsWork(legacyOpenIdentifiers, openIdentifiers, assignee, workStoreRef, storeRefAware) {
+					continue
+				}
+				if assigneePreservesNamedSessionRoute(cfg, cityPath, template, assignee, workStoreRef, storeRefAware) {
+					continue
+				}
+				if liveOpenSessionAssignmentExists(sessionStore.Store, assignee) {
+					continue
+				}
+				// The sessions binding is not the only ledger that can hold a session
+				// bead. Graph-resident run sessions (gcg-session-*) are written into
+				// the same store as the work they drive, so on a city whose graph
+				// binding is separate from the sessions binding the probe above is
+				// structurally blind to every graph-run assignee and releases live
+				// claims. A session bead of that shape lives in the work bead's own
+				// owner store, so probing that one store after the sessions store
+				// misses closes the gap without enumerating every attached store.
+				if ownerStore != nil && liveOpenSessionAssignmentExists(ownerStore, assignee) {
+					continue
+				}
 			}
 		}
 
@@ -853,6 +865,31 @@ func assigneePreservesNamedSessionRoute(cfg *config.City, cityPath, template, as
 		return false
 	}
 	if namedSessionBackingTemplate(spec) != template {
+		return false
+	}
+	return namedSessionCanReachWork(cfg, cityPath, spec, workStoreRef, storeRefAware)
+}
+
+// assigneePreservesConfiguredNamedSession reports whether an explicit assignee
+// names a configured named session that can reach the work's store. Unlike the
+// route-specific helper above, it intentionally does not require the stale
+// gc.routed_to value to name the named session's backing template: a direct
+// handoff clears that route, and a concurrent/stalled cleanup may leave the old
+// pool route behind. The current assignee is the authoritative ownership
+// decision in either case.
+func assigneePreservesConfiguredNamedSession(cfg *config.City, cityPath, assignee, workStoreRef string, storeRefAware bool) bool {
+	if cfg == nil {
+		return false
+	}
+	spec, ok := findNamedSessionSpecForAssignee(cfg, cfg.EffectiveCityName(), assignee)
+	if !ok {
+		return false
+	}
+	return namedSessionCanReachWork(cfg, cityPath, spec, workStoreRef, storeRefAware)
+}
+
+func namedSessionCanReachWork(cfg *config.City, cityPath string, spec namedSessionSpec, workStoreRef string, storeRefAware bool) bool {
+	if cfg == nil {
 		return false
 	}
 	if !storeRefAware {

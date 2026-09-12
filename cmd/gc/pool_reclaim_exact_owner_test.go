@@ -189,6 +189,81 @@ func TestReleaseOrphanedPoolAssignments_SkipsWhenStampedOwnerIsLiveSession(t *te
 	}
 }
 
+// TestReleaseOrphanedPoolAssignments_PreservesExplicitNamedHandoffWithStaleOwner
+// guards the handoff boundary: once a pool worker hands work to a configured
+// named session, that explicit assignee is authoritative. A stale pool claim
+// owner can remain in gc.session_id while the handoff and reconciliation
+// snapshots cross; exact-owner reclaim must not reopen the bead under a new
+// polecat session and undo the refinery handoff.
+func TestReleaseOrphanedPoolAssignments_PreservesExplicitNamedHandoffWithStaleOwner(t *testing.T) {
+	store := beads.NewMemStore()
+	// Any open session makes the stale-owner discriminator observable: the dead
+	// stamped owner is absent while the current pool fleet is not empty.
+	livePool := createOpenPoolSessionBead(t, store, "gastown__polecat-gc-wzjt", "Gas-City-SDK/gastown.nux")
+	work, err := store.Create(beads.Bead{
+		Title:    "handed-off work",
+		Assignee: "reviewer",
+		Metadata: map[string]string{
+			beadmeta.RoutedToMetadataKey:    "worker",
+			beadmeta.SessionIDMetadataKey:   "gc-dead-polecat",
+			beadmeta.SessionNameMetadataKey: "gastown__polecat-gc-anrc",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create handed-off work: %v", err)
+	}
+	if err := store.Update(work.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+		t.Fatalf("Set handed-off work status: %v", err)
+	}
+	work, err = store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Reload handed-off work: %v", err)
+	}
+
+	cfg := &config.City{
+		Agents: []config.Agent{
+			{
+				Name:              "worker",
+				MinActiveSessions: intPtr(0),
+				MaxActiveSessions: intPtr(2),
+			},
+			{
+				Name:              "refinery",
+				MinActiveSessions: intPtr(0),
+				MaxActiveSessions: intPtr(1),
+			},
+		},
+		NamedSessions: []config.NamedSession{{
+			Name:     "reviewer",
+			Template: "refinery",
+			Mode:     "on_demand",
+		}},
+		ResolvedWorkspaceName: "test-city",
+	}
+
+	released := releaseOrphanedPoolAssignmentsFromBeads(
+		store,
+		cfg,
+		"",
+		[]beads.Bead{livePool},
+		[]beads.Bead{work},
+		[]beads.Store{store},
+		nil,
+		nil,
+	)
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none — explicit reviewer handoff must outrank stale polecat owner", released)
+	}
+
+	got, err := store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Get handed-off work: %v", err)
+	}
+	if got.Status != "in_progress" || got.Assignee != "reviewer" {
+		t.Fatalf("work = (%q, %q), want (in_progress, reviewer)", got.Status, got.Assignee)
+	}
+}
+
 // TestReleaseOrphanedPoolAssignments_SkipsStampedOwnerMissingFromSnapshotButLiveInStore
 // guards the failure mode the exact-owner check could introduce. A session
 // snapshot that merely MISSED the stamped owner is not evidence the owner died,
