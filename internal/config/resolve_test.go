@@ -83,6 +83,22 @@ func TestResolveProviderAgentStartCommand(t *testing.T) {
 	}
 }
 
+func TestResolveProviderAgentStartCommandMergesEnv(t *testing.T) {
+	agent := &Agent{
+		Name:         "scout",
+		StartCommand: "custom-agent --serve",
+		Env:          map[string]string{"CUSTOM_TYPE": "pooled"},
+	}
+
+	rp, err := ResolveProvider(agent, nil, nil, lookPathNone)
+	if err != nil {
+		t.Fatalf("ResolveProvider: %v", err)
+	}
+	if got := rp.Env["CUSTOM_TYPE"]; got != "pooled" {
+		t.Errorf("Env[CUSTOM_TYPE] = %q, want %q (agent env must survive StartCommand escape hatch)", got, "pooled")
+	}
+}
+
 func TestResolveProviderAgentStartCommandHonorsExplicitPromptMode(t *testing.T) {
 	agent := &Agent{
 		Name:         "mayor",
@@ -292,7 +308,7 @@ func TestAgentProcessNamesPrefersAgentOverride(t *testing.T) {
 }
 
 func TestResolveProviderWorkspaceStartCommand(t *testing.T) {
-	agent := &Agent{Name: "worker"}
+	agent := &Agent{Name: "worker", Env: map[string]string{"CUSTOM_TYPE": "pooled"}}
 	ws := &Workspace{Name: "city", StartCommand: "my-agent --flag"}
 	rp, err := ResolveProvider(agent, ws, nil, lookPathNone)
 	if err != nil {
@@ -303,6 +319,9 @@ func TestResolveProviderWorkspaceStartCommand(t *testing.T) {
 	}
 	if rp.PromptMode != "none" {
 		t.Errorf("PromptMode = %q, want %q", rp.PromptMode, "none")
+	}
+	if got := rp.Env["CUSTOM_TYPE"]; got != "pooled" {
+		t.Errorf("Env[CUSTOM_TYPE] = %q, want %q (agent env must survive workspace StartCommand escape hatch)", got, "pooled")
 	}
 }
 
