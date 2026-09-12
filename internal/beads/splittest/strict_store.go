@@ -139,6 +139,7 @@ var (
 	_ beads.ConditionalWritesResolveTargeter = (*StrictStore)(nil)
 	_ beads.BatchDeleter                     = (*StrictStore)(nil)
 	_ beads.ForeignIDCreator                 = (*StrictStore)(nil)
+	_ beads.DeterministicCreator             = (*StrictStore)(nil)
 	_ beads.Counter                          = (*StrictStore)(nil)
 	_ assignmentClaimer                      = (*StrictStore)(nil)
 	_ beads.GraphApplyHandleProvider         = (*StrictStore)(nil)
@@ -316,6 +317,26 @@ func (s *StrictStore) CreateWithForeignID(b beads.Bead) (beads.Bead, error) {
 		return beads.Bead{}, fmt.Errorf("creating bead with foreign id %q: leaf store %T returned id %q instead; it does not honor an explicit id and cannot model a forced foreign-prefix create", b.ID, s.Store, created.ID)
 	}
 	return created, nil
+}
+
+// SupportsDeterministicCreate reports the effective capability of the strict
+// store's leaf rather than the wrapper method set.
+func (s *StrictStore) SupportsDeterministicCreate() bool {
+	return s != nil && beads.SupportsDeterministicCreate(s.Store)
+}
+
+// CreateDeterministic preserves the leaf's atomic create-or-adopt operation and
+// verifies that the derived result remains in this strict store's namespace.
+// Unlike CreateWithForeignID, this path never bypasses the namespace guard.
+func (s *StrictStore) CreateDeterministic(key string, b beads.Bead) (beads.Bead, bool, error) {
+	created, inserted, err := beads.CreateDeterministically(s.Store, key, b)
+	if err != nil {
+		return beads.Bead{}, false, err
+	}
+	if !s.ownsID(created.ID) {
+		return beads.Bead{}, false, fmt.Errorf("deterministic create key %q: leaf store %T returned foreign id %q outside %q", key, s.Store, created.ID, s.prefix)
+	}
+	return created, inserted, nil
 }
 
 // DepAdd resolves both endpoints in THIS store before delegating, which

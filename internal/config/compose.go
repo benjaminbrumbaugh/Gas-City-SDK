@@ -771,6 +771,9 @@ func LoadWithIncludesOptions(fs fsys.FS, path string, opts LoadOptions, extraInc
 	if err := ValidateGitHubPRMonitors(root); err != nil {
 		return nil, nil, err
 	}
+	if err := ValidateRecoveryResponder(root, path); err != nil {
+		return nil, nil, err
+	}
 
 	// Validate all duration strings in the fully-merged config.
 	prov.Warnings = append(prov.Warnings, ValidateDurations(root, path)...)
@@ -1172,6 +1175,11 @@ func mergeFragment(base, fragment *City, fragMeta toml.MetaData, fragPath string
 	}
 	if fragMeta.IsDefined("api") {
 		base.API = fragment.API
+	}
+	// A recovery_responder table replaces the preceding table wholesale;
+	// include order therefore gives later fragments explicit precedence.
+	if fragMeta.IsDefined("recovery_responder") {
+		base.RecoveryResponder = fragment.RecoveryResponder
 	}
 	mergeSessionSleep(base, fragment, fragMeta, fragPath, prov)
 	if fragMeta.IsDefined("convergence") {

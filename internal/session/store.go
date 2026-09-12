@@ -1,8 +1,11 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -136,6 +139,258 @@ func (s *Store) BeginDrainAckStopPending(id string, now time.Time) error {
 // via RestartRequestPatch. Replaces the restart-request write in session_reconciler.go.
 func (s *Store) RequestRestart(id, sessionKey string, now time.Time) error {
 	return s.ApplyPatch(id, RestartRequestPatch(sessionKey, now))
+}
+
+const (
+	recoveryHoldOwnedMetadataKey      = "recovery_hold_owned"
+	recoveryResponderLeaseMetadataKey = "recovery_responder_lease"
+)
+
+// ErrRecoveryResponderLeaseLost reports a recovery transition fenced by a
+// newer row revision or lease owner.
+var ErrRecoveryResponderLeaseLost = errors.New("recovery responder lease lost")
+
+// RecoverySnapshot couples a session projection to the exact persisted revision
+// and recovery-responder lease that authorized it. Its fencing fields are opaque
+// outside this package; callers can only advance or release the lease by passing
+// the whole snapshot back.
+type RecoverySnapshot struct {
+	Info         Info
+	revision     int64
+	leaseToken   string
+	leaseExpires time.Time
+	metadata     beads.StringMap
+}
+
+// AcquireRecoveryResponderLease claims one source-session row with a full-row
+// revision CAS. The returned snapshot is the only authority accepted by recovery
+// transitions. Lease acquisition itself advances the row revision, so a
+// successor takeover fences every snapshot held by the previous owner.
+func (s *Store) AcquireRecoveryResponderLease(id, owner string, now, expires time.Time) (RecoverySnapshot, bool, error) {
+	owner = strings.TrimSpace(owner)
+	if owner == "" || !expires.After(now) {
+		return RecoverySnapshot{}, false, fmt.Errorf("invalid recovery responder lease")
+	}
+	writer, ok := beads.ConditionalWriterFor(s.store.Store)
+	if !ok {
+		return RecoverySnapshot{}, false, beads.ErrConditionalWriteUnsupported
+	}
+	persisted, err := s.validatedBead(id)
+	if err != nil {
+		return RecoverySnapshot{}, false, err
+	}
+	if recoverySessionClosed(persisted) {
+		return RecoverySnapshot{}, false, nil
+	}
+	current := strings.TrimSpace(persisted.Metadata[recoveryResponderLeaseMetadataKey])
+	if recoveryLeaseCurrent(current, now) {
+		return RecoverySnapshot{}, false, nil
+	}
+	token := owner + "\n" + expires.UTC().Format(time.RFC3339Nano)
+	patch := map[string]string{recoveryResponderLeaseMetadataKey: token}
+	if err := writer.UpdateIfMatch(id, persisted.Revision, beads.UpdateOpts{Metadata: patch}); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			return RecoverySnapshot{}, false, nil
+		}
+		// A transport failure can be ambiguous. Adopt only an exact token readback;
+		// any other value is unauthorized and must fail closed.
+		if snapshot, readErr := s.recoverySnapshotForLease(id, token); readErr == nil {
+			return snapshot, true, nil
+		}
+		return RecoverySnapshot{}, false, err
+	}
+	snapshot, err := s.recoverySnapshotForLease(id, token)
+	if err != nil {
+		if errors.Is(err, ErrRecoveryResponderLeaseLost) {
+			return RecoverySnapshot{}, false, nil
+		}
+		return RecoverySnapshot{}, false, err
+	}
+	return snapshot, true, nil
+}
+
+func recoveryLeaseCurrent(token string, now time.Time) bool {
+	_, until, ok := recoveryLeaseParts(token)
+	return ok && until.After(now)
+}
+
+func recoveryLeaseParts(token string) (string, time.Time, bool) {
+	parts := strings.SplitN(strings.TrimSpace(token), "\n", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		return "", time.Time{}, false
+	}
+	until, err := time.Parse(time.RFC3339Nano, parts[1])
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	return strings.TrimSpace(parts[0]), until.UTC(), true
+}
+
+func recoverySessionClosed(persisted beads.Bead) bool {
+	return strings.EqualFold(strings.TrimSpace(persisted.Status), "closed")
+}
+
+func (s *Store) recoverySnapshotForLease(id, token string) (RecoverySnapshot, error) {
+	persisted, err := s.validatedBead(id)
+	if err != nil {
+		return RecoverySnapshot{}, err
+	}
+	if recoverySessionClosed(persisted) {
+		return RecoverySnapshot{}, ErrRecoveryResponderLeaseLost
+	}
+	if token == "" || persisted.Metadata[recoveryResponderLeaseMetadataKey] != token {
+		return RecoverySnapshot{}, ErrRecoveryResponderLeaseLost
+	}
+	_, leaseExpires, ok := recoveryLeaseParts(token)
+	if !ok {
+		return RecoverySnapshot{}, ErrRecoveryResponderLeaseLost
+	}
+	return RecoverySnapshot{
+		Info:         InfoFromPersistedBead(persisted),
+		revision:     persisted.Revision,
+		leaseToken:   token,
+		leaseExpires: leaseExpires,
+		metadata:     maps.Clone(persisted.Metadata),
+	}, nil
+}
+
+// RenewRecoveryResponderLease proves that snapshot is still the current,
+// unexpired lease generation immediately before an external side effect. The
+// renewal itself advances the revision, fencing the caller if a successor or
+// unrelated writer won first.
+func (s *Store) RenewRecoveryResponderLease(snapshot RecoverySnapshot, now, expires time.Time) (RecoverySnapshot, error) {
+	owner, _, ok := recoveryLeaseParts(snapshot.leaseToken)
+	if !ok || snapshot.Info.ID == "" || !now.Before(snapshot.leaseExpires) || !expires.After(now) ||
+		snapshot.metadata[recoveryResponderLeaseMetadataKey] != snapshot.leaseToken {
+		return RecoverySnapshot{}, ErrRecoveryResponderLeaseLost
+	}
+	writer, ok := beads.ConditionalWriterFor(s.store.Store)
+	if !ok {
+		return RecoverySnapshot{}, beads.ErrConditionalWriteUnsupported
+	}
+	nextToken := owner + "\n" + expires.UTC().Format(time.RFC3339Nano)
+	if err := writer.UpdateIfMatch(snapshot.Info.ID, snapshot.revision, beads.UpdateOpts{
+		Metadata: map[string]string{recoveryResponderLeaseMetadataKey: nextToken},
+	}); err != nil {
+		return RecoverySnapshot{}, err
+	}
+	return s.recoverySnapshotForLease(snapshot.Info.ID, nextToken)
+}
+
+// RecordRecoveryStateIfCurrent commits the complete recovery lifecycle, generic
+// hold, hold-ownership marker, and any verification cleanup in one revision-CAS.
+// No split metadata CAS is permitted: unsupported stores fail closed.
+func (s *Store) RecordRecoveryStateIfCurrent(snapshot RecoverySnapshot, state RecoveryState) (RecoverySnapshot, error) {
+	if snapshot.Info.ID == "" || snapshot.leaseToken == "" ||
+		snapshot.metadata[recoveryResponderLeaseMetadataKey] != snapshot.leaseToken ||
+		!time.Now().UTC().Before(snapshot.leaseExpires) {
+		return RecoverySnapshot{}, ErrRecoveryResponderLeaseLost
+	}
+	writer, ok := beads.ConditionalWriterFor(s.store.Store)
+	if !ok {
+		return RecoverySnapshot{}, beads.ErrConditionalWriteUnsupported
+	}
+	patch := MetadataPatch{
+		"recovery_incident_id":       state.IncidentID,
+		"recovery_impairment":        state.Impairment,
+		"recovery_detected_at":       formatRecoveryTime(state.DetectedAt),
+		"recovery_hold_until":        formatRecoveryTime(state.HoldUntil),
+		"recovery_attempt":           strconv.Itoa(state.Attempt),
+		"recovery_attempted_targets": strings.Join(state.AttemptedTargets, "\n"),
+		"recovery_cooldown_until":    formatRecoveryTime(state.CooldownUntil),
+		"recovery_outcome":           state.Outcome,
+		"recovery_work_id":           state.WorkID,
+	}
+	fresh := snapshot.Info
+	if strings.TrimSpace(state.Outcome) == "verified" {
+		if strings.TrimSpace(fresh.ProviderTerminalError) == strings.TrimSpace(state.Impairment) {
+			patch["provider_terminal_error"] = ""
+			patch["provider_terminal_error_at"] = ""
+			patch["session_drainable"] = ""
+		}
+		if strings.TrimSpace(fresh.HealthReason) == strings.TrimSpace(state.Impairment) {
+			patch["session_health_reason"] = ""
+		}
+	}
+
+	previousRecoveryHold := strings.TrimSpace(fresh.RecoveryHoldUntil)
+	currentHold := strings.TrimSpace(fresh.HeldUntil)
+	nextRecoveryHold := strings.TrimSpace(patch["recovery_hold_until"])
+	ownership := strings.TrimSpace(snapshot.metadata[recoveryHoldOwnedMetadataKey])
+	owned := previousRecoveryHold != "" && currentHold == previousRecoveryHold &&
+		(ownership == previousRecoveryHold || ownership == "true")
+
+	switch {
+	case owned && nextRecoveryHold == "":
+		patch["held_until"] = ""
+		patch[recoveryHoldOwnedMetadataKey] = ""
+	case owned && nextRecoveryHold != currentHold:
+		patch["held_until"] = nextRecoveryHold
+		patch[recoveryHoldOwnedMetadataKey] = nextRecoveryHold
+	case owned:
+		// Migrate the legacy boolean marker while preserving the paired deadline.
+		patch["held_until"] = currentHold
+		patch[recoveryHoldOwnedMetadataKey] = currentHold
+	case currentHold == "" && nextRecoveryHold != "" && previousRecoveryHold == "":
+		patch["held_until"] = nextRecoveryHold
+		patch[recoveryHoldOwnedMetadataKey] = nextRecoveryHold
+	case currentHold == "" && previousRecoveryHold != "" && ownership != "":
+		// An empty generic hold with a prior paired recovery hold is an operator
+		// override. Never recreate what the operator cleared; retire only our
+		// stale ownership marker in this atomic transition.
+		patch[recoveryHoldOwnedMetadataKey] = ""
+	case ownership != "":
+		// A marker that no longer names the current generic hold is stale. Retire
+		// only the marker in the same transition; the operator's hold survives.
+		patch[recoveryHoldOwnedMetadataKey] = ""
+	}
+
+	if err := writer.UpdateIfMatch(snapshot.Info.ID, snapshot.revision, beads.UpdateOpts{Metadata: map[string]string(patch)}); err != nil {
+		return RecoverySnapshot{}, err
+	}
+	return s.recoverySnapshotForLease(snapshot.Info.ID, snapshot.leaseToken)
+}
+
+// ReleaseRecoveryResponderLease clears only the exact lease generation and row
+// revision represented by snapshot. A stale release is harmless: its successor
+// has already changed the revision and remains authoritative.
+func (s *Store) ReleaseRecoveryResponderLease(snapshot RecoverySnapshot) error {
+	if snapshot.Info.ID == "" || snapshot.leaseToken == "" {
+		return nil
+	}
+	writer, ok := beads.ConditionalWriterFor(s.store.Store)
+	if !ok {
+		return beads.ErrConditionalWriteUnsupported
+	}
+	if err := writer.UpdateIfMatch(snapshot.Info.ID, snapshot.revision, beads.UpdateOpts{
+		Metadata: map[string]string{recoveryResponderLeaseMetadataKey: ""},
+	}); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// RecoveryState is the durable lifecycle owned by the recovery responder.
+type RecoveryState struct {
+	IncidentID       string
+	Impairment       string
+	DetectedAt       time.Time
+	HoldUntil        time.Time
+	Attempt          int
+	AttemptedTargets []string
+	CooldownUntil    time.Time
+	Outcome          string
+	WorkID           string
+}
+
+func formatRecoveryTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 // ResetConfigDrift records an in-place named-session repair after core config

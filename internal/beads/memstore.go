@@ -118,9 +118,15 @@ func cloneBead(b Bead) Bead {
 func (m *MemStore) Create(b Bead) (Bead, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.createLocked(b, m.HonorExplicitIDs)
+}
 
+// createLocked is Create's mutation body. honorExplicit is explicit so the
+// deterministic-create capability can pin its derived ID without changing the
+// MemStore test-double knob for ordinary Create calls. The caller holds m.mu.
+func (m *MemStore) createLocked(b Bead, honorExplicit bool) (Bead, error) {
 	explicit := strings.TrimSpace(b.ID)
-	if m.HonorExplicitIDs && explicit != "" {
+	if honorExplicit && explicit != "" {
 		if m.beadExistsLocked(explicit) {
 			return Bead{}, fmt.Errorf("creating bead %q: duplicate id", explicit)
 		}

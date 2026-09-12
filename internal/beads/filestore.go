@@ -327,6 +327,39 @@ func (fs *FileStore) Create(b Bead) (Bead, error) {
 	return result, nil
 }
 
+// CreateDeterministic holds the process mutex and the cross-process file lock
+// across reload, create-or-adopt, and flush. A second FileStore handle therefore
+// decides against the first handle's committed bytes rather than its stale
+// in-memory image.
+func (fs *FileStore) CreateDeterministic(key string, b Bead) (Bead, bool, error) {
+	if fs == nil || fs.MemStore == nil {
+		return Bead{}, false, fmt.Errorf("deterministic create: nil FileStore: %w", ErrDeterministicCreateUnsupported)
+	}
+	fs.fmu.Lock()
+	defer fs.fmu.Unlock()
+	if err := fs.locker.Lock(); err != nil {
+		return Bead{}, false, err
+	}
+	defer fs.locker.Unlock() //nolint:errcheck // best-effort unlock
+	if err := fs.reloadFromDisk(); err != nil {
+		return Bead{}, false, err
+	}
+	fs.refreshFreshnessCache()
+	snap := fs.snapshotLocked()
+	result, inserted, err := fs.createDeterministic(key, b)
+	if err != nil {
+		return Bead{}, false, err
+	}
+	if !inserted {
+		return result, false, nil
+	}
+	if err := fs.save(); err != nil {
+		fs.restoreFrom(snap.seq, snap.beads, snap.deps)
+		return Bead{}, false, err
+	}
+	return result, true, nil
+}
+
 // Update delegates to MemStore.Update and flushes to disk.
 // If the disk flush fails, the in-memory mutation is rolled back.
 func (fs *FileStore) Update(id string, opts UpdateOpts) error {

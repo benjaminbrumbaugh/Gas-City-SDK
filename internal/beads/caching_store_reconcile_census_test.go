@@ -24,9 +24,10 @@ func TestReconcileFenceWritersCensus(t *testing.T) {
 
 	// Allowed enclosing functions for index-assignments (value minting / setting).
 	allowedIndex := map[string]bool{
-		"noteMutationLocked":      true, // beadSeq
-		"noteLocalMutationLocked": true, // localBeadAt
-		"tombstoneLocked":         true, // deletedSeq
+		"noteMutationLocked":              true, // beadSeq
+		"noteLocalMutationLocked":         true, // localBeadAt
+		"noteReservedLocalMutationLocked": true, // reserved beadSeq and localBeadAt
+		"tombstoneLocked":                 true, // deletedSeq
 	}
 	// Allowed enclosing functions for whole-map replacement. Only prime()'s
 	// own B-shaped rebuild remains after the Phase-2 collapse deleted reconcile
@@ -92,8 +93,10 @@ func TestMergeOracleFieldCoverage(t *testing.T) {
 		"stats": true, // stats compared field-wise below
 	}
 	excludedStore := map[string]bool{
-		// observationRevision is a process-local publication fence, orthogonal to
-		// the merge oracle's durable cache-state comparison.
+		// reservedMutations is transient ordering state for deterministic writes;
+		// mergeSnapshotLocked consults it but never mutates it. The observation
+		// revision is a process-local publication fence, not durable cache state.
+		"reservedMutations":   true,
 		"observationRevision": true,
 		"backing":             true, "idPrefix": true, "mu": true, "reconciling": true,
 		"onChange": true, "problemf": true, "problemLog": true,

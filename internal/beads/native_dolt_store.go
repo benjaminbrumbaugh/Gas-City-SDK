@@ -2334,6 +2334,7 @@ func nativeUpstreamNotFound(err error) bool {
 		strings.Contains(msg, "not found: issue ") ||
 		strings.Contains(msg, "issue not found: ") ||
 		((strings.HasPrefix(msg, "issue ") || strings.Contains(msg, " issue ")) && strings.HasSuffix(msg, " not found")) ||
+		strings.HasSuffix(msg, ": bead not found") ||
 		strings.HasSuffix(msg, ": not found") ||
 		msg == "no rows in result set" ||
 		strings.HasSuffix(msg, ": no rows in result set")

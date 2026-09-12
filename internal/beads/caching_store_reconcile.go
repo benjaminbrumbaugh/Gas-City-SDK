@@ -586,6 +586,9 @@ func (c *CachingStore) mergeSnapshotLocked(
 		if d.action != mergeEvict {
 			continue
 		}
+		if c.reservedMutations > 0 && (c.beadSeq[id] != 0 || c.deletedSeq[id] != 0 || !c.localBeadAt[id].IsZero()) {
+			continue
+		}
 		res.removes++
 		if d.notification == "bead.closed" {
 			closed := cloneBead(cached)
@@ -605,25 +608,27 @@ func (c *CachingStore) mergeSnapshotLocked(
 	//    row on either side). Replaces Branch B's implicit wholesale reset:
 	//    stale orphans are collected, recent ones kept one more cycle. The id
 	//    set is snapshotted before deleting to avoid iterate-while-delete.
-	for _, id := range c.orphanFenceIDsLocked(freshByID) {
-		d := reconcileMergeDecision(mergeRowInput{
-			freshExists:  false,
-			cachedExists: false,
-			deletedAtSeq: c.deletedSeq[id],
-			beadAtSeq:    c.beadSeq[id],
-			startSeq:     startSeq,
-			localAt:      c.localBeadAt[id],
-			now:          now,
-			skipLabels:   true,
-		})
-		if d.action != mergeGCFences {
-			continue
+	if c.reservedMutations == 0 {
+		for _, id := range c.orphanFenceIDsLocked(freshByID) {
+			d := reconcileMergeDecision(mergeRowInput{
+				freshExists:  false,
+				cachedExists: false,
+				deletedAtSeq: c.deletedSeq[id],
+				beadAtSeq:    c.beadSeq[id],
+				startSeq:     startSeq,
+				localAt:      c.localBeadAt[id],
+				now:          now,
+				skipLabels:   true,
+			})
+			if d.action != mergeGCFences {
+				continue
+			}
+			delete(c.deletedSeq, id)
+			delete(c.dirty, id)
+			delete(c.beadSeq, id)
+			delete(c.localBeadAt, id)
+			delete(c.deps, id)
 		}
-		delete(c.deletedSeq, id)
-		delete(c.dirty, id)
-		delete(c.beadSeq, id)
-		delete(c.localBeadAt, id)
-		delete(c.deps, id)
 	}
 
 	// 4. Shared tail (was duplicated per branch).

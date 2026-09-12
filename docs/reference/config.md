@@ -28,6 +28,7 @@ City is the top-level configuration for a Gas City instance.
 | `storage` | StorageConfig |  |  | Storage assigns the six semantic storage classes to immutable named bindings. Nil preserves the existing all-Work storage topology. |
 | `beads` | BeadsConfig |  |  | Beads configures the bead store backend. |
 | `session` | SessionConfig |  |  | Session configures the session provider backend. |
+| `recovery_responder` | RecoveryResponderConfig |  |  | RecoveryResponder optionally routes bounded recovery work for durable, high-confidence provider/session impairments. |
 | `mail` | MailConfig |  |  | Mail configures the mail provider backend. |
 | `events` | EventsConfig |  |  | Events configures the events provider backend. |
 | `usage` | UsageConfig |  |  | Usage configures the usage-fact sink backend. |
@@ -748,6 +749,20 @@ ProviderSpec defines a named provider's startup parameters.
 | `title_model` | string |  |  | TitleModel is the OptionsSchema model key used for title generation. Resolved via the "model" option in OptionsSchema to get FlagArgs. Defaults to the cheapest/fastest model for each provider. Examples: "haiku" (claude), "o4-mini" (codex), "gemini-2.5-flash" (gemini) |
 | `acp_command` | string |  |  | ACPCommand overrides Command when the session transport is ACP. When empty, Command is used for both tmux and ACP transports. |
 | `acp_args` | []string |  |  | ACPArgs overrides Args when the session transport is ACP. When nil, Args is used for both tmux and ACP transports. |
+
+## RecoveryResponderConfig
+
+RecoveryResponderConfig enables one-at-a-time ordinary recovery work for deterministic provider/session impairments.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `targets` | []string | **yes** |  |  |
+| `wayfinder_url` | string |  |  |  |
+| `wayfinder_request_file` | string |  |  |  |
+| `hold` | string |  |  |  |
+| `advisory_timeout` | string |  |  |  |
+| `cooldown` | string |  |  |  |
+| `max_attempts` | integer |  |  |  |
 
 ## Rig
 

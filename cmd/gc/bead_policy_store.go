@@ -38,6 +38,7 @@ type beadPolicyGraphStore struct {
 var (
 	_ beads.ConditionalAssignmentReleaser    = (*beadPolicyStore)(nil)
 	_ beads.ConditionalWritesResolveTargeter = (*beadPolicyStore)(nil)
+	_ beads.DeterministicCreator             = (*beadPolicyStore)(nil)
 )
 
 // ConditionalWritesResolveTarget declares the wrapped store as the
@@ -84,8 +85,22 @@ func unwrapBeadPolicyStore(store beads.Store) (beads.Store, *beadPolicyStore, bo
 }
 
 func (s *beadPolicyStore) Create(b beads.Bead) (beads.Bead, error) {
-	_, storage := s.policyForCreate(b)
+	storage := s.storageForCreate(b)
 	return createWithStoragePolicy(s.createTarget(coordclass.Classify(b)), b, storage)
+}
+
+// CreateDeterministic preserves class routing and storage policy while requiring
+// the selected leaf to provide the atomic deterministic-create capability. The
+// storage choice is made explicit on the bead because this operation must not
+// degrade to an ordinary CreateWithStorage call.
+func (s *beadPolicyStore) CreateDeterministic(key string, b beads.Bead) (beads.Bead, bool, error) {
+	storage := s.storageForCreate(b)
+	target := s.createTarget(coordclass.Classify(b))
+	return beads.CreateDeterministically(target, key, applyBeadStorage(b, storage))
+}
+
+func (s *beadPolicyStore) SupportsDeterministicCreate() bool {
+	return s != nil && beads.SupportsDeterministicCreate(s.createTarget(coordclass.ClassWork))
 }
 
 func (s *beadPolicyStore) List(query beads.ListQuery) ([]beads.Bead, error) {
@@ -224,18 +239,18 @@ func (s *beadPolicyStore) ReleaseIfCurrent(id, expectedAssignee string) (bool, e
 	return releaser.ReleaseIfCurrent(id, expectedAssignee)
 }
 
-func (s *beadPolicyStore) policyForCreate(b beads.Bead) (string, string) {
+func (s *beadPolicyStore) storageForCreate(b beads.Bead) string {
 	if rootID := strings.TrimSpace(b.Metadata[beadmeta.RootBeadIDMetadataKey]); rootID != "" {
 		root, err := s.createTarget(coordclass.ClassGraph).Get(rootID)
 		if err == nil && policyNameForBead(root) == beadPolicyWisp {
-			return beadPolicyWisp, storageFromPersistedWispRoot(root)
+			return storageFromPersistedWispRoot(root)
 		}
 	}
 	policyName := policyNameForBead(b)
 	if policyName == "" {
-		return "", ""
+		return ""
 	}
-	return policyName, effectiveBeadStorage(s.cfg, policyName)
+	return effectiveBeadStorage(s.cfg, policyName)
 }
 
 func storageFromPersistedWispRoot(root beads.Bead) string {

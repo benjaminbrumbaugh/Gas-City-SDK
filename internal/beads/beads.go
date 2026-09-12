@@ -381,6 +381,25 @@ func ConditionalWriterFor(store Store) (ConditionalWriter, bool) {
 	return nil, false
 }
 
+// PreflightConditionalWriter returns a structurally available conditional writer
+// only when the resolved store's runtime capability probe also says writes can
+// succeed. It ignores rollout mode because callers of this function require the
+// capability for correctness rather than selecting between new and legacy paths.
+func PreflightConditionalWriter(store Store) (ConditionalWriter, error) {
+	resolved := followConditionalWritesResolveTarget(store)
+	writer, ok := ConditionalWriterFor(store)
+	if !ok {
+		return nil, ErrConditionalWriteUnsupported
+	}
+	if prober, ok := resolved.(conditionalWriteCapabilityProber); ok {
+		capable, reason := prober.probeConditionalWriteCapability()
+		if !capable {
+			return nil, fmt.Errorf("%w: %s", ErrConditionalWriteUnsupported, reason)
+		}
+	}
+	return writer, nil
+}
+
 // PreconditionFailedError reports that a conditional write was rejected because
 // the bead's revision moved (bd exit 9 / the store's WHERE clause matched no
 // row). Expected/Current come from the backend's machine JSON when parseable and
