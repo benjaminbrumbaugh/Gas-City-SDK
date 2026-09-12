@@ -249,3 +249,29 @@ completion notification is non-blocking); no existing expectation was weakened.
   transport assertion, or provider case was relaxed.
 - The current host cannot compile the race-enabled package because ICU headers are
   absent (`unicode/regex.h`); the CGO-disabled focused watcher suite remains green.
+
+## Revalidation after fourth hook claim
+
+The resumed worktree was initially detached at the recorded `origin/polecat/sdk-73h`
+head; it was reattached to the required `polecat/sdk-73h` branch before testing.
+Fresh evidence with `CGO_ENABLED=0`:
+
+- The eight-case `TestPhase2WorkerCoreRealTransportProof` passed serially in
+  19.481 seconds.
+- Four concurrent focused processes all passed; the slowest process completed in
+  24.146 seconds. This observes real tmux/provider startup and nudge delivery under
+  controlled concurrent load.
+- The exact `GC_FAST_UNIT=0 ./scripts/test-integration-shard
+  packages-cmd-gc-6-of-6` run passed its 1,640-test cmd/gc slice in 156.162 seconds.
+
+These checks did not reproduce the reported startup deadline. No additional code
+change is justified by current evidence; the existing nonblocking registration
+coalescing fix remains the narrow candidate change. The temporary execution log is
+kept outside the product commit.
+
+## Final quality-gate revalidation
+
+- `make EXTRA_TEST_ENV='CGO_ENABLED=0' test-fast-parallel` passed all 10 jobs,
+  including the six `cmd/gc` unit shards and core package.
+- No product code was added during this revalidation; the existing regression
+  test and nonblocking watcher-registration fix remain unchanged.
