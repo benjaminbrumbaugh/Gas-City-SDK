@@ -6,10 +6,20 @@ import (
 	osexec "os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/mail"
 	"github.com/gastownhall/gascity/internal/mail/mailtest"
 )
+
+const mcpConformanceTimeout = 2 * time.Minute
+
+func TestMCPConformanceProviderUsesLoadBudget(t *testing.T) {
+	p := newMCPConformanceProvider("mock-provider")
+	if p.timeout != mcpConformanceTimeout {
+		t.Fatalf("MCP conformance timeout = %v, want %v", p.timeout, mcpConformanceTimeout)
+	}
+}
 
 // TestMCPMailConformance runs the mail conformance suite against the
 // gc-mail-mcp-agent-mail contrib script with a mock curl. This validates
@@ -55,7 +65,7 @@ func TestMCPMailConformance(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		return NewProvider(wrapperPath)
+		return newMCPConformanceProvider(wrapperPath)
 	})
 }
 
@@ -104,7 +114,7 @@ func TestMCPMailReplyMissingOriginalIsNotFound(t *testing.T) {
 	if err := os.WriteFile(wrapperPath, []byte(mcpWrapper(binDir, scriptPath, stateDir)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := NewProvider(wrapperPath)
+	p := newMCPConformanceProvider(wrapperPath)
 
 	// Deliver a message so the bridge caches its recipient (msg-agent/<id>).
 	target, err := p.Send("alice", "bob", "original", "please reply later")
@@ -225,7 +235,7 @@ func TestMCPMailCrossPodNameResolution(t *testing.T) {
 	if err := os.WriteFile(wrapperA, []byte(mcpWrapperWithCity(binDir, scriptPath, stateDir, cityDir)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	podA := NewProvider(wrapperA)
+	podA := newMCPConformanceProvider(wrapperA)
 
 	msg, err := podA.Send("mayor", "clerk", "hello", "test message")
 	if err != nil {
@@ -241,7 +251,7 @@ func TestMCPMailCrossPodNameResolution(t *testing.T) {
 	if err := os.WriteFile(wrapperB, []byte(mcpWrapperWithCity(binDir, scriptPath, stateDir, cityDir)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	podB := NewProvider(wrapperB)
+	podB := newMCPConformanceProvider(wrapperB)
 
 	// Pod B reads the inbox for "clerk" — should resolve "mayor" from the
 	// shared cache, not fall back to the raw mcp name.
@@ -321,7 +331,7 @@ func TestMCPMailProjectKeyIsolation(t *testing.T) {
 	if err := os.WriteFile(wrapperA, []byte(mcpWrapperWithProject(binDir, scriptPath, stateDir, cityDir, projectA)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	podA := NewProvider(wrapperA)
+	podA := newMCPConformanceProvider(wrapperA)
 
 	if _, err := podA.Send("mayor", "clerk", "hello", "test message"); err != nil {
 		t.Fatalf("pod A Send: %v", err)
@@ -331,7 +341,7 @@ func TestMCPMailProjectKeyIsolation(t *testing.T) {
 	if err := os.WriteFile(wrapperB, []byte(mcpWrapperWithProject(binDir, scriptPath, stateDir, cityDir, projectB)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	podB := NewProvider(wrapperB)
+	podB := newMCPConformanceProvider(wrapperB)
 
 	msgs, err := podB.Inbox("clerk")
 	if err != nil {
@@ -353,6 +363,18 @@ func TestMCPMailProjectKeyIsolation(t *testing.T) {
 	if len(hashDirs) < 2 {
 		t.Errorf("expected >=2 PROJECT_HASH subdirs under cityDir, got %d: %v", len(hashDirs), hashDirs)
 	}
+}
+
+// newMCPConformanceProvider keeps the mock-backed bridge tests from treating
+// host-wide test-suite scheduling contention as a provider failure. Each
+// operation starts a shell process tree (bridge, curl, and jq), so a supported
+// parallel fast-suite run can delay an otherwise finite operation beyond the
+// production default. The finite budget applies only to these tests; live MCP
+// callers and NewProvider retain the 30-second runtime contract.
+func newMCPConformanceProvider(script string) *Provider {
+	p := NewProvider(script)
+	p.timeout = mcpConformanceTimeout
+	return p
 }
 
 // findMCPScript locates contrib/mail-scripts/gc-mail-mcp-agent-mail by
