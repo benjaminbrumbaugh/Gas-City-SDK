@@ -267,7 +267,11 @@ func TestLoadStatusSessionSnapshotKillsBdChildOnTimeout(t *testing.T) {
 	}
 
 	oldTimeout := statusSessionSnapshotTimeout
-	statusSessionSnapshotTimeout = 200 * time.Millisecond
+	// Give the real process a bounded scheduling margin. The production budget
+	// remains three seconds; a test-only two-second budget prevents a loaded
+	// process-test shard from canceling the shell before it can publish its
+	// PID, which would test fixture startup rather than process cleanup.
+	statusSessionSnapshotTimeout = 2 * time.Second
 	t.Cleanup(func() { statusSessionSnapshotTimeout = oldTimeout })
 
 	cityDir := t.TempDir()
@@ -276,9 +280,8 @@ func TestLoadStatusSessionSnapshotKillsBdChildOnTimeout(t *testing.T) {
 	binDir := t.TempDir()
 	pidFile := filepath.Join(binDir, "bd-child.pid")
 	writeExecutable(t, filepath.Join(binDir, "bd"), "#!/bin/sh\n"+
-		"sleep 30 &\n"+
-		"echo \"$!\" > "+pidFile+"\n"+
-		"wait\n")
+		"echo \"$$\" > "+pidFile+"\n"+
+		"exec sleep 30\n")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	realStore := bdStoreForCity(cityDir, cityDir)
