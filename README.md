@@ -117,6 +117,9 @@ sudo apt-get install libicu-dev
 brew install icu4c
 ```
 
+Use `make vet` for the repository's full static-analysis gate. It supplies the
+platform-specific ICU include and library paths before running `go vet ./...`.
+
 Do not use a bare ad-hoc `go build` as the production provenance step when `make build` is available. The Makefile owns version metadata and the self-contained build checks.
 
 ### Canonical install path
