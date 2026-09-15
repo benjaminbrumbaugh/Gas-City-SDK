@@ -510,9 +510,9 @@ func TestStatusListStoreWithTimeoutKillsBdChildOnTimeout(t *testing.T) {
 	}
 
 	oldTimeout := statusStoreReadTimeout
-	// Keep enough bounded scheduling margin for the real fake command to write
-	// its PID before cancellation under a loaded integration runner. This is a
-	// test-only budget; production status reads remain one second.
+	// Give the real fake command bounded startup headroom to write its PID
+	// before cancellation under a loaded integration runner. This is a test-
+	// only budget; production status reads remain one second.
 	statusStoreReadTimeout = 2 * time.Second
 	t.Cleanup(func() { statusStoreReadTimeout = oldTimeout })
 
@@ -550,9 +550,9 @@ func TestStatusReadyStoreWithTimeoutKillsBdChildOnTimeout(t *testing.T) {
 	}
 
 	oldTimeout := statusStoreReadTimeout
-	// Keep enough bounded scheduling margin for the real fake command to write
-	// its PID before cancellation under a loaded integration runner. This is a
-	// test-only budget; production status reads remain one second.
+	// Give the real fake command bounded startup headroom to write its PID
+	// before cancellation under a loaded integration runner. This is a test-
+	// only budget; production status reads remain one second.
 	statusStoreReadTimeout = 2 * time.Second
 	t.Cleanup(func() { statusStoreReadTimeout = oldTimeout })
 
