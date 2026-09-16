@@ -15,7 +15,7 @@ import (
 // human creates work → agent processes → bead closes.
 func TestGastown_PipelineHumanToWorker(t *testing.T) {
 	agents := []gasTownAgent{
-		{Name: "worker", StartCommand: "bash " + agentScript("one-shot.sh")},
+		{Name: "worker", StartCommand: "bash " + singleQuoteShell(agentScript("one-shot.sh"))},
 	}
 	cityDir := setupGasTownCityNoGuard(t, agents)
 
