@@ -21,7 +21,7 @@ func TestGastown_PipelineHumanToWorker(t *testing.T) {
 
 	// Human creates work and assigns to worker.
 	beadID := createBead(t, cityDir, "Build login page")
-	claimBead(t, cityDir, "worker", beadID)
+	claimBead(t, cityDir, sessionAssigneeForTemplate(t, cityDir, "worker"), beadID)
 
 	// Wait for worker to process.
 	waitForBeadStatus(t, cityDir, beadID, "closed", 10*time.Second)
