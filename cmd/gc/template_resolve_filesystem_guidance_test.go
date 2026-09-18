@@ -41,3 +41,35 @@ func TestResolveTemplateAddsFilesystemSearchGuidanceToStartupPrompt(t *testing.T
 		t.Fatalf("filesystem search guidance count = %d, want 1:\n%s", count, resolved.Prompt)
 	}
 }
+
+func TestResolveTemplateSuppressedStartupPromptOmitsFilesystemSearchGuidance(t *testing.T) {
+	cityPath := t.TempDir()
+	writeTemplateResolveCityConfig(t, cityPath, "file")
+	params := &agentBuildParams{
+		cityName:        "city",
+		cityPath:        cityPath,
+		workspace:       &config.Workspace{Provider: "claude"},
+		providers:       map[string]config.ProviderSpec{"claude": {Command: "echo", PromptMode: "none"}},
+		lookPath:        func(string) (string, error) { return "/bin/echo", nil },
+		fs:              fsys.OSFS{},
+		rigs:            []config.Rig{},
+		beaconTime:      time.Unix(0, 0),
+		beadNames:       make(map[string]string),
+		stderr:          io.Discard,
+		sessionProvider: "tmux",
+	}
+	agent := &config.Agent{
+		Name:         config.ControlDispatcherAgentName,
+		Scope:        "city",
+		StartCommand: "gc convoy control --serve",
+		WorkDir:      ".gc/agents/control-dispatcher",
+	}
+
+	resolved, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+	if strings.TrimSpace(resolved.Prompt) != "" {
+		t.Fatalf("suppressed startup prompt = %q, want empty", resolved.Prompt)
+	}
+}

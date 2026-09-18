@@ -109,6 +109,17 @@ func TestWritePrimePromptFormatsFilesystemSearchGuidanceOnce(t *testing.T) {
 	}
 }
 
+func TestWritePrimePromptSuppressedManagedSessionOmitsFilesystemSearchGuidance(t *testing.T) {
+	var stdout strings.Builder
+	writePrimePromptWithFormat(&stdout, "test-city", "custom", "Custom agent prompt.\n", true, "", true, "", nil)
+	if strings.Contains(stdout.String(), formulaFilesystemSearchGuidance) {
+		t.Fatalf("suppressed managed SessionStart leaked filesystem search guidance:\n%s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "Custom agent prompt.") {
+		t.Fatalf("suppressed managed SessionStart leaked the startup prompt:\n%s", stdout.String())
+	}
+}
+
 func TestRenderPromptNoExpressions(t *testing.T) {
 	f := fsys.NewFake()
 	content := "# Simple Prompt\n\nNo template expressions here.\n"
