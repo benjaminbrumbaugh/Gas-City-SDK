@@ -451,6 +451,11 @@ func doPrimeWithHookFormatOpts(args []string, stdout, stderr io.Writer, hookMode
 			prompt := renderPrompt(fsys.OSFS{}, cityPath, cityName, a.PromptTemplate, ctx, cfg.Workspace.SessionTemplate, stderr,
 				packDirs, fragments, nil)
 			if prompt != "" {
+				// Append before the strict budget is computed so the
+				// diagnostic measures exactly what reaches stdout.
+				// appendFilesystemSearchGuidance is idempotent, so the
+				// call in writePrimePromptWithFormat is a no-op here.
+				prompt = appendFilesystemSearchGuidance(prompt)
 				var budget *promptBudgetJSON
 				if strictMode {
 					var budgetErr error

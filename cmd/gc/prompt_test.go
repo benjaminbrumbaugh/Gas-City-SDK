@@ -995,6 +995,31 @@ func TestFormulaFilesystemSearchGuidanceCoversPromptSources(t *testing.T) {
 	}
 }
 
+// TestAppendFilesystemSearchGuidanceIsIdempotentForBundledPackText pins the
+// suppression check against the real bundled pack body rather than a
+// synthetic prompt built from the Go constant. The pack copies and
+// filesystemSearchGuidance have drifted in body wording while the heading
+// matches, so appending to already-guided pack text must still yield exactly
+// one heading — a divergence that a constant-only fixture cannot catch.
+func TestAppendFilesystemSearchGuidanceIsIdempotentForBundledPackText(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("filepath.Abs(repo root): %v", err)
+	}
+	path := filepath.Join(repoRoot, "internal", "bootstrap", "packs", "core", "assets", "prompts", "graph-worker.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile(%s): %v", path, err)
+	}
+	got := appendFilesystemSearchGuidance(string(data))
+	if count := strings.Count(got, filesystemSearchGuidanceHeading); count != 1 {
+		t.Fatalf("filesystem search guidance heading count = %d, want 1 after appending to bundled graph-worker.md", count)
+	}
+	if got != string(data) {
+		t.Fatalf("appendFilesystemSearchGuidance modified bundled graph-worker.md; want no-op")
+	}
+}
+
 // The hook-claim startup protocol's canonical text lives in one core-pack
 // fragment. pool-worker composes it by name; the bd/dolt dog carries the same
 // text verbatim (its pack cannot import core — see the rationale in
