@@ -749,6 +749,24 @@ func TestJSONExecutionDoesNotBufferJSONLCommands(t *testing.T) {
 	}
 }
 
+func TestJSONExecutionBuffersBdPassthrough(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	root := newRootCmd(&stdout, &stderr)
+
+	for _, args := range [][]string{
+		{"bd", "list", "--json"},
+		{"--city", "/city", "bd", "query", "--json"},
+		{"bd", "--rig", "frontend", "list", "--json"},
+	} {
+		if !shouldBufferJSONExecution(root, args) {
+			t.Fatalf("shouldBufferJSONExecution(%v) = false, want true for bd JSON passthrough", args)
+		}
+		if shouldReportJSONExecutionError(root, args) {
+			t.Fatalf("shouldReportJSONExecutionError(%v) = true, want false for raw bd passthrough errors", args)
+		}
+	}
+}
+
 func TestJSONExecutionFailureIsStructured(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"config", "explain", "--json"}, &stdout, &stderr)

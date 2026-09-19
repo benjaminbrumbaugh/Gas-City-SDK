@@ -241,7 +241,10 @@ func runWithRootCommandOptionsAndLifecycle(args []string, stdout, stderr io.Writ
 				if _, copyErr := io.Copy(stdout, &jsonStdout); copyErr != nil {
 					return 1
 				}
-			} else {
+			} else if reportJSONFailure {
+				// Raw passthrough commands, such as bd, retain their
+				// backend failure semantics instead of receiving gc's
+				// structured failure envelope.
 				_ = writeJSONFailure(stdout, "command_failed", commandFailureMessage(executeErr), code)
 			}
 		} else if reportJSONFailure && observedStdout.BytesWritten() == 0 {

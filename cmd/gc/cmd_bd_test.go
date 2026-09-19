@@ -1934,7 +1934,7 @@ exit 0
 // silentFallbackTestSetup writes a fake bd binary that emits the silent-
 // fallback marker, prepends it to PATH, and configures a minimal city as a
 // bd-backed scope (via GC_CITY_PATH) so doBd will dispatch through it.
-func silentFallbackTestSetup(t *testing.T, fakeBdScript string) {
+func silentFallbackTestSetup(t *testing.T, fakeBdScript string) string {
 	t.Helper()
 
 	origCityFlag := cityFlag
@@ -1977,6 +1977,53 @@ name = "demo"
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+origPath)
 	t.Setenv("GC_CITY_PATH", cityDir)
 	t.Setenv("GC_DOLT_PORT", port)
+	return cityDir
+}
+
+func jsonBdRigTestSetup(t *testing.T, fakeBdScript string) string {
+	t.Helper()
+
+	cityDir := t.TempDir()
+	port := strconv.Itoa(writeReachableManagedDoltState(t, cityDir))
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "demo"
+
+[[rigs]]
+name = "frontend"
+path = "rigs/frontend"
+prefix = "frontend"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cityConfig := "issue_prefix: demo\n" +
+		"gc.endpoint_origin: city_canonical\n" +
+		"gc.endpoint_status: verified\n" +
+		"dolt.auto-start: false\n" +
+		"dolt.host: 127.0.0.1\n" +
+		"dolt.port: " + port + "\n"
+	if err := os.WriteFile(filepath.Join(cityDir, ".beads", "config.yaml"), []byte(cityConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rigDir := filepath.Join(cityDir, "rigs", "frontend")
+	if err := os.MkdirAll(filepath.Join(rigDir, ".beads"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rigConfig := "issue_prefix: frontend\n" +
+		"gc.endpoint_origin: inherited_city\n" +
+		"gc.endpoint_status: verified\n" +
+		"dolt.auto-start: false\n"
+	if err := os.WriteFile(filepath.Join(rigDir, ".beads", "config.yaml"), []byte(rigConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "bd"), []byte(fakeBdScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GC_CITY_PATH", cityDir)
+	t.Setenv("GC_DOLT_PORT", port)
+	return cityDir
 }
 
 // managedDoltTestSetup is silentFallbackTestSetup for a Dolt endpoint gc
@@ -2110,6 +2157,90 @@ exit 0
 	}
 	if strings.Contains(stderr.String(), "managed Dolt unreachable") {
 		t.Fatalf("loud-fail message fired on a happy-path run; stderr=%q", stderr.String())
+	}
+}
+
+func TestGcBdJSONProcessOutputKeepsDiagnosticsOffStdout(t *testing.T) {
+	cityDir := silentFallbackTestSetup(t, `#!/bin/sh
+case "$1" in
+list) printf '[{"id":"demo-1"}]\n' ;;
+query) printf '[{"id":"demo-2"}]\n' ;;
+*) printf '[]\n' ;;
+esac
+printf 'named_session diagnostic\n' >&2
+exit 0
+`)
+
+	for _, args := range [][]string{
+		{"--city", cityDir, "bd", "list", "--json"},
+		{"--city", cityDir, "bd", "query", "--json"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := run(args, &stdout, &stderr); got != 0 {
+				t.Fatalf("run(%v) = %d; stdout=%q stderr=%q", args, got, stdout.String(), stderr.String())
+			}
+			dec := json.NewDecoder(strings.NewReader(stdout.String()))
+			var payload any
+			if err := dec.Decode(&payload); err != nil {
+				t.Fatalf("stdout is not one JSON value: %v; stdout=%q", err, stdout.String())
+			}
+			var extra any
+			if err := dec.Decode(&extra); err != io.EOF {
+				t.Fatalf("stdout contains more than one JSON value: err=%v extra=%#v stdout=%q", err, extra, stdout.String())
+			}
+			if strings.Contains(stdout.String(), "named_session") {
+				t.Fatalf("stdout contains diagnostic text: %q", stdout.String())
+			}
+			if !strings.Contains(stderr.String(), "named_session diagnostic") {
+				t.Fatalf("stderr = %q, want backend diagnostic", stderr.String())
+			}
+		})
+	}
+
+	rigCityDir := jsonBdRigTestSetup(t, `#!/bin/sh
+printf '[{"id":"frontend-1"}]\n'
+printf 'named_session rig diagnostic\n' >&2
+exit 0
+`)
+	var rigStdout, rigStderr bytes.Buffer
+	rigArgs := []string{"--city", rigCityDir, "bd", "--rig", "frontend", "list", "--json"}
+	if got := run(rigArgs, &rigStdout, &rigStderr); got != 0 {
+		t.Fatalf("run(%v) = %d; stdout=%q stderr=%q", rigArgs, got, rigStdout.String(), rigStderr.String())
+	}
+	dec := json.NewDecoder(strings.NewReader(rigStdout.String()))
+	var payload any
+	if err := dec.Decode(&payload); err != nil {
+		t.Fatalf("rig stdout is not one JSON value: %v; stdout=%q", err, rigStdout.String())
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		t.Fatalf("rig stdout contains more than one JSON value: err=%v extra=%#v stdout=%q", err, extra, rigStdout.String())
+	}
+	if strings.Contains(rigStdout.String(), "named_session") {
+		t.Fatalf("rig stdout contains diagnostic text: %q", rigStdout.String())
+	}
+	if !strings.Contains(rigStderr.String(), "named_session rig diagnostic") || !strings.Contains(rigStderr.String(), `answering from the rig "frontend" store`) {
+		t.Fatalf("rig stderr = %q, want backend and scope diagnostics", rigStderr.String())
+	}
+}
+
+func TestGcBdJSONFailurePreservesRawPassthrough(t *testing.T) {
+	cityDir := silentFallbackTestSetup(t, `#!/bin/sh
+printf 'bd: simulated failure\n' >&2
+exit 3
+`)
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"--city", cityDir, "bd", "list", "--json"}
+	if got := run(args, &stdout, &stderr); got != 3 {
+		t.Fatalf("run(%v) = %d, want 3; stdout=%q stderr=%q", args, got, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty raw-passthrough failure output", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "bd: simulated failure") {
+		t.Fatalf("stderr = %q, want bd failure diagnostic", stderr.String())
 	}
 }
 

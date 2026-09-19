@@ -160,9 +160,10 @@ func shouldBufferJSONExecution(root *cobra.Command, args []string) bool {
 		return true
 	}
 	commandPath := commandPathWords(request.cmd)
-	if isBDCommandPath(commandPath) {
-		return false
-	}
+	// bd owns the raw JSON payload, but its output still goes through the
+	// root capture boundary so framework diagnostics cannot contaminate the
+	// process stdout stream. shouldReportJSONExecutionError remains separate:
+	// raw bd failures must not be rewritten as generic gc failure envelopes.
 	schema, err := readCommandSchema(request.cmd, commandPath, jsonSchemaResultRole)
 	if err != nil {
 		return !allowMissingLocalJSONSchemaPassthrough(request.cmd, err)
