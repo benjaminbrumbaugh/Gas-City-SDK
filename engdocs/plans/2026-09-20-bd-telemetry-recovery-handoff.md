@@ -192,32 +192,52 @@ for anything else.
    invocation under a shell with `BD_DISABLE_METRICS=false` exported, and
    confirm `~/.beads/eventsData` stays absent.
 
-### Keep Time Machine viable
+### Keep Time Machine viable — DONE 2026-09-20
 
-Exclude reproducible runtime state; protect only the ledger and backups:
+Reproducible runtime state is excluded; only the ledger, backups, and city
+config remain in the backup set (`tmutil isexcluded` verified):
 
-```bash
-CITY="$HOME/Documents/Gas City/Gas-City"
-tmutil addexclusion -p "$CITY/.gc/worktrees"
-tmutil addexclusion -p "$CITY/.gc/migration-worktrees"
-tmutil addexclusion -p "$CITY/.gc/runtime"
-tmutil addexclusion -p "$HOME/.gc/cache"
+```text
+[Excluded]  Gas-City/.gc/worktrees            (782k files, 57 GB)
+[Excluded]  Gas-City/.gc/migration-worktrees  (16k files)
+[Excluded]  Gas-City/.gc/runtime              (5k files, 4.2 GB)
+[Excluded]  ~/.gc/cache                       (41k files)
+[Included]  Gas-City/.beads/dolt, .dolt-backup, city.toml
 ```
 
-(`-p` is a sticky path exclusion that survives the directory being
-recreated.) Separately, reap the 54 stale `Wayfinder/work/wf-*` worktrees
-through gc's own worktree lifecycle once the city is confirmed idle on them —
-that is a Gas City operational task, not a backup task.
+These are per-item (xattr) exclusions — `tmutil addexclusion -p` (sticky
+path) requires root. They persist as long as the directory inode does; gc
+recreates children, not these parents. Re-check after any `gc` command that
+recreates `.gc/` wholesale.
 
-### Prove local backup recovery
+Separately, reap the 54 stale `Wayfinder/work/wf-*` worktrees through gc's
+own worktree lifecycle once the city is confirmed idle on them — that is a
+Gas City operational task, not a backup task.
 
-1. Enumerate non-system Dolt databases on port 29223 (`SHOW DATABASES`).
-2. Map each to a `.dolt-backup/<name>` artifact.
-3. For each, `dolt backup restore` into a fresh directory under `temp/`
-   (never into `.beads/dolt`), run `dolt status`, list tables, and run one
-   read-only `bd list` against it.
-4. After the supervisor restart, require a new `dolt-backup-state.json`
-   stamp and no stale-backup doctor warning.
+### Prove local backup recovery — drill PASSED 2026-09-20
+
+Each of the five on-disk databases (`gc gcd he sdk wf`) was restored with
+`dolt backup restore file://<city>/.dolt-backup/<db> <db>` into an isolated
+`/var/tmp` directory (3.4 GB total, removed afterwards; live store untouched):
+
+| db | restored HEAD vs live | issues | open | convoys open |
+| --- | --- | --- | --- | --- |
+| gc | 850 commits behind (backup 06:05, live 10:54 PDT Sep 19) | 4747 | 160 | 41 |
+| gcd | identical | 1151 | 81 | — |
+| he | identical | 77 | 28 | — |
+| sdk | identical | 198 | 38 | — |
+| wf | identical | 245 | 78 | — |
+
+All restores reported `On branch main`, 30–31 tables, and answered SQL
+against `issues`. The `gc` gap is the ~5 hours of live writes after the last
+managed backup cycle (`dolt-backup-state.json` 2026-09-19T13:06:02Z) and
+before the city was disturbed — no cycle has run since. The remaining step
+after the supervisor restart: require a fresh `dolt-backup-state.json` stamp
+and no stale-backup doctor warning, then the gap closes.
+
+The registered Library backup URL (`~/Library/Application Support/Gas
+City/Backups/Gas-City`, one `.darc` from Aug 16) was not drilled: it is a
+month stale and superseded by `.dolt-backup`.
 
 ### Establish Time Machine protection
 
@@ -236,7 +256,8 @@ that is a Gas City operational task, not a backup task.
    supervisor, hooks, and agents.
 4. No offsite backup environment variable or destination is configured.
 5. Each live Beads/Dolt database has passed an isolated restore drill.
+   (Done; `gc` needs one post-restart backup cycle to close its gap.)
 6. `.gc/worktrees`, `.gc/migration-worktrees`, `.gc/runtime`, and
-   `~/.gc/cache` are Time Machine-excluded.
+   `~/.gc/cache` are Time Machine-excluded. (Done.)
 7. The new encrypted Time Machine destination has completed a backup and
    passed a restore drill.
