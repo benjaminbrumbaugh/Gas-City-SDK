@@ -34,6 +34,25 @@ func TestExecEnvForBd_InjectsAutoBackupOptOut(t *testing.T) {
 	}
 }
 
+func TestExecEnvForBd_InjectsMetricsOptOut(t *testing.T) {
+	// Every runner-spawned bd call must also opt out of bd's anonymous
+	// command telemetry: the v1.1.x file queue (~/.beads/eventsData) has no
+	// retention cap and reached ~23M files on one operator machine, which
+	// broke Time Machine. An inherited opt-in must be replaced, and an
+	// explicit per-call override still wins.
+	got := execEnvFor("bd", []string{"PATH=/usr/bin", "BD_DISABLE_METRICS=false"}, nil)
+	if vals := envValues(got, "BD_DISABLE_METRICS"); len(vals) != 1 || vals[0] != "1" {
+		t.Errorf("BD_DISABLE_METRICS values = %v, want exactly [1] (inherited false must be replaced)", vals)
+	}
+	got = execEnvFor("bd", []string{"PATH=/usr/bin"}, map[string]string{"BD_DISABLE_METRICS": "0"})
+	if vals := envValues(got, "BD_DISABLE_METRICS"); len(vals) != 1 || vals[0] != "0" {
+		t.Errorf("BD_DISABLE_METRICS values = %v, want exactly [0] (explicit override wins)", vals)
+	}
+	if vals := envValues(execEnvFor("dolt", []string{"PATH=/usr/bin"}, nil), "BD_DISABLE_METRICS"); len(vals) != 0 {
+		t.Errorf("non-bd command gained BD_DISABLE_METRICS=%v", vals)
+	}
+}
+
 func TestExecEnvForBd_OverridesInheritedEnable(t *testing.T) {
 	// A BD_BACKUP_ENABLED=true inherited from the parent process must not
 	// leak through: gc policy forces the opt-out on gc-managed bd calls,

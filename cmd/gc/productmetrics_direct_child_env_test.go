@@ -21,9 +21,12 @@ import (
 
 const productMetricsDirectChildEnvSpyPath = "GC_TEST_PRODUCT_METRICS_DIRECT_CHILD_ENV_SPY_PATH"
 
+// BD_DISABLE_METRICS is deliberately absent: it is controller-owned bd
+// telemetry policy (see execenv.WithBdMetricsDisabled), not an unrelated
+// setting these children must preserve.
 var productMetricsDirectChildObservedKeys = []string{
 	execenv.UsageMetricsDisableEnv,
-	"BD_DISABLE_METRICS",
+	"BD_OTEL_METRICS_URL",
 	"OTEL_SERVICE_NAME",
 	"PWD",
 }
@@ -141,7 +144,7 @@ func captureProductMetricsDirectChildEnv(t *testing.T, invoke func() error) []st
 	// lint rejects.
 	t.Setenv("GC_TESTENV_PASSTHROUGH", execenv.UsageMetricsDisableEnv)
 	t.Setenv(execenv.UsageMetricsDisableEnv, "0")
-	t.Setenv("BD_DISABLE_METRICS", "keep-beads-setting")
+	t.Setenv("BD_OTEL_METRICS_URL", "keep-beads-setting")
 	t.Setenv("OTEL_SERVICE_NAME", "keep-otel-setting")
 
 	if err := invoke(); err != nil {
@@ -182,8 +185,8 @@ func assertProductMetricsDirectChildEnv(t *testing.T, entries []string) {
 func assertProductMetricsDirectChildUnrelatedEnv(t *testing.T, entries []string) {
 	t.Helper()
 	for key, want := range map[string]string{
-		"BD_DISABLE_METRICS": "keep-beads-setting",
-		"OTEL_SERVICE_NAME":  "keep-otel-setting",
+		"BD_OTEL_METRICS_URL": "keep-beads-setting",
+		"OTEL_SERVICE_NAME":   "keep-otel-setting",
 	} {
 		if got := valuesForProductMetricsDirectChildKey(entries, key); !slices.Equal(got, []string{want}) {
 			t.Fatalf("child %s values = %#v, want preserved [%s]; env=%#v", key, got, want, entries)

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -283,9 +282,8 @@ func localOnlyRemoteFixHint(remotes []doltRemoteState) string {
 }
 
 func removeDoltRemote(rigPath, remoteName string) error {
-	cmd := exec.Command("bd", "--sandbox", "dolt", "remote", "remove", remoteName)
-	cmd.Dir = rigPath
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd := bdCommand(rigPath, "--sandbox", "dolt", "remote", "remove", remoteName)
+	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("bd --sandbox dolt remote remove %s: %w: %s", remoteName, err, strings.TrimSpace(string(out)))

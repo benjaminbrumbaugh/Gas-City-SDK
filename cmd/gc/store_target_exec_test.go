@@ -133,6 +133,17 @@ func TestSetExecProjectedBackendEnvEmptyDisablesAutoBackup(t *testing.T) {
 	}
 }
 
+func TestSetExecProjectedBackendEnvEmptyDisablesMetrics(t *testing.T) {
+	// The exec-store projection must also force bd's anonymous telemetry
+	// off: the v1.1.x file queue has no retention cap and broke Time
+	// Machine with millions of spooled events on one operator machine.
+	env := map[string]string{"BD_DISABLE_METRICS": "false"}
+	setExecProjectedBackendEnvEmpty(env)
+	if got := env["BD_DISABLE_METRICS"]; got != "1" {
+		t.Fatalf("BD_DISABLE_METRICS = %q, want 1", got)
+	}
+}
+
 func TestSetExecProjectedBackendEnvEmptyDisablesContributorRouting(t *testing.T) {
 	// The exec-store projection must also force bd's fork/contributor
 	// auto-routing off, mirroring the other bd env-projection sites, so a
@@ -610,6 +621,7 @@ dolt.auto-start: false
 	for _, key := range execProjectedBackendEnvKeys() {
 		switch key {
 		case "BD_EXPORT_AUTO", "BD_BACKUP_ENABLED", "BEADS_BACKUP_ENABLED",
+			"BD_DISABLE_METRICS",
 			"BD_DOLT_SYNC_CLI_REMOTES", "BEADS_DOLT_SYNC_CLI_REMOTES",
 			"BD_ROUTING_MODE", "BEADS_ROUTING_MODE":
 			// The bd opt-out keys are policy gc always states, not connection

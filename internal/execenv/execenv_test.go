@@ -221,3 +221,17 @@ func TestRedactTextRedactsEnvValuesAndAssignments(t *testing.T) {
 		t.Fatalf("RedactText redactions = %q, want at least three", got)
 	}
 }
+
+func TestWithBdMetricsDisabledReplacesEveryInheritedEntry(t *testing.T) {
+	// bd's anonymous telemetry queue (~/.beads/eventsData) has no retention
+	// cap; every gc-spawned bd child must carry exactly one canonical opt-out
+	// regardless of what the parent inherited.
+	got := WithBdMetricsDisabled([]string{"PATH=/usr/bin", "BD_DISABLE_METRICS=false", "HOME=/h", "BD_DISABLE_METRICS=0"})
+	want := []string{"PATH=/usr/bin", "HOME=/h", BdMetricsDisabledEntry}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("WithBdMetricsDisabled = %q, want %q", got, want)
+	}
+	if BdMetricsDisabledEntry != "BD_DISABLE_METRICS=1" {
+		t.Fatalf("BdMetricsDisabledEntry = %q, want BD_DISABLE_METRICS=1", BdMetricsDisabledEntry)
+	}
+}

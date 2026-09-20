@@ -18,11 +18,12 @@ type execStoreTarget struct {
 }
 
 func execProjectedBackendEnvKeys() []string {
-	keys := make([]string, 0, len(projectedBeadsBackendEnvKeys)+len(projectedDoltEnvKeys)+len(bdCLIRemoteSyncOptOutEnvKeys)+len(bdAutoBackupOptOutEnvKeys))
+	keys := make([]string, 0, len(projectedBeadsBackendEnvKeys)+len(projectedDoltEnvKeys)+len(bdCLIRemoteSyncOptOutEnvKeys)+len(bdAutoBackupOptOutEnvKeys)+len(bdMetricsOptOutEnvKeys))
 	keys = append(keys, projectedBeadsBackendEnvKeys...)
 	keys = append(keys, projectedDoltEnvKeys...)
 	keys = appendBdCLIRemoteSyncOptOutEnvKeys(keys)
 	keys = appendBdAutoBackupOptOutEnvKeys(keys)
+	keys = appendBdMetricsOptOutEnvKeys(keys)
 	keys = appendBdContributorRoutingOptOutEnvKeys(keys)
 	return keys
 }
@@ -33,6 +34,7 @@ func setExecProjectedBackendEnvEmpty(env map[string]string) {
 	}
 	applyBdCLIRemoteSyncOptOut(env)
 	applyBdAutoBackupOptOut(env)
+	applyBdMetricsOptOut(env)
 	applyBdContributorRoutingOptOut(env)
 }
 
