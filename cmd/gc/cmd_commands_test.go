@@ -81,7 +81,7 @@ echo "packname=$GC_PACK_NAME"
 echo "cityname=$GC_CITY_NAME"
 echo "args=$*"
 echo "gcmetrics=$GC_DISABLE_USAGE_METRICS"
-echo "bdmetrics=$BD_DISABLE_METRICS"
+echo "bdotel=$BD_OTEL_METRICS_URL"
 echo "otel=$OTEL_SERVICE_NAME"
 `
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
@@ -97,7 +97,9 @@ echo "otel=$OTEL_SERVICE_NAME"
 		SourceDir:   sourceDir,
 	}
 	t.Setenv("GC_DISABLE_USAGE_METRICS", "ambient-value-must-lose")
-	t.Setenv("BD_DISABLE_METRICS", "keep-beads-setting")
+	// BD_DISABLE_METRICS is controller-owned bd policy (forced to 1); use a
+	// different bd key as the "unrelated setting gc must preserve" sentinel.
+	t.Setenv("BD_OTEL_METRICS_URL", "keep-beads-setting")
 	t.Setenv("OTEL_SERVICE_NAME", "keep-otel-setting")
 
 	var stdout, stderr bytes.Buffer
@@ -121,7 +123,7 @@ echo "otel=$OTEL_SERVICE_NAME"
 	}
 	for _, want := range []string{
 		"gcmetrics=1",
-		"bdmetrics=keep-beads-setting",
+		"bdotel=keep-beads-setting",
 		"otel=keep-otel-setting",
 	} {
 		if !strings.Contains(out, want) {
@@ -3938,5 +3940,38 @@ wait_timeout_seconds = 120
 		if n != 1 {
 			t.Errorf("env key %s appears %d times, want 1", key, n)
 		}
+	}
+}
+
+func TestRunDiscoveredCommand_DisablesBdMetrics(t *testing.T) {
+	// Pack command scripts (e.g. dolt compact, doctor helpers) routinely
+	// shell out to bd; they must see the gc-wide telemetry opt-out even when
+	// the invoking shell exported an opt-in.
+	dir := t.TempDir()
+	packDir := filepath.Join(dir, "pack")
+	sourceDir := filepath.Join(packDir, "commands", "probe")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(sourceDir, "run.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho \"metrics=$BD_DISABLE_METRICS\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BD_DISABLE_METRICS", "false")
+
+	entry := config.DiscoveredCommand{
+		BindingName: "probe",
+		PackName:    "probe",
+		Command:     []string{"probe"},
+		RunScript:   scriptPath,
+		PackDir:     packDir,
+		SourceDir:   sourceDir,
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runDiscoveredCommand(entry, dir, "testcity", nil, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "metrics=1" {
+		t.Fatalf("pack command saw %q, want metrics=1", got)
 	}
 }

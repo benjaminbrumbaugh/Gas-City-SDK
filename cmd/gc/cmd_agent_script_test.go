@@ -1064,3 +1064,23 @@ func TestAgentScriptHookBeadReportsArrayAndObjectDecodeErrors(t *testing.T) {
 		t.Fatalf("error = %q, want decode context", joined.Error())
 	}
 }
+
+func TestAgentScriptShellEnvDisablesBdMetrics(t *testing.T) {
+	// Agent-script shell actions are an operator-authored bd reach; they
+	// inherit the gc-wide telemetry opt-out rather than the runner's shell.
+	env, err := agentScriptShellEnv([]string{"PATH=/bin", "BD_DISABLE_METRICS=false"}, agentScriptContext{
+		bead: agentScriptBead{ID: "ga-1", Title: "t"}, rig: "demo", alias: "demo/worker",
+	})
+	if err != nil {
+		t.Fatalf("agentScriptShellEnv: %v", err)
+	}
+	var seen []string
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "BD_DISABLE_METRICS=") {
+			seen = append(seen, entry)
+		}
+	}
+	if !slices.Equal(seen, []string{"BD_DISABLE_METRICS=1"}) {
+		t.Fatalf("BD_DISABLE_METRICS entries = %v, want exactly [BD_DISABLE_METRICS=1]", seen)
+	}
+}
