@@ -279,7 +279,7 @@ BeadPolicyConfig holds storage and retention defaults for a named bead use.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `storage` | string |  |  | Storage selects the intended persistence tier: "history", "no_history", or "ephemeral". Creation paths apply this incrementally as they opt in. Enum: `history`, `no_history`, `ephemeral` |
-| `delete_after_close` | string |  |  | DeleteAfterClose deletes matching GC-owned beads after they have been closed for this duration. Accepts Go duration syntax plus whole-day "d" units, e.g. "7d" or "1d12h". ApplyBeadPolicyDefaults fills in a non-empty default for recognized policy types (order_tracking: "7d"), so this field is populated after config load even when the city.toml omits it. |
+| `delete_after_close` | string |  |  | DeleteAfterClose deletes matching GC-owned beads after they have been closed for this duration. Accepts Go duration syntax plus whole-day "d" units, e.g. "7d" or "1d12h". ApplyBeadPolicyDefaults fills in a non-empty default for recognized policy types (order_tracking: "7d"), so this field is populated after config load even when the city.toml omits it. The opt-in "closed_durable" policy has no default: when set, the controller ages out closed non-ephemeral beads past this duration that have no parent or dependency link to non-closed work (dry-run until GC_CLOSED_BEAD_RETENTION_ENFORCE=1). |
 
 ## BeadsConfig
 

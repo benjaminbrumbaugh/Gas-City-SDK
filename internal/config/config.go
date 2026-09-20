@@ -1495,7 +1495,10 @@ type BeadPolicyConfig struct {
 	// units, e.g. "7d" or "1d12h". ApplyBeadPolicyDefaults fills in a
 	// non-empty default for recognized policy types (order_tracking: "7d"),
 	// so this field is populated after config load even when the city.toml
-	// omits it.
+	// omits it. The opt-in "closed_durable" policy has no default: when set,
+	// the controller ages out closed non-ephemeral beads past this duration
+	// that have no parent or dependency link to non-closed work (dry-run
+	// until GC_CLOSED_BEAD_RETENTION_ENFORCE=1).
 	DeleteAfterClose string `toml:"delete_after_close,omitempty"`
 }
 
