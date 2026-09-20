@@ -239,9 +239,53 @@ The registered Library backup URL (`~/Library/Application Support/Gas
 City/Backups/Gas-City`, one `.darc` from Aug 16) was not drilled: it is a
 month stale and superseded by `.dolt-backup`.
 
+### Age out closed beads (redundant state) — code landed, policy opt-in
+
+The operator does not want the city holding redundant state: projects live
+in Git, and the whole filesystem goes to Time Machine. The largest
+accumulation is closed `session` beads (4,241 of 4,747 rows in the `gc`
+store) which nothing aged out — wisp GC only covers ephemeral roots and the
+order-tracking watchdog only covers tracking rows.
+
+`cmd/gc/closed_bead_retention.go` adds an opt-in `closed_durable` policy:
+
+```toml
+[beads.policies.closed_durable]
+delete_after_close = "14d"
+```
+
+It deletes closed non-ephemeral beads older than the TTL that have no
+parent or dependency edge (either direction) to non-closed work, oldest
+first, 500 per hourly run. It is **dry-run until
+`GC_CLOSED_BEAD_RETENTION_ENFORCE=1`** is set in the supervisor environment,
+and enforcement defers to `doctor.BulkDeleteSafe` (stale managed backup ⇒
+skip). Dry-run against the live `gc` store at 14d: 2,462 eligible, 11
+protected by open links.
+
+Not applied to `city.toml` yet. Rollout: add the policy, restart, read the
+dry-run advisory line in `supervisor.log` for a cycle, then set the env in
+the LaunchAgent plist and reload. Follow with `bd compact` once the backlog
+has drained so Dolt actually releases chunks — row deletes alone do not
+shrink `.beads/dolt`.
+
+### mol-dog-backup — keep until Time Machine is proven
+
+There is no backup nag mail in the store today (zero `message` beads). The
+nagging comes from `mol-dog-doctor.sh` `[WARN: backup stale]` and the
+`bd-backup-freshness` / `bd-backup-size` / `dolt-backup` doctor checks, which
+only fire when a *registered* backup goes stale — so disabling the order
+without also removing those checks would create the flood. Decision: keep
+`mol-dog-backup` (it is what the restore drill used and the only recovery
+path until Time Machine works). Once Time Machine has completed a backup
+and a restore drill, remove the order and the three doctor checks together
+in one pack/config change. Do not re-enable the legacy `backup.enabled`.
+
 ### Establish Time Machine protection
 
-1. Configure and encrypt the new disk (`tmutil setdestination -a`).
+1. Configure and encrypt the new disk. `/Volumes/MAC_STUDIO_TM` (1 TB USB,
+   case-sensitive APFS, not encrypted) is attached; `tmutil setdestination`
+   requires root, so this is an operator step: System Settings → General →
+   Time Machine → Add Backup Disk → MAC_STUDIO_TM, tick Encrypt.
 2. Confirm the exclusions above are honored, then complete the first backup.
 3. Run a restore drill from Time Machine before treating it as protective.
 
