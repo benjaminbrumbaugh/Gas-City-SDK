@@ -17,6 +17,7 @@ func IsReservedExecEnvKey(key string) bool {
 	switch key {
 	case
 		"BD_BACKUP_ENABLED",
+		"BD_DISABLE_METRICS",
 		"BD_EXPORT_AUTO",
 		"BEADS_ACTOR",
 		"BEADS_BACKUP_ENABLED",

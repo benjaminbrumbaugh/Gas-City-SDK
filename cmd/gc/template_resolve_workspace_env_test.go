@@ -109,7 +109,8 @@ func TestResolveTemplateDisablesProductMetricsForManagedAgent(t *testing.T) {
 	}
 	agent := &config.Agent{Name: "worker", Env: map[string]string{
 		execenv.UsageMetricsDisableEnv: "0",
-		"BD_DISABLE_METRICS":           "leave-beads-alone",
+		"BD_DISABLE_METRICS":           "0",
+		"BD_OTEL_METRICS_URL":          "leave-beads-alone",
 	}}
 
 	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
@@ -119,7 +120,12 @@ func TestResolveTemplateDisablesProductMetricsForManagedAgent(t *testing.T) {
 	if got := tp.Env[execenv.UsageMetricsDisableEnv]; got != execenv.UsageMetricsDisableValue {
 		t.Fatalf("%s = %q, want %q", execenv.UsageMetricsDisableEnv, got, execenv.UsageMetricsDisableValue)
 	}
-	if got := tp.Env["BD_DISABLE_METRICS"]; got != "leave-beads-alone" {
-		t.Fatalf("BD_DISABLE_METRICS = %q, want unchanged", got)
+	// bd telemetry is controller-owned policy like BD_BACKUP_ENABLED: an
+	// agent's own env cannot re-enable the unbounded eventsData spool.
+	if got := tp.Env[execenv.BdMetricsDisableEnv]; got != execenv.BdMetricsDisableValue {
+		t.Fatalf("%s = %q, want %q", execenv.BdMetricsDisableEnv, got, execenv.BdMetricsDisableValue)
+	}
+	if got := tp.Env["BD_OTEL_METRICS_URL"]; got != "leave-beads-alone" {
+		t.Fatalf("BD_OTEL_METRICS_URL = %q, want unchanged", got)
 	}
 }

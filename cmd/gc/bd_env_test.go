@@ -17,6 +17,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/beads/contract"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/execenv"
 )
 
 func mustBdRuntimeEnv(t *testing.T, cityPath string) map[string]string {
@@ -4850,8 +4851,10 @@ func TestProjectedKeysCoverage(t *testing.T) {
 		parentKeys = append(parentKeys, key+"=PARENT")
 	}
 	stripped := mergeRuntimeEnv(parentKeys, nil)
-	if len(stripped) != 0 {
-		t.Errorf("mergeRuntimeEnv stripped projected keys = %d entries left, want 0; entries=%v", len(stripped), stripped)
+	// The only entry the merge is allowed to add on its own is the canonical
+	// bd telemetry opt-out gc states for every shell-mediated bd reach.
+	if len(stripped) != 1 || stripped[0] != execenv.BdMetricsDisabledEntry {
+		t.Errorf("mergeRuntimeEnv stripped projected keys = %d entries left, want only %s; entries=%v", len(stripped), execenv.BdMetricsDisabledEntry, stripped)
 	}
 
 	for _, key := range projectedBeadsBackendEnvKeys {
@@ -5683,4 +5686,94 @@ func TestResolveBdBinaryForScope(t *testing.T) {
 			t.Fatalf("resolveBdBinaryForScope(city, rig) = %q, want ambient %q: a doltlite rig's runtime env carries no BD_BIN", got, ambient)
 		}
 	})
+}
+
+// bd's anonymous command telemetry (v1.1.x) spools events into
+// ~/.beads/eventsData with no retention cap; when delivery stalls it created
+// ~23M files / ~88GB on one operator machine and broke Time Machine. Every
+// gc-managed bd invocation must carry BD_DISABLE_METRICS=1 at every
+// env-projection site, overriding any ambient value so the city never
+// depends on the operator's user-global bd preference.
+
+func TestBdRuntimeEnvDisablesMetrics(t *testing.T) {
+	t.Setenv("GC_BEADS", "bd")
+	t.Setenv("BD_DISABLE_METRICS", "false")
+
+	env := mustBdRuntimeEnv(t, t.TempDir())
+	if got := env["BD_DISABLE_METRICS"]; got != "1" {
+		t.Fatalf("BD_DISABLE_METRICS = %q, want 1", got)
+	}
+}
+
+func TestCityRuntimeProcessEnvDisablesMetrics(t *testing.T) {
+	t.Setenv("GC_BEADS", "bd")
+	t.Setenv("BD_DISABLE_METRICS", "false")
+
+	values := envEntriesMap(mustCityRuntimeProcessEnv(t, t.TempDir()))
+	if got := values["BD_DISABLE_METRICS"]; got != "1" {
+		t.Fatalf("BD_DISABLE_METRICS = %q, want 1", got)
+	}
+}
+
+func TestSessionBackendEnvDisablesMetrics(t *testing.T) {
+	t.Setenv("GC_BEADS", "bd")
+	t.Setenv("BD_DISABLE_METRICS", "false")
+
+	env := mustSessionBackendEnv(t, t.TempDir(), "", nil)
+	if got := env["BD_DISABLE_METRICS"]; got != "1" {
+		t.Fatalf("BD_DISABLE_METRICS = %q, want 1", got)
+	}
+}
+
+func TestRecoverManagedBDCommandDisablesMetrics(t *testing.T) {
+	t.Setenv("GC_BEADS", "bd")
+	t.Setenv("BD_DISABLE_METRICS", "false")
+
+	cityPath := t.TempDir()
+	envFile := filepath.Join(cityPath, "recover-env.txt")
+	scriptPath := gcBeadsBdScriptPath(cityPath)
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\n" +
+		"printf 'BD_DISABLE_METRICS=%s\\n' \"$BD_DISABLE_METRICS\" > \"" + envFile + "\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := recoverManagedBDCommand(cityPath); err != nil {
+		t.Fatalf("recoverManagedBDCommand: %v", err)
+	}
+	data, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(data)); got != "BD_DISABLE_METRICS=1" {
+		t.Fatalf("recovered bd env = %q, want BD_DISABLE_METRICS=1", got)
+	}
+}
+
+func TestMergeRuntimeEnvAlwaysCarriesMetricsOptOut(t *testing.T) {
+	// mergeRuntimeEnv is the shared assembly for every sh -c work-query,
+	// hook, sling, pool, and order runner that reaches bd through a shell.
+	// Those callers pass nil or unrelated overrides, so the opt-out must be
+	// present in the merged result on its own — not only when a projection
+	// site remembered to add it.
+	got := envEntriesMap(mergeRuntimeEnv([]string{"PATH=/usr/bin", "BD_DISABLE_METRICS=false"}, nil))
+	if got["BD_DISABLE_METRICS"] != "1" {
+		t.Fatalf("nil overrides: BD_DISABLE_METRICS = %q, want 1", got["BD_DISABLE_METRICS"])
+	}
+	got = envEntriesMap(mergeRuntimeEnv([]string{"PATH=/usr/bin"}, map[string]string{"GC_RIG": "frontend"}))
+	if got["BD_DISABLE_METRICS"] != "1" {
+		t.Fatalf("unrelated overrides: BD_DISABLE_METRICS = %q, want 1", got["BD_DISABLE_METRICS"])
+	}
+	count := 0
+	for _, entry := range mergeRuntimeEnv([]string{"BD_DISABLE_METRICS=1", "BD_DISABLE_METRICS=0"}, nil) {
+		if strings.HasPrefix(entry, "BD_DISABLE_METRICS=") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("BD_DISABLE_METRICS entries = %d, want exactly 1", count)
+	}
 }

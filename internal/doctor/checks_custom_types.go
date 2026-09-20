@@ -178,8 +178,7 @@ func (c *CustomTypesCheck) Fix(_ *CheckContext) error {
 func getCustomTypes(dir string) ([]string, error) {
 	start := time.Now()
 	args := []string{"config", "get", "--json", "types.custom"}
-	cmd := exec.Command("bd", args...)
-	cmd.Dir = dir
+	cmd := bdCommand(dir, args...)
 	out, err := cmd.Output()
 	exitCode := 0
 	if err != nil {
@@ -219,8 +218,7 @@ func parseCustomTypesJSON(out []byte) ([]string, error) {
 func getRegisteredTypes(dir string) ([]string, error) {
 	start := time.Now()
 	args := []string{"types", "--json"}
-	cmd := exec.Command("bd", args...)
-	cmd.Dir = dir
+	cmd := bdCommand(dir, args...)
 	out, err := cmd.Output()
 	exitCode := 0
 	if err != nil {
@@ -255,8 +253,7 @@ func parseRegisteredTypesJSON(out []byte) ([]string, error) {
 func setCustomTypes(dir, types string) error {
 	start := time.Now()
 	args := []string{"config", "set", "types.custom", types}
-	cmd := exec.Command("bd", args...)
-	cmd.Dir = dir
+	cmd := bdCommand(dir, args...)
 	err := cmd.Run()
 	exitCode := 0
 	if err != nil {

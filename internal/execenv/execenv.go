@@ -21,6 +21,32 @@ const UsageMetricsDisableValue = "1"
 // UsageMetricsDisabledEntry is the canonical child-environment assignment.
 const UsageMetricsDisabledEntry = UsageMetricsDisableEnv + "=" + UsageMetricsDisableValue
 
+// BdMetricsDisableEnv is bd's bidirectional anonymous-telemetry override.
+// Gas City forces it off for every bd child it spawns: the bd v1.1.x file
+// queue (~/.beads/eventsData) has no retention cap, so a stalled uploader
+// spooled ~23M files on one operator machine and broke Time Machine.
+const BdMetricsDisableEnv = "BD_DISABLE_METRICS"
+
+// BdMetricsDisableValue is the canonical disabled value.
+const BdMetricsDisableValue = "1"
+
+// BdMetricsDisabledEntry is the canonical child-environment assignment.
+const BdMetricsDisabledEntry = BdMetricsDisableEnv + "=" + BdMetricsDisableValue
+
+// WithBdMetricsDisabled returns a copy of environ with every existing bd
+// telemetry override replaced by one canonical disabled entry. All unrelated
+// entries retain their original order and multiplicity.
+func WithBdMetricsDisabled(environ []string) []string {
+	out := make([]string, 0, len(environ)+1)
+	for _, entry := range environ {
+		key, _, _ := strings.Cut(entry, "=")
+		if key != BdMetricsDisableEnv {
+			out = append(out, entry)
+		}
+	}
+	return append(out, BdMetricsDisabledEntry)
+}
+
 var sensitiveAssignmentRE = regexp.MustCompile(`(?i)((?:[A-Z0-9_.-]*(?:TOKEN|SECRET|PASSWORD|PRIVATE[_-]?KEY|API[_-]?KEY|ACCESS[_-]?KEY|CREDENTIALS?|OAUTH|AUTH[_-]?JSON)[A-Z0-9_.-]*|--?[A-Z0-9_.-]*(?:token|secret|password|private-key|api-key|access-key|credential|oauth)[A-Z0-9_.-]*)\s*(?:=|:|\s)\s*)([^ \t\r\n,;]+)`)
 
 // WithUsageMetricsDisabled returns a copy of environ with every existing usage

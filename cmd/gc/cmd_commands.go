@@ -14,6 +14,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/execenv"
 	"github.com/spf13/cobra"
 )
 
@@ -329,6 +330,7 @@ func runDiscoveredCommand(entry config.DiscoveredCommand, cityPath, cityName str
 	cmd.Env = pinInvokingGCBinary(cmd.Env, exe)
 	cmd.Env = mergeCanonicalScopeDoltEnv(cmd.Env, cityPath)
 	cmd.Env = applyCityDoltSettingsEnv(cmd.Env, cityPath)
+	cmd.Env = execenv.WithBdMetricsDisabled(cmd.Env)
 	disableProductMetricsForChild(cmd)
 
 	if err := cmd.Run(); err != nil {

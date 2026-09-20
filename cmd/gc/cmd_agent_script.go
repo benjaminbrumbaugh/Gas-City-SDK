@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/gastownhall/gascity/internal/execenv"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -660,6 +661,7 @@ func validateAgentScriptShellMetadataKeys(metadata map[string]string) error {
 func agentScriptShellEnv(base []string, ctx agentScriptContext) ([]string, error) {
 	env := removeEnvKey(append([]string(nil), base...), "GIT_TERMINAL_PROMPT")
 	env = removeEnvKeyPrefix(env, "GC_SCRIPT_")
+	env = execenv.WithBdMetricsDisabled(env)
 	env = append(env,
 		"GIT_TERMINAL_PROMPT=0",
 		"GC_SCRIPT_BEAD_ID="+ctx.bead.ID,

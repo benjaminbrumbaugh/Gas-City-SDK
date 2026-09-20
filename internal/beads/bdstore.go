@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/execenv"
 	"github.com/gastownhall/gascity/internal/telemetry"
 )
 
@@ -770,6 +771,7 @@ const bdAutoBackupOptOutEnvKey = "BD_BACKUP_ENABLED"
 func execEnvFor(name string, baseEnv []string, overrides map[string]string) []string {
 	if name == "bd" {
 		baseEnv = append(envWithout(baseEnv, bdAutoBackupOptOutEnvKey), bdAutoBackupOptOutEnvKey+"=false")
+		baseEnv = execenv.WithBdMetricsDisabled(baseEnv)
 	}
 	return mergeEnv(baseEnv, overrides)
 }

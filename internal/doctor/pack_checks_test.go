@@ -358,3 +358,29 @@ func TestParseScriptOutput(t *testing.T) {
 		})
 	}
 }
+
+// Pack doctor scripts commonly shell out to bd (`bd --version`, `bd context`),
+// so their environment must carry the gc-wide telemetry opt-out — replacing
+// an inherited opt-in — on both the check and fix paths.
+func TestPackScriptCheckDisablesBdMetrics(t *testing.T) {
+	t.Setenv("BD_DISABLE_METRICS", "false")
+	dir := t.TempDir()
+	script := writeCheckScript(t, dir, "#!/bin/sh\necho \"metrics=$BD_DISABLE_METRICS\"\nexit 0\n")
+	fixOut := filepath.Join(dir, "fix.txt")
+	fix := filepath.Join(dir, "fix.sh")
+	if err := os.WriteFile(fix, []byte("#!/bin/sh\nprintf '%s' \"$BD_DISABLE_METRICS\" > \""+fixOut+"\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &PackScriptCheck{CheckName: "topo:bd", Script: script, FixScript: fix, PackDir: dir, PackName: "topo"}
+
+	ctx := &CheckContext{CityPath: dir}
+	if got := c.Run(ctx).Message; got != "metrics=1" {
+		t.Fatalf("check script saw %q, want metrics=1", got)
+	}
+	if err := c.Fix(ctx); err != nil {
+		t.Fatalf("Fix: %v", err)
+	}
+	if got, _ := os.ReadFile(fixOut); string(got) != "1" {
+		t.Fatalf("fix script saw BD_DISABLE_METRICS=%q, want 1", got)
+	}
+}

@@ -44,3 +44,17 @@ func TestValidateExecEnvOverridesRejectsBdContributorRouting(t *testing.T) {
 		t.Fatal("ValidateExecEnvOverrides() = nil, want error for reserved BD_ROUTING_MODE override")
 	}
 }
+
+// TestReservedExecEnvKeysIncludeBdMetricsOptOut guards the telemetry opt-out:
+// gc forces bd's anonymous command telemetry off via BD_DISABLE_METRICS (its
+// unbounded ~/.beads/eventsData spool broke Time Machine on one operator
+// machine), so an order's [order.env] must not be able to re-enable it.
+func TestReservedExecEnvKeysIncludeBdMetricsOptOut(t *testing.T) {
+	if !IsReservedExecEnvKey("BD_DISABLE_METRICS") {
+		t.Fatal(`IsReservedExecEnvKey("BD_DISABLE_METRICS") = false, want true`)
+	}
+	order := Order{Name: "o", Env: map[string]string{"BD_DISABLE_METRICS": "0"}}
+	if err := ValidateExecEnvOverrides(order); err == nil {
+		t.Fatal("ValidateExecEnvOverrides() = nil, want error for reserved BD_DISABLE_METRICS override")
+	}
+}

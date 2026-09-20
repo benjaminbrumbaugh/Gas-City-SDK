@@ -3,10 +3,12 @@ package doctor
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/gastownhall/gascity/internal/citylayout"
+	"github.com/gastownhall/gascity/internal/execenv"
 )
 
 // PackScriptCheck implements Check by running a script shipped with
@@ -71,10 +73,7 @@ func (c *PackScriptCheck) Fix(ctx *CheckContext) error {
 
 	cmd := exec.Command(c.FixScript) //nolint:gosec // path from pack config
 	cmd.Dir = c.PackDir
-	cmd.Env = append(cmd.Environ(), citylayout.PackRuntimeEnv(ctx.CityPath, c.PackName)...)
-	cmd.Env = append(cmd.Env,
-		"GC_PACK_DIR="+c.PackDir,
-	)
+	cmd.Env = packScriptEnv(ctx.CityPath, c.PackName, c.PackDir)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -91,14 +90,21 @@ func (c *PackScriptCheck) Fix(ctx *CheckContext) error {
 	return nil
 }
 
+// packScriptEnv is the environment contract shared by a pack's check and fix
+// scripts: the inherited process env plus the pack runtime variables, with
+// the gc-wide bd telemetry opt-out stated because these scripts routinely
+// shell out to bd.
+func packScriptEnv(cityPath, packName, packDir string) []string {
+	env := append(os.Environ(), citylayout.PackRuntimeEnv(cityPath, packName)...)
+	env = append(env, "GC_PACK_DIR="+packDir)
+	return execenv.WithBdMetricsDisabled(env)
+}
+
 // Run executes the pack script and interprets its output.
 func (c *PackScriptCheck) Run(ctx *CheckContext) *CheckResult {
 	cmd := exec.Command(c.Script) //nolint:gosec // script path from pack config
 	cmd.Dir = c.PackDir
-	cmd.Env = append(cmd.Environ(), citylayout.PackRuntimeEnv(ctx.CityPath, c.PackName)...)
-	cmd.Env = append(cmd.Env,
-		"GC_PACK_DIR="+c.PackDir,
-	)
+	cmd.Env = packScriptEnv(ctx.CityPath, c.PackName, c.PackDir)
 
 	out, err := cmd.CombinedOutput()
 	exitCode := 0
