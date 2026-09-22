@@ -268,26 +268,47 @@ the LaunchAgent plist and reload. Follow with `bd compact` once the backlog
 has drained so Dolt actually releases chunks — row deletes alone do not
 shrink `.beads/dolt`.
 
-### mol-dog-backup — keep until Time Machine is proven
+### mol-dog-backup — retired 2026-09-22
 
 There is no backup nag mail in the store today (zero `message` beads). The
 nagging comes from `mol-dog-doctor.sh` `[WARN: backup stale]` and the
 `bd-backup-freshness` / `bd-backup-size` / `dolt-backup` doctor checks, which
 only fire when a *registered* backup goes stale — so disabling the order
-without also removing those checks would create the flood. Decision: keep
-`mol-dog-backup` (it is what the restore drill used and the only recovery
-path until Time Machine works). Once Time Machine has completed a backup
-and a restore drill, remove the order and the three doctor checks together
-in one pack/config change. Do not re-enable the legacy `backup.enabled`.
+without also silencing those checks would create the flood.
 
-### Establish Time Machine protection
+Once hourly Time Machine was running (22 snapshots at a steady ~60 min
+cadence, encrypted `MAC_STUDIO_TM`), the order was retired in the live city
+by configuration only (`Gas-City` commit `7f813ba`):
 
-1. Configure and encrypt the new disk. `/Volumes/MAC_STUDIO_TM` (1 TB USB,
-   case-sensitive APFS, not encrypted) is attached; `tmutil setdestination`
-   requires root, so this is an operator step: System Settings → General →
-   Time Machine → Add Backup Disk → MAC_STUDIO_TM, tick Encrypt.
-2. Confirm the exclusions above are honored, then complete the first backup.
-3. Run a restore drill from Time Machine before treating it as protective.
+- `[orders] skip = [..., "mol-dog-backup"]` — no more 6h `dolt backup sync`.
+- `[[orders.overrides]] name = "mol-dog-doctor"` with
+  `env.GC_DOCTOR_BACKUP_STALE_S = "3153600000"` — the doctor dog's
+  backup-freshness advisory never fires for the intentionally frozen
+  artifact dir.
+- `.dolt-backup/` (4 GB) is left in place: the per-rig `dolt-backup` doctor
+  check treats a populated dir as satisfied, and `bd-backup-freshness`
+  only reads `backup_state.json`, which this city never writes. `gc doctor`
+  reports all backup checks ✓ after the change.
+
+No SDK code or pack files changed; the three doctor checks and the pack's
+order remain for upstream compatibility and for cities without Time Machine.
+Do not re-enable the legacy `backup.enabled`. The operator chose to skip a
+restore drill from Time Machine.
+
+### Establish Time Machine protection — DONE 2026-09-22
+
+`MAC_STUDIO_TM` (1 TB Samsung T7-class SSD, USB 3.x 5 Gb/s, case-sensitive
+APFS, FileVault-encrypted) is the registered destination with hourly
+`AutoBackup` (`AutoBackupInterval = 3600`). Backups are IOPS-bound, not
+bandwidth-bound (~2–2.5k ops/s at ~6 KB); the fix for slow passes is more
+exclusions, not a different cable. Beyond the gc runtime dirs, the following
+reproducible trees were also excluded with `tmutil addexclusion` (xattr,
+no root): `~/Documents/Weft/target` (792k files, 193 GB),
+`~/Documents/Hermes-Agent/{node_modules,venv}`, `~/Documents/Wayfinder/target`,
+`~/go/pkg`, `~/.cache/{uv,codex-runtimes,opencode}`, `~/.rustup`, `~/.npm`,
+and project `.venv*` dirs. Project `temp/` and `tmp/` dirs under
+`~/Documents` were cleared after archiving every dirty worktree to its
+branch on GitHub.
 
 ## Completion Criteria
 
@@ -299,9 +320,13 @@ in one pack/config change. Do not re-enable the legacy `backup.enabled`.
 3. The selected `bd` binary is known: `~/go/bin/bd` (fork-pinned module) for
    supervisor, hooks, and agents.
 4. No offsite backup environment variable or destination is configured.
-5. Each live Beads/Dolt database has passed an isolated restore drill.
-   (Done; `gc` needs one post-restart backup cycle to close its gap.)
+5. Each live Beads/Dolt database has passed an isolated restore drill from
+   `.dolt-backup`. (Done 2026-09-22, before the order was retired.)
 6. `.gc/worktrees`, `.gc/migration-worktrees`, `.gc/runtime`, and
    `~/.gc/cache` are Time Machine-excluded. (Done.)
-7. The new encrypted Time Machine destination has completed a backup and
-   passed a restore drill.
+7. The new encrypted Time Machine destination completes hourly backups.
+   (Done; restore drill from Time Machine skipped by operator decision.)
+8. `mol-dog-backup` no longer runs and no backup advisory fires. (Done.)
+9. Closed durable beads with no open links age out. (Deployed dry-run; the
+   operator flips `GC_CLOSED_BEAD_RETENTION_ENFORCE=1` in the supervisor
+   LaunchAgent after reviewing the advisory count.)
