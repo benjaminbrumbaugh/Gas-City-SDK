@@ -310,6 +310,38 @@ and project `.venv*` dirs. Project `temp/` and `tmp/` dirs under
 `~/Documents` were cleared after archiving every dirty worktree to its
 branch on GitHub.
 
+## Deferred: the "overnight" backup schedule — TimeMachineEditor
+
+Not retired yet by operator decision (2026-09-22: "I'm not ready to remove
+the overnight thing yet, but don't forget about it").
+
+What it is: **TimeMachineEditor** (`/Applications/TimeMachineEditor.app`,
+tclementdev) with its scheduler LaunchDaemon
+`/Library/LaunchDaemons/com.tclementdev.timemachineeditor.scheduler.plist`
+(`RunAtLoad = 1`, `KeepAlive`). It is the only non-Apple backup scheduler on
+the box — no crontab, no other backup LaunchAgents. It was presumably set up
+to confine backups to an overnight window while the file-count problem made
+daytime passes disruptive. Its scheduler process was not running when
+checked and native `AutoBackup = 1` / `AutoBackupInterval = 3600` are in
+effect, so today the hourly cadence is Apple's own; TME is dormant config
+that would take over if it is re-armed.
+
+Why it can go: hourly incrementals now finish inside their hour with the
+exclusions in place; there is no need for a night-only window.
+
+How to retire it (root required — operator step):
+
+```bash
+sudo launchctl bootout system/com.tclementdev.timemachineeditor.scheduler
+sudo rm -f /Library/LaunchDaemons/com.tclementdev.timemachineeditor.scheduler.plist
+# then drag TimeMachineEditor.app to the Trash, and confirm:
+defaults read /Library/Preferences/com.apple.TimeMachine AutoBackup   # expect 1
+```
+
+If TME had switched TM to manual mode, re-enable hourly in System Settings →
+General → Time Machine → Options → Back up frequency: Automatically every
+hour.
+
 ## Completion Criteria
 
 1. `~/.beads/eventsData` remains absent after normal managed and agent-path
