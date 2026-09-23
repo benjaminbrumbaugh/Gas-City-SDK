@@ -19,9 +19,9 @@ import (
 // and is never referenced again — session beads, finished tasks, closed bugs.
 const closedBeadRetentionPolicyName = "closed_durable"
 
-// closedBeadRetentionEnforceEnv gates the sweep from dry-run (default) to
-// enforcement, mirroring GC_WISP_GC_REAP_ORPHANS. Unset or falsey: the
-// watchdog only reports what it would delete. Truthy: it deletes.
+// closedBeadRetentionEnforceEnv is the environment override that switches
+// the sweep from dry-run to enforcement, mirroring GC_WISP_GC_REAP_ORPHANS.
+// The durable switch is the policy's enforce field; either one deletes.
 const closedBeadRetentionEnforceEnv = "GC_CLOSED_BEAD_RETENTION_ENFORCE"
 
 const (
@@ -33,11 +33,25 @@ const (
 	closedBeadRetentionWatchdogDeleteBudget = 500
 )
 
-// closedBeadRetentionEnforced reports whether the sweep deletes (true) or
-// runs dry (false). Package var so tests flip it without touching the
+// closedBeadRetentionEnforced reports whether the process environment opts
+// the sweep into deletion. Package var so tests flip it without touching the
 // process environment.
 var closedBeadRetentionEnforced = func() bool {
 	return parseBoolEnv(os.Getenv(closedBeadRetentionEnforceEnv))
+}
+
+// closedBeadRetentionEnforcedFor reports whether the sweep deletes (true) or
+// runs dry (false): the closed_durable policy's enforce field or the
+// environment override, either one. A nil config never enforces because the
+// policy that scopes the deletion is unknown.
+func closedBeadRetentionEnforcedFor(cfg *config.City) bool {
+	if cfg == nil {
+		return false
+	}
+	if policy, ok := cfg.Beads.Policies[closedBeadRetentionPolicyName]; ok && policy.Enforce {
+		return true
+	}
+	return closedBeadRetentionEnforced()
 }
 
 // closedBeadRetentionTTLForConfig returns the configured delete_after_close
@@ -192,7 +206,7 @@ func (cr *CityRuntime) runClosedBeadRetentionWatchdog(now time.Time) {
 	}
 	cr.closedBeadRetentionWatchdogLast = now
 
-	enforce := closedBeadRetentionEnforced()
+	enforce := closedBeadRetentionEnforcedFor(cr.cfg)
 	if enforce && cr.cityPath != "" {
 		if safe, reason := doctor.BulkDeleteSafe(cr.cityPath, cr.cfg, bulkDeleteMaxAge(cr.cfg), now); !safe {
 			cr.logClosedBeadRetention("skipping bulk delete — %s", reason)
@@ -228,8 +242,8 @@ func (cr *CityRuntime) runClosedBeadRetentionWatchdog(now time.Time) {
 	}
 	switch {
 	case !enforce && total.eligible > 0:
-		cr.logClosedBeadRetention("dry-run: %d closed bead(s) past %s with no open links would be deleted (%d protected); set %s=1 to enforce",
-			total.eligible, cr.cfg.Beads.Policies[closedBeadRetentionPolicyName].DeleteAfterClose, total.protected, closedBeadRetentionEnforceEnv)
+		cr.logClosedBeadRetention("dry-run: %d closed bead(s) past %s with no open links would be deleted (%d protected); set [beads.policies.%s] enforce = true (or %s=1) to enforce",
+			total.eligible, cr.cfg.Beads.Policies[closedBeadRetentionPolicyName].DeleteAfterClose, total.protected, closedBeadRetentionPolicyName, closedBeadRetentionEnforceEnv)
 	case total.deleted > 0:
 		cr.logClosedBeadRetention("pruned %d closed bead(s) (%d protected by open links)", total.deleted, total.protected)
 	}
