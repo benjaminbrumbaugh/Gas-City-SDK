@@ -124,6 +124,32 @@ func TestClosedBeadRetentionPolicyForConfig(t *testing.T) {
 	}
 }
 
+func TestClosedBeadRetentionEnforcedFor_ConfigOrEnv(t *testing.T) {
+	prev := closedBeadRetentionEnforced
+	t.Cleanup(func() { closedBeadRetentionEnforced = prev })
+
+	policy := func(enforce bool) *config.City {
+		return &config.City{Beads: config.BeadsConfig{Policies: map[string]config.BeadPolicyConfig{
+			closedBeadRetentionPolicyName: {DeleteAfterClose: "14d", Enforce: enforce},
+		}}}
+	}
+
+	closedBeadRetentionEnforced = func() bool { return false }
+	if closedBeadRetentionEnforcedFor(policy(false)) {
+		t.Fatal("unset config + unset env must stay dry-run")
+	}
+	if !closedBeadRetentionEnforcedFor(policy(true)) {
+		t.Fatal("enforce = true in the policy must enforce without the env var")
+	}
+	closedBeadRetentionEnforced = func() bool { return true }
+	if !closedBeadRetentionEnforcedFor(policy(false)) {
+		t.Fatal("env override must still enforce when the policy omits enforce")
+	}
+	if closedBeadRetentionEnforcedFor(nil) {
+		t.Fatal("nil config must not enforce even with the env set")
+	}
+}
+
 func TestClosedBeadRetentionWatchdog_DryRunByDefaultAndLogs(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	store := beads.NewMemStoreFrom(100, closedBeadRetentionFixture(now), nil)

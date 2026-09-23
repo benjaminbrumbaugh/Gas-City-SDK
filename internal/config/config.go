@@ -1498,8 +1498,15 @@ type BeadPolicyConfig struct {
 	// omits it. The opt-in "closed_durable" policy has no default: when set,
 	// the controller ages out closed non-ephemeral beads past this duration
 	// that have no parent or dependency link to non-closed work (dry-run
-	// until GC_CLOSED_BEAD_RETENTION_ENFORCE=1).
+	// unless Enforce or GC_CLOSED_BEAD_RETENTION_ENFORCE=1).
 	DeleteAfterClose string `toml:"delete_after_close,omitempty"`
+	// Enforce switches the closed_durable sweep from its dry-run advisory to
+	// actual deletion. It is ignored by every other policy. The environment
+	// variable GC_CLOSED_BEAD_RETENTION_ENFORCE=1 is an equivalent override
+	// for operators who cannot edit city.toml; the config field is the
+	// durable choice because a supervisor reinstall regenerates the service
+	// environment from an allowlist and drops ad hoc variables.
+	Enforce bool `toml:"enforce,omitempty"`
 }
 
 const (
