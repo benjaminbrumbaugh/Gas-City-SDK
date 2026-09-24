@@ -359,6 +359,20 @@ hour.
 7. The new encrypted Time Machine destination completes hourly backups.
    (Done; restore drill from Time Machine skipped by operator decision.)
 8. `mol-dog-backup` no longer runs and no backup advisory fires. (Done.)
-9. Closed durable beads with no open links age out. (Deployed dry-run; the
-   operator flips `GC_CLOSED_BEAD_RETENTION_ENFORCE=1` in the supervisor
-   LaunchAgent after reviewing the advisory count.)
+9. Closed durable beads with no open links age out. (Done 2026-09-23:
+   `[beads.policies.closed_durable] enforce = true` in the live city.toml —
+   the config field, not the env var, because `gc supervisor install` /
+   `gc register` regenerate the LaunchAgent environment from an allowlist and
+   dropped `GC_CLOSED_BEAD_RETENTION_ENFORCE` within hours of it being set.
+   The backlog drained in ten hourly ticks: 4,527 → 991 beads, 156 non-closed
+   untouched throughout.)
+10. Dolt storage reclaimed. (Done 2026-09-23: `mol-dog-compactor` had been
+    refusing to run for nine days on a stale `compact-pending-push` marker
+    for the `gc` DB, left over from an origin push that can never succeed —
+    this city's Dolt is local-only. Marking the DB `.beads/dolt/gc/.no-sync`
+    is the pack's own contract for that: `gc dolt compact` cleared the marker
+    and flattened 63,297 commits → 2; `gc dolt sync` now reports
+    `gc: skipped (.no-sync)` instead of "diverged — manual reconcile" every
+    15 minutes. Removing the orphaned `.dolt/git-remote-cache` took `gc` from
+    3.6 GB to 602 MB. `gcd`/`he`/`wf` still carry the git remote and small
+    caches; they were not touched.)
