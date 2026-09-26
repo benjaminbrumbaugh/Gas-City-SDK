@@ -200,3 +200,48 @@ func TestStoreAllowedTransitionGraphAndExpireDue(t *testing.T) {
 		t.Fatalf("expired record = (%+v, %v)", record, err)
 	}
 }
+
+func TestStoreIngestApprovedPreservesMinInt64WorkRevision(t *testing.T) {
+	now := time.Date(2026, 8, 7, 20, 0, 0, 0, time.UTC)
+	store := openTestStore(t, now)
+	privateKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	verifier := NewVerifier(map[string]ed25519.PublicKey{"board": publicKey})
+
+	payload := testDecisionPayload(t)
+	payload.WorkRevision = -1 << 63
+	payload.CreatedAt = now.Add(-time.Minute)
+	payload.ExpiresAt = now.Add(time.Minute)
+	payload.BindingID = BindingID(payload)
+	approval := ApprovalPayload{
+		Schema: SchemaVersion, DecisionID: payload.DecisionID, BindingID: payload.BindingID,
+		AuthorityID: "board", ApprovedAt: now.Add(-time.Second),
+	}
+	signing, err := SigningBytes(payload, approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := Signature{
+		Algorithm: SignatureAlgorithmEd25519, AuthorityID: approval.AuthorityID,
+		Value: ed25519.Sign(privateKey, signing),
+	}
+
+	result, err := store.IngestApproved(IngestApprovedRequest{
+		Payload: payload, Approval: approval, Signature: signature,
+		Now: now, IdempotencyToken: "ingest-min-int64-revision",
+	}, verifier)
+	if err != nil {
+		t.Fatalf("IngestApproved: %v", err)
+	}
+	stored, err := store.Get(payload.DecisionID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if result.Record.Payload.WorkRevision != payload.WorkRevision || stored.Payload.WorkRevision != payload.WorkRevision {
+		t.Fatalf("WorkRevision readback = (result %d, stored %d), want %d", result.Record.Payload.WorkRevision, stored.Payload.WorkRevision, payload.WorkRevision)
+	}
+	if !reflect.DeepEqual(result.Record, stored) || !reflect.DeepEqual(stored.Payload, payload) ||
+		!reflect.DeepEqual(stored.Approval, &approval) || !reflect.DeepEqual(stored.Signature, &signature) {
+		t.Fatalf("approved ingest exact readback drifted:\nresult=%+v\nstored=%+v", result.Record, stored)
+	}
+}
