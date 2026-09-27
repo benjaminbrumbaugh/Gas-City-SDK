@@ -234,13 +234,14 @@ type preparedStart struct {
 }
 
 type startResult struct {
-	prepared        preparedStart
-	err             error
-	outcome         TraceOutcomeCode
-	started         time.Time
-	finished        time.Time
-	rollbackPending bool
-	rateLimitScreen bool
+	prepared         preparedStart
+	err              error
+	outcome          TraceOutcomeCode
+	started          time.Time
+	finished         time.Time
+	rollbackPending  bool
+	rateLimitScreen  bool
+	rateLimitResetAt time.Time
 	// phases captures sub-phase wall-clock so the lifecycle log can pinpoint
 	// where a slow start spent its time. See gc-67o for context.
 	phases startPhaseTimings
@@ -1515,7 +1516,10 @@ func runPreparedStartCandidate(
 	}
 	finished := time.Now()
 	rollbackPending := err != nil && shouldRollbackPendingCreateInfo(item.candidate.info)
-	rateLimitScreen := err != nil && startupRateLimitScreenDetected(item, cityPath, sp, store, cfg)
+	rateLimitResetAt, rateLimitScreen := time.Time{}, false
+	if err != nil {
+		rateLimitResetAt, rateLimitScreen = startupRateLimitScreenDetected(item, cityPath, sp, store, cfg)
+	}
 	if err != nil && rollbackPending && !rateLimitScreen && runningSessionMatchesPendingCreateInfo(item.candidate.info, item.candidate.name(), sp) {
 		return startResult{
 			prepared:        item,
@@ -1566,14 +1570,15 @@ func runPreparedStartCandidate(
 		rateLimitScreen = false
 	}
 	return startResult{
-		prepared:        item,
-		err:             err,
-		outcome:         outcome,
-		started:         started,
-		finished:        finished,
-		rollbackPending: rollbackPending,
-		rateLimitScreen: rateLimitScreen,
-		phases:          phases,
+		prepared:         item,
+		err:              err,
+		outcome:          outcome,
+		started:          started,
+		finished:         finished,
+		rollbackPending:  rollbackPending,
+		rateLimitScreen:  rateLimitScreen,
+		rateLimitResetAt: rateLimitResetAt,
+		phases:           phases,
 	}
 }
 
@@ -1598,19 +1603,19 @@ func startupRateLimitScreenDetected(
 	sp runtime.Provider,
 	store beads.Store,
 	cfg *config.City,
-) bool {
+) (time.Time, bool) {
 	if strings.TrimSpace(item.candidate.info.ID) == "" {
-		return false
+		return time.Time{}, false
 	}
 	if cfg != nil && cfg.Session.Provider == "subprocess" {
-		return false
+		return time.Time{}, false
 	}
 	lastWoke := item.candidate.info.LastWokeAt
 	if lastWoke == "" {
-		return false
+		return time.Time{}, false
 	}
 	if _, err := time.Parse(time.RFC3339, lastWoke); err != nil {
-		return false
+		return time.Time{}, false
 	}
 	content, err := workerSessionTargetPeekWithConfig(
 		cityPath,
@@ -1621,7 +1626,11 @@ func startupRateLimitScreenDetected(
 		rateLimitPeekLines,
 		item.cfg.ProcessNames,
 	)
-	return err == nil && runtime.ContainsProviderRateLimitScreen(content)
+	if err != nil || !runtime.ContainsProviderRateLimitScreen(content) {
+		return time.Time{}, false
+	}
+	resetAt, _ := runtime.ProviderRateLimitResetAt(content, time.Now())
+	return resetAt, true
 }
 
 func enqueuePreparedStartWaveForCity(
@@ -2290,7 +2299,7 @@ func commitStartFailure(result startResult, sessFront *sessionpkg.Store, clk clo
 	if result.rateLimitScreen {
 		// Terminal failure arm; discard the fold (see the terminal-provider-error note
 		// above). The persist lands via recordRateLimitQuarantine's ApplyPatchInfo.
-		if _, rlErr := recordRateLimitQuarantine(result.prepared.candidate.info, sessFront, clk); rlErr != nil {
+		if _, rlErr := recordRateLimitQuarantine(result.prepared.candidate.info, sessFront, clk, result.rateLimitResetAt); rlErr != nil {
 			fmt.Fprintf(stderr, "session reconciler: recording startup rate-limit hold for %s: %v\n", name, rlErr) //nolint:errcheck
 			if trace != nil {
 				trace.RecordOperation(TraceSiteLifecycleStartRateLimitHold, TraceReasonStart, TraceOutcomeHoldDeferred, "", tp.TemplateName, name, 0, traceRecordPayload{

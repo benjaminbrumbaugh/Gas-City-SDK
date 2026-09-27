@@ -16,6 +16,130 @@ import (
 	"github.com/gastownhall/gascity/internal/session/sessiontest"
 )
 
+// TestDrainAckTokenMismatchFinalizesStalePoolSession proves the replaced-name
+// path releases the stale pool slot without touching the replacement runtime.
+// The first half exercises the detached async stop, which persists the marker;
+// the second half runs the next reconcile pass and exercises the ordinary
+// assigned-work close gate.
+func TestDrainAckTokenMismatchFinalizesStalePoolSession(t *testing.T) {
+	t.Run("no-work pool bead closes", func(t *testing.T) {
+		env := newReconcilerTestEnv()
+		env.cfg = &config.City{Agents: []config.Agent{{Name: "worker"}}}
+		sess := env.createSessionBead("worker", "worker")
+		patch := session.DrainAckStopPendingPatch(env.clk.Now().UTC())
+		patch[poolManagedMetadataKey] = boolMetadata(true)
+		patch["instance_token"] = "old-token"
+		if err := env.store.SetMetadataBatch(sess.ID, patch); err != nil {
+			t.Fatalf("SetMetadataBatch(stop-pending): %v", err)
+		}
+
+		if err := env.sp.Start(context.Background(), "worker", runtime.Config{Command: "test-cmd"}); err != nil {
+			t.Fatalf("Start(worker): %v", err)
+		}
+		if err := env.sp.SetMeta("worker", "GC_INSTANCE_TOKEN", "replacement-token"); err != nil {
+			t.Fatalf("SetMeta(worker): %v", err)
+		}
+		oldPoke := drainAckAsyncStopPokeController
+		drainAckAsyncStopPokeController = func(string) error { return nil }
+		t.Cleanup(func() { drainAckAsyncStopPokeController = oldPoke })
+
+		tracker := &asyncStartTracker{}
+		queueDrainAckAsyncStop("", env.store, env.sp, env.cfg, sess.ID, "worker", "old-token", nil, tracker, &env.stderr)
+		if !tracker.wait(time.Second) {
+			t.Fatal("async drain-ack stop did not complete")
+		}
+
+		marked := env.sessionInfo(sess.ID)
+		if marked.DrainAckRuntimeReplaced != "true" {
+			t.Fatalf("replacement marker = %q, want true", marked.DrainAckRuntimeReplaced)
+		}
+		if !env.sp.IsRunning("worker") {
+			t.Fatal("token mismatch killed the replacement runtime")
+		}
+
+		handled, _ := reconcileDrainAckStopPending(
+			"", env.cfg, env.sp, env.store, nil, marked,
+			TemplateParams{TemplateName: "worker"}, false, newFakeDrainOps(), env.dt,
+			tracker, env.clk, env.rec, &env.stderr,
+		)
+		if !handled {
+			t.Fatal("marked replacement was not handled by the next reconcile pass")
+		}
+
+		got, err := env.store.Get(sess.ID)
+		if err != nil {
+			t.Fatalf("Get(%s): %v", sess.ID, err)
+		}
+		if got.Status != "closed" {
+			t.Fatalf("status = %q, want closed to free the stale pool slot", got.Status)
+		}
+		if !env.sp.IsRunning("worker") {
+			t.Fatal("finalization killed the replacement runtime")
+		}
+	})
+
+	t.Run("assigned work stays open", func(t *testing.T) {
+		env := newReconcilerTestEnv()
+		env.cfg = &config.City{Agents: []config.Agent{{Name: "worker"}}}
+		sess := env.createSessionBead("worker", "worker")
+		patch := session.DrainAckStopPendingPatch(env.clk.Now().UTC())
+		patch[poolManagedMetadataKey] = boolMetadata(true)
+		patch["instance_token"] = "old-token"
+		if err := env.store.SetMetadataBatch(sess.ID, patch); err != nil {
+			t.Fatalf("SetMetadataBatch(stop-pending): %v", err)
+		}
+		work := createRoutedReadyBeadForReplacement(t, env.store, "repo/worker", "held work")
+		status := "in_progress"
+		assignee := sess.ID
+		if err := env.store.Update(work.ID, beads.UpdateOpts{Status: &status, Assignee: &assignee}); err != nil {
+			t.Fatalf("assign work: %v", err)
+		}
+		if err := env.sp.Start(context.Background(), "worker", runtime.Config{Command: "test-cmd"}); err != nil {
+			t.Fatalf("Start(worker): %v", err)
+		}
+		if err := env.sp.SetMeta("worker", "GC_INSTANCE_TOKEN", "replacement-token"); err != nil {
+			t.Fatalf("SetMeta(worker): %v", err)
+		}
+		oldPoke := drainAckAsyncStopPokeController
+		drainAckAsyncStopPokeController = func(string) error { return nil }
+		t.Cleanup(func() { drainAckAsyncStopPokeController = oldPoke })
+
+		tracker := &asyncStartTracker{}
+		queueDrainAckAsyncStop("", env.store, env.sp, env.cfg, sess.ID, "worker", "old-token", nil, tracker, &env.stderr)
+		if !tracker.wait(time.Second) {
+			t.Fatal("async drain-ack stop did not complete")
+		}
+		marked := env.sessionInfo(sess.ID)
+		if marked.DrainAckRuntimeReplaced != "true" {
+			t.Fatalf("replacement marker = %q, want true", marked.DrainAckRuntimeReplaced)
+		}
+		handled, _ := reconcileDrainAckStopPending(
+			"", env.cfg, env.sp, env.store, nil, marked,
+			TemplateParams{TemplateName: "worker"}, false, newFakeDrainOps(), env.dt,
+			tracker, env.clk, env.rec, &env.stderr,
+		)
+		if !handled {
+			t.Fatal("marked replacement was not handled by the next reconcile pass")
+		}
+		got, err := env.store.Get(sess.ID)
+		if err != nil {
+			t.Fatalf("Get(%s): %v", sess.ID, err)
+		}
+		if got.Status == "closed" {
+			t.Fatal("assigned work was closed as if the replacement row had no work")
+		}
+		if got.Metadata["state"] != string(session.StateAsleep) {
+			t.Fatalf("state = %q, want asleep while assigned work remains", got.Metadata["state"])
+		}
+		if got.Metadata[session.DrainAckRuntimeReplacedKey] != "" {
+			t.Fatalf("replacement marker = %q after finalization, want cleared", got.Metadata[session.DrainAckRuntimeReplacedKey])
+		}
+		if !env.sp.IsRunning("worker") {
+			t.Fatal("finalization killed the replacement runtime")
+		}
+	})
+}
+
 // TestReconcileSessionBeads_DrainAckNoWorkFreesSlotAndReallocates is the
 // end-to-end regression guard for gastownhall/gascity#2520 ("pool over-counts
 // supply when session drain-acks with no work and bead stays active").

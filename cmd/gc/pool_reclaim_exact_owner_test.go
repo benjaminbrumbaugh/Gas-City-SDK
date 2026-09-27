@@ -116,6 +116,216 @@ func TestReleaseOrphanedPoolAssignments_ReleasesRecycledSlotNameWhenStampedOwner
 	}
 }
 
+// TestReleaseOrphanedPoolAssignments_SkipsStalePolecatOwnerOnLiveNamedHandoff
+// covers the polecat->refinery handoff shape: the completed polecat is gone,
+// so its exact owner stamp is stale, but the bead now belongs to a configured
+// named refinery route. That current route must win over the historical stamp.
+func TestReleaseOrphanedPoolAssignments_SkipsStalePolecatOwnerOnLiveNamedHandoff(t *testing.T) {
+	store := beads.NewMemStore()
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "wayfinder"},
+		Agents: []config.Agent{{
+			Name:              "refinery",
+			BindingName:       "gastown",
+			Dir:               "Wayfinder",
+			MinActiveSessions: intPtr(0),
+			MaxActiveSessions: intPtr(2),
+		}},
+		NamedSessions: []config.NamedSession{{
+			Template:    "refinery",
+			BindingName: "gastown",
+			Dir:         "Wayfinder",
+			Mode:        "on_demand",
+		}},
+	}
+	const refineryIdentity = "Wayfinder/gastown.refinery"
+	live, err := store.Create(beads.Bead{
+		Title:  "live refinery",
+		Type:   sessionBeadType,
+		Status: "open",
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"session_name":              config.NamedSessionRuntimeName("wayfinder", cfg.Workspace, refineryIdentity),
+			"template":                  refineryIdentity,
+			"state":                     "active",
+			"configured_named_session":  "true",
+			"configured_named_identity": refineryIdentity,
+			"configured_named_mode":     "on_demand",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create live refinery: %v", err)
+	}
+	work, err := store.Create(beads.Bead{
+		Title:    "completed polecat handoff",
+		Assignee: refineryIdentity,
+		Metadata: map[string]string{
+			"gc.routed_to":                refineryIdentity,
+			beadmeta.SessionIDMetadataKey: "gc-departed-polecat",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create handed-off work: %v", err)
+	}
+	inProgress := "in_progress"
+	if err := store.Update(work.ID, beads.UpdateOpts{Status: &inProgress}); err != nil {
+		t.Fatalf("Set handed-off work status: %v", err)
+	}
+	work, err = store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Reload handed-off work: %v", err)
+	}
+
+	released := releaseOrphanedPoolAssignmentsFromBeads(
+		store, cfg, "", []beads.Bead{live}, []beads.Bead{work}, []beads.Store{store}, nil, nil,
+	)
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none — the stale polecat stamp must not release a live refinery handoff", released)
+	}
+
+	got, err := store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Get handed-off work: %v", err)
+	}
+	if got.Status != "in_progress" || got.Assignee != refineryIdentity {
+		t.Fatalf("work = status %q assignee %q, want in_progress/%s", got.Status, got.Assignee, refineryIdentity)
+	}
+}
+
+// TestReleaseOrphanedPoolAssignments_SkipsStaleOwnerOnLiveBareHandoff covers
+// a completed handoff to a live bare session identity. The departed polecat's
+// exact-owner stamp is historical and must not bypass current liveness.
+func TestReleaseOrphanedPoolAssignments_SkipsStaleOwnerOnLiveBareHandoff(t *testing.T) {
+	store := beads.NewMemStore()
+	live := createOpenSessionBeadWithIdentity(t, store, "gastown.mayor", "worker")
+	work := createInProgressPoolWork(t, store, map[string]string{
+		"gc.routed_to":                "worker",
+		beadmeta.SessionIDMetadataKey: "gc-departed-polecat",
+	})
+	work.Assignee = "gastown.mayor"
+	if err := store.Update(work.ID, beads.UpdateOpts{Assignee: &work.Assignee}); err != nil {
+		t.Fatalf("Set handoff assignee: %v", err)
+	}
+	work, err := store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Reload handed-off work: %v", err)
+	}
+
+	released := releaseOrphanedPoolAssignmentsFromBeads(
+		store, poolReclaimTestCity(), "", []beads.Bead{live}, []beads.Bead{work}, []beads.Store{store}, nil, nil,
+	)
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none — the live bare assignee must preserve the handoff", released)
+	}
+	got, err := store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Get handed-off work: %v", err)
+	}
+	if got.Status != "in_progress" || got.Assignee != "gastown.mayor" {
+		t.Fatalf("work = status %q assignee %q, want in_progress/gastown.mayor", got.Status, got.Assignee)
+	}
+}
+
+func TestReleaseOrphanedPoolAssignments_SkipsStaleOwnerOnCanonicalHandoffMissingSnapshot(t *testing.T) {
+	store := beads.NewMemStore()
+	createOpenSessionBeadWithIdentity(t, store, "gastown.mayor", "worker")
+	work := createInProgressPoolWork(t, store, map[string]string{
+		"gc.routed_to":                "worker",
+		beadmeta.SessionIDMetadataKey: "gc-departed-polecat",
+	})
+	work.Assignee = "gastown.mayor"
+	if err := store.Update(work.ID, beads.UpdateOpts{Assignee: &work.Assignee}); err != nil {
+		t.Fatalf("Set handoff assignee: %v", err)
+	}
+	work, err := store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Reload handed-off work: %v", err)
+	}
+
+	// The open-session snapshot is absent, but the session-class store still
+	// contains the canonical identity. A stale exact-owner stamp must not turn
+	// that completed handoff into an orphan.
+	released := releaseOrphanedPoolAssignmentsFromBeads(
+		store, poolReclaimTestCity(), "", nil, []beads.Bead{work}, []beads.Store{store}, nil, nil,
+	)
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none — direct canonical liveness must preserve the handoff", released)
+	}
+}
+
+// TestReleaseOrphanedPoolAssignments_SkipsStaleOwnerOnLiveRigQualifiedHandoff
+// covers the same handoff across a rig store, where the current assignee is a
+// rig-qualified identity and the live session is recorded in the city store.
+func TestReleaseOrphanedPoolAssignments_SkipsStaleOwnerOnLiveRigQualifiedHandoff(t *testing.T) {
+	cityPath := t.TempDir()
+	cityStore := beads.NewMemStore()
+	rigStore := beads.NewMemStore()
+	live := createOpenSessionBeadWithIdentity(t, cityStore, "repo/refinery", "worker")
+	work, err := rigStore.Create(beads.Bead{
+		Title:    "rig handoff",
+		Assignee: "repo/refinery",
+		Metadata: map[string]string{
+			"gc.routed_to":                "repo/worker",
+			beadmeta.SessionIDMetadataKey: "gc-departed-polecat",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create rig work: %v", err)
+	}
+	inProgress := "in_progress"
+	if err := rigStore.Update(work.ID, beads.UpdateOpts{Status: &inProgress}); err != nil {
+		t.Fatalf("Set rig work status: %v", err)
+	}
+	work, err = rigStore.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Reload rig work: %v", err)
+	}
+	cfg := &config.City{
+		Rigs: []config.Rig{{Name: "repo", Path: t.TempDir()}},
+		Agents: []config.Agent{{
+			Name:              "worker",
+			Dir:               "repo",
+			MinActiveSessions: intPtr(0),
+			MaxActiveSessions: intPtr(2),
+		}},
+	}
+
+	released := releaseOrphanedPoolAssignmentsFromBeads(
+		cityStore, cfg, cityPath, []beads.Bead{live}, []beads.Bead{work},
+		[]beads.Store{rigStore}, []string{"repo"}, map[string]beads.Store{"repo": rigStore},
+	)
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none — the live rig-qualified assignee must preserve the handoff", released)
+	}
+	got, err := rigStore.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Get rig work: %v", err)
+	}
+	if got.Status != "in_progress" || got.Assignee != "repo/refinery" {
+		t.Fatalf("rig work = status %q assignee %q, want in_progress/repo/refinery", got.Status, got.Assignee)
+	}
+}
+
+func createOpenSessionBeadWithIdentity(t *testing.T, store beads.Store, identity, template string) beads.Bead {
+	t.Helper()
+	sb, err := store.Create(beads.Bead{
+		Title:  "live handoff session",
+		Type:   sessionBeadType,
+		Status: "open",
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"session_name":         identity,
+			"alias":                identity,
+			"template":             template,
+			poolManagedMetadataKey: boolMetadata(true),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create live handoff session: %v", err)
+	}
+	return sb
+}
+
 // TestReleaseOrphanedPoolAssignments_ExactOwnerReleaseIsIdempotent pins that the
 // release cannot become its own loop. After the orphaned claim is released, a
 // re-claim that does not stamp an owner (a `gc hook --claim` outside a

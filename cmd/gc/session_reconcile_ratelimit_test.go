@@ -3,11 +3,16 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/agent"
+	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/clock"
+	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/runtime"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
 )
 
@@ -88,6 +93,117 @@ func TestCheckStability_RateLimitScreen_DoesNotCountAsCrash(t *testing.T) {
 	// crash path) so the rate-limit detection isn't re-triggered next tick.
 	if session.Metadata["last_woke_at"] != "" {
 		t.Error("last_woke_at should be cleared after rate-limit detection")
+	}
+}
+
+func TestCheckStability_SessionLimitUsesProviderResetDeadline(t *testing.T) {
+	now := time.Date(2026, 9, 7, 21, 20, 0, 0, time.UTC) // 2:20pm PDT
+	clk := &clock.Fake{Time: now}
+	store := newTestStore()
+	dt := newDrainTracker()
+	session := makeBead("b1", map[string]string{
+		"last_woke_at":        now.Add(-10 * time.Second).Format(time.RFC3339),
+		"session_key":         "keep-session",
+		"started_config_hash": "keep-hash",
+		"wake_attempts":       "3",
+	})
+	peek := func(_ int) (string, error) {
+		return "You've hit your session limit · resets 3:10pm (America/Los_Angeles)", nil
+	}
+
+	_, handled := checkStability(seedSessionInfo(session), nil, false, dt, sessionFrontDoor(store), clk, peek)
+	syncBeadFromStore(&session, store)
+	if !handled {
+		t.Fatal("session-limit screen should be handled as a provider fence")
+	}
+	if got := session.Metadata["sleep_reason"]; got != "rate_limit" {
+		t.Fatalf("sleep_reason = %q, want rate_limit", got)
+	}
+	got, err := time.Parse(time.RFC3339, session.Metadata["quarantined_until"])
+	if err != nil {
+		t.Fatalf("quarantined_until parse: %v", err)
+	}
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+	want := time.Date(2026, 9, 7, 15, 10, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Fatalf("quarantined_until = %s, want provider reset %s", got, want)
+	}
+	if got := session.Metadata["wake_attempts"]; got != "3" {
+		t.Fatalf("wake_attempts = %q, want unchanged", got)
+	}
+}
+
+func TestReconcileSessionBeads_SessionLimitWakesOnceAtProviderReset(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.clk.Time = time.Date(2026, 9, 7, 21, 20, 0, 0, time.UTC) // 2:20pm PDT
+	env.cfg = &config.City{
+		Workspace:     config.Workspace{Name: "test-city"},
+		Providers:     map[string]config.ProviderSpec{"test-provider": {Command: "test-cmd", ProcessNames: []string{"agent-cli"}}},
+		Agents:        []config.Agent{{Name: "worker", Provider: "test-provider", StartCommand: "test-cmd"}},
+		NamedSessions: []config.NamedSession{{Template: "worker", Mode: "always"}},
+	}
+	sessionName := config.NamedSessionRuntimeName(env.cfg.Workspace.Name, env.cfg.Workspace, "worker")
+	env.desiredState[sessionName] = TemplateParams{
+		Command:                 "test-cmd",
+		SessionName:             sessionName,
+		TemplateName:            "worker",
+		ConfiguredNamedIdentity: "worker",
+		ConfiguredNamedMode:     "always",
+		Hints:                   agent.StartupHints{ProcessNames: []string{"agent-cli"}},
+	}
+	if err := env.sp.Start(context.Background(), sessionName, runtime.Config{Command: "test-cmd", ProcessNames: []string{"agent-cli"}}); err != nil {
+		t.Fatalf("Start(%s): %v", sessionName, err)
+	}
+	env.sp.Zombies[sessionName] = true
+	env.sp.SetPeekOutput(sessionName, "You've hit your session limit · resets 3:10pm (America/Los_Angeles)")
+	session := env.createSessionBead(sessionName, "worker")
+	env.setSessionMetadata(&session, map[string]string{
+		"state":               "active",
+		"last_woke_at":        env.clk.Now().Add(-10 * time.Second).UTC().Format(time.RFC3339),
+		"session_key":         "keep-session",
+		"started_config_hash": "keep-hash",
+	})
+
+	env.reconcile([]beads.Bead{session})
+	held, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get held session: %v", err)
+	}
+	qUntil, err := time.Parse(time.RFC3339, held.Metadata["quarantined_until"])
+	if err != nil {
+		t.Fatalf("quarantined_until parse: %v", err)
+	}
+	if want := time.Date(2026, 9, 7, 22, 10, 0, 0, time.UTC); !qUntil.Equal(want) {
+		t.Fatalf("quarantined_until = %s, want provider reset %s", qUntil, want)
+	}
+	if err := env.sp.Stop(sessionName); err != nil {
+		t.Fatalf("Stop(%s): %v", sessionName, err)
+	}
+
+	env.clk.Time = qUntil.Add(-time.Second)
+	if woken := env.reconcile([]beads.Bead{held}); woken != 0 {
+		t.Fatalf("woken before provider reset = %d, want 0", woken)
+	}
+	if env.sp.IsRunning(sessionName) {
+		t.Fatal("worker started before provider reset")
+	}
+
+	env.clk.Time = qUntil.Add(time.Second)
+	if woken := env.reconcile([]beads.Bead{held}); woken != 1 {
+		t.Fatalf("woken at provider reset = %d, want 1", woken)
+	}
+	if !env.sp.IsRunning(sessionName) {
+		t.Fatal("worker was not restarted at provider reset")
+	}
+	afterWake, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("Get after wake: %v", err)
+	}
+	if woken := env.reconcile([]beads.Bead{afterWake}); woken != 0 {
+		t.Fatalf("woken on stable post-reset tick = %d, want 0", woken)
 	}
 }
 

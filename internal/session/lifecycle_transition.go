@@ -415,6 +415,12 @@ func BeginDrainPatch(now time.Time, reason string) MetadataPatch {
 // running asynchronously and waiting for controller finalization.
 const DrainAckStopPendingReason = "drain-ack-stop-pending"
 
+// DrainAckRuntimeReplacedKey records that the runtime targeted by a
+// drain-ack stop was replaced before the controller could stop it. The
+// reconciler uses this durable marker to finalize the stale session bead on a
+// later pass without probing or killing the replacement by name.
+const DrainAckRuntimeReplacedKey = "drain_ack_runtime_replaced"
+
 // DrainAckStopPendingPatch records that a drain-acked session has moved into
 // durable stop-pending state. The provider stop itself is asynchronous; the
 // controller finalizes the bead with the normal drain completion patches after
