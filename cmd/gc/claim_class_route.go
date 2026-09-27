@@ -551,6 +551,24 @@ func classRoutedHookClaimOps(ops hookClaimOps, route *hookClaimClassRoute) hookC
 			return siblings, nil
 		}
 	}
+	ops.ListAffinitySteps = func(ctx context.Context, dir string, env []string, rootID, group string) ([]beads.Bead, error) {
+		if route.knownResident(rootID) {
+			return hookListAffinityStepsFromStore(route.graph, rootID, group)
+		}
+		steps, err := base.ListAffinitySteps(ctx, dir, env, rootID, group)
+		if err != nil || len(steps) > 0 {
+			return steps, err
+		}
+		held, probeErr := route.holds(rootID)
+		switch {
+		case probeErr != nil:
+			return nil, probeErr
+		case held:
+			return hookListAffinityStepsFromStore(route.graph, rootID, group)
+		default:
+			return steps, nil
+		}
+	}
 
 	ops.AssignContinuation = func(ctx context.Context, dir string, env []string, beadID, assignee string) error {
 		write := func() error { return route.graph.Update(beadID, beads.UpdateOpts{Assignee: &assignee}) }
