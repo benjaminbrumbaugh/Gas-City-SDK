@@ -1189,9 +1189,21 @@ func (s *NativeDoltStore) ReleaseIfCurrent(id, expectedAssignee string) (bool, e
 		if issue == nil || issue.Status != beadslib.StatusInProgress || issue.Assignee != expectedAssignee {
 			return nil
 		}
+		rawMetadata, err := metadataRawValuesFromNative(issue.Metadata)
+		if err != nil {
+			return fmt.Errorf("parsing metadata for bead %q: %w", id, err)
+		}
+		for _, key := range releaseClearedIdentityKeys {
+			delete(rawMetadata, key)
+		}
+		raw, err := json.Marshal(rawMetadata)
+		if err != nil {
+			return fmt.Errorf("marshaling metadata for bead %q: %w", id, err)
+		}
 		if err := tx.UpdateIssue(ctx, id, map[string]interface{}{
 			"status":   "open",
 			"assignee": "",
+			"metadata": json.RawMessage(raw),
 		}, s.actor); err != nil {
 			return nativeStoreError(id, err)
 		}

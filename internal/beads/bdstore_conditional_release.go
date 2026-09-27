@@ -3,6 +3,7 @@ package beads
 import (
 	"errors"
 	"fmt"
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"os/exec"
 	"strings"
 )
@@ -57,6 +58,24 @@ func (s *BdStore) conditionalReleaseUnsupported() bool {
 	return s.condReleaseLatchedUnsupported
 }
 
+// releaseClearedIdentityKeys are the metadata keys that name a bead's owning
+// session and must be cleared whenever the assignment is. Both spellings are
+// retained because routingdecision reads the snake key first and falls back to
+// camelCase when it is absent.
+var releaseClearedIdentityKeys = []string{
+	beadmeta.SessionIDMetadataKey,
+	beadmeta.SessionNameMetadataKey,
+	beadmeta.SessionIDCamelMetadataKey,
+	beadmeta.SessionNameCamelMetadataKey,
+}
+
+// ReleaseClearedIdentitySQL keeps the raw-SQL compatibility path atomic with
+// the assignee/status CAS. JSON_REMOVE uses quoted paths because the metadata
+// keys themselves contain dots; unrelated metadata remains untouched.
+// ReleaseClearedIdentitySQL is exported so callers that pin the raw release
+// query in tests (cmd/gc) can do so without restating the clause.
+const ReleaseClearedIdentitySQL = `metadata = JSON_REMOVE(COALESCE(metadata, JSON_OBJECT()), '$."gc.session_id"', '$."gc.session_name"', '$."gc.sessionId"', '$."gc.sessionName"')`
+
 // latchConditionalReleaseUnsupported records that bd does not understand the
 // conditional-release flags, sending every later release straight to the SQL
 // fallback.
@@ -80,13 +99,17 @@ func (s *BdStore) releaseIfCurrentViaBdVerb(id, expectedAssignee string) (releas
 	// --assignee "" is how bd clears an assignment; the paired --status open
 	// completes the same swap the SQL statement performed, and both --if-* flags
 	// carry the preconditions bd now evaluates server-side.
-	out, runErr := s.runBDTransientWriteOutput(
+	args := []string{
 		"update", id,
 		"--if-assignee", expectedAssignee,
 		"--if-status", "in_progress",
 		"--status", "open",
 		"--assignee", "",
-	)
+	}
+	for _, key := range releaseClearedIdentityKeys {
+		args = append(args, "--set-metadata", key+"=")
+	}
+	out, runErr := s.runBDTransientWriteOutput(args...)
 	if runErr == nil {
 		return true, true, nil
 	}

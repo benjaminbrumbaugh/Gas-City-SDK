@@ -3548,7 +3548,7 @@ func TestBdStoreReleaseIfCurrentUsesGuardedSQL(t *testing.T) {
 	if len(gotArgs) != 3 || gotArgs[0] != "sql" || gotArgs[1] != "--json" {
 		t.Fatalf("args = %q, want bd sql --json <query>", gotArgs)
 	}
-	wantQuery := "UPDATE issues SET status = 'open', assignee = '', updated_at = CURRENT_TIMESTAMP, revision = <revision> WHERE id = 'bd-42' AND status = 'in_progress' AND assignee = 'worker-''1'"
+	wantQuery := "UPDATE issues SET status = 'open', assignee = '', " + beads.ReleaseClearedIdentitySQL + ", updated_at = CURRENT_TIMESTAMP, revision = <revision> WHERE id = 'bd-42' AND status = 'in_progress' AND assignee = 'worker-''1'"
 	if got := normalizeReleaseRevisionQuery(t, gotArgs[2]); got != wantQuery {
 		t.Fatalf("SQL query = %q, want %q", gotArgs[2], wantQuery)
 	}
@@ -3565,7 +3565,7 @@ func TestBdStoreReleaseIfCurrentSQLLiteralEscapesBackslash(t *testing.T) {
 	if _, err := s.ReleaseIfCurrent("bd-\\42", "worker-\\1"); err != nil {
 		t.Fatalf("ReleaseIfCurrent: %v", err)
 	}
-	wantQuery := "UPDATE issues SET status = 'open', assignee = '', updated_at = CURRENT_TIMESTAMP, revision = <revision> WHERE id = 'bd-\\\\42' AND status = 'in_progress' AND assignee = 'worker-\\\\1'"
+	wantQuery := "UPDATE issues SET status = 'open', assignee = '', " + beads.ReleaseClearedIdentitySQL + ", updated_at = CURRENT_TIMESTAMP, revision = <revision> WHERE id = 'bd-\\\\42' AND status = 'in_progress' AND assignee = 'worker-\\\\1'"
 	if got := normalizeReleaseRevisionQuery(t, gotArgs[2]); got != wantQuery {
 		t.Fatalf("SQL query = %q, want %q", gotArgs[2], wantQuery)
 	}
@@ -3781,8 +3781,8 @@ func TestBdStoreReleaseIfCurrentFallsBackWhenEmbeddedBdSQLUnsupported(t *testing
 		t.Fatal("ReleaseIfCurrent released = false, want true")
 	}
 	wantCalls := []string{
-		dir + ": bd sql --json UPDATE issues SET status = 'open', assignee = '', updated_at = CURRENT_TIMESTAMP, revision = <revision> WHERE id = 'bd-42' AND status = 'in_progress' AND assignee = 'worker-1'",
-		filepath.Join(dir, ".beads", "embeddeddolt", "demo") + ": dolt sql -r json -q UPDATE issues SET status = 'open', assignee = '', updated_at = CURRENT_TIMESTAMP, revision = <revision> WHERE id = 'bd-42' AND status = 'in_progress' AND assignee = 'worker-1'; SELECT ROW_COUNT() AS rows_affected",
+		dir + ": bd sql --json UPDATE issues SET status = 'open', assignee = '', " + beads.ReleaseClearedIdentitySQL + ", updated_at = CURRENT_TIMESTAMP, revision = <revision> WHERE id = 'bd-42' AND status = 'in_progress' AND assignee = 'worker-1'",
+		filepath.Join(dir, ".beads", "embeddeddolt", "demo") + ": dolt sql -r json -q UPDATE issues SET status = 'open', assignee = '', " + beads.ReleaseClearedIdentitySQL + ", updated_at = CURRENT_TIMESTAMP, revision = <revision> WHERE id = 'bd-42' AND status = 'in_progress' AND assignee = 'worker-1'; SELECT ROW_COUNT() AS rows_affected",
 	}
 	normalizedCalls := make([]string, len(calls))
 	for i, call := range calls {

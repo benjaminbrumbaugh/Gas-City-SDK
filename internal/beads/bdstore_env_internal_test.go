@@ -19,7 +19,7 @@ func envValues(env []string, key string) []string {
 	return out
 }
 
-func TestExecEnvForBd_InjectsAutoBackupOptOut(t *testing.T) {
+func TestExecEnvForBd_InjectsAutoBackupAndMetricsOptOut(t *testing.T) {
 	// Every bd subprocess spawned through the runner must carry the
 	// auto-backup opt-out (ga-yfbs28): bd's PersistentPostRun backup_export
 	// sync has no retention and stuck-loops on broken remote state (the
@@ -31,6 +31,9 @@ func TestExecEnvForBd_InjectsAutoBackupOptOut(t *testing.T) {
 	got := execEnvFor("bd", base, nil)
 	if vals := envValues(got, "BD_BACKUP_ENABLED"); len(vals) != 1 || vals[0] != "false" {
 		t.Errorf("BD_BACKUP_ENABLED values = %v, want exactly [false]", vals)
+	}
+	if vals := envValues(got, "BD_DISABLE_METRICS"); len(vals) != 1 || vals[0] != "1" {
+		t.Errorf("BD_DISABLE_METRICS values = %v, want exactly [1]", vals)
 	}
 }
 
@@ -57,10 +60,13 @@ func TestExecEnvForBd_OverridesInheritedEnable(t *testing.T) {
 	// A BD_BACKUP_ENABLED=true inherited from the parent process must not
 	// leak through: gc policy forces the opt-out on gc-managed bd calls,
 	// matching applyBdAutoBackupOptOut's unconditional projection.
-	base := []string{"PATH=/usr/bin", "BD_BACKUP_ENABLED=true"}
+	base := []string{"PATH=/usr/bin", "BD_BACKUP_ENABLED=true", "BD_DISABLE_METRICS=false"}
 	got := execEnvFor("bd", base, nil)
 	if vals := envValues(got, "BD_BACKUP_ENABLED"); len(vals) != 1 || vals[0] != "false" {
 		t.Errorf("BD_BACKUP_ENABLED values = %v, want exactly [false] (inherited true must be replaced)", vals)
+	}
+	if vals := envValues(got, "BD_DISABLE_METRICS"); len(vals) != 1 || vals[0] != "1" {
+		t.Errorf("BD_DISABLE_METRICS values = %v, want exactly [1] (inherited false must be replaced)", vals)
 	}
 }
 
@@ -83,6 +89,9 @@ func TestExecEnvForBd_MergesOtherOverrides(t *testing.T) {
 	if vals := envValues(got, "BD_BACKUP_ENABLED"); len(vals) != 1 || vals[0] != "false" {
 		t.Errorf("BD_BACKUP_ENABLED values = %v, want [false] alongside other overrides", vals)
 	}
+	if vals := envValues(got, "BD_DISABLE_METRICS"); len(vals) != 1 || vals[0] != "1" {
+		t.Errorf("BD_DISABLE_METRICS values = %v, want [1] alongside other overrides", vals)
+	}
 	if vals := envValues(got, "HOME"); len(vals) != 1 || vals[0] != "/home/u" {
 		t.Errorf("HOME values = %v, want [/home/u] preserved", vals)
 	}
@@ -91,10 +100,13 @@ func TestExecEnvForBd_MergesOtherOverrides(t *testing.T) {
 func TestExecEnvForNonBd_LeavesEnvAlone(t *testing.T) {
 	// The runner also execs dolt directly; non-bd commands keep the
 	// caller-visible environment untouched.
-	base := []string{"PATH=/usr/bin", "BD_BACKUP_ENABLED=true"}
+	base := []string{"PATH=/usr/bin", "BD_BACKUP_ENABLED=true", "BD_DISABLE_METRICS=false"}
 	got := execEnvFor("dolt", base, nil)
 	if vals := envValues(got, "BD_BACKUP_ENABLED"); len(vals) != 1 || vals[0] != "true" {
 		t.Errorf("BD_BACKUP_ENABLED values = %v, want [true] untouched for non-bd commands", vals)
+	}
+	if vals := envValues(got, "BD_DISABLE_METRICS"); len(vals) != 1 || vals[0] != "false" {
+		t.Errorf("BD_DISABLE_METRICS values = %v, want [false] untouched for non-bd commands", vals)
 	}
 }
 
@@ -137,7 +149,7 @@ func TestExecCommandRunnerWithEnv_AbsoluteBDBinKeepsLogicalBdPolicy(t *testing.T
 	// bd-only environment policy rather than treating the pinned path as an
 	// unrelated program.
 	pinned := filepath.Join(t.TempDir(), "workspace-bd")
-	if err := os.WriteFile(pinned, []byte("#!/bin/sh\nprintf 'pinned:%s\\n' \"$BD_BACKUP_ENABLED\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(pinned, []byte("#!/bin/sh\nprintf 'pinned:%s:%s\\n' \"$BD_BACKUP_ENABLED\" \"$BD_DISABLE_METRICS\"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -145,7 +157,7 @@ func TestExecCommandRunnerWithEnv_AbsoluteBDBinKeepsLogicalBdPolicy(t *testing.T
 	if err != nil {
 		t.Fatalf("run workspace-pinned bd: %v", err)
 	}
-	if got, want := string(out), "pinned:false\n"; got != want {
+	if got, want := string(out), "pinned:false:1\n"; got != want {
 		t.Fatalf("workspace-pinned bd output = %q, want %q", got, want)
 	}
 }
@@ -153,7 +165,7 @@ func TestExecCommandRunnerWithEnv_AbsoluteBDBinKeepsLogicalBdPolicy(t *testing.T
 func TestExecCommandRunnerWithEnv_RelativeBDBinUsesAmbientBd(t *testing.T) {
 	ambientDir := t.TempDir()
 	ambient := filepath.Join(ambientDir, "bd")
-	if err := os.WriteFile(ambient, []byte("#!/bin/sh\nprintf 'ambient:%s\\n' \"$BD_BACKUP_ENABLED\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(ambient, []byte("#!/bin/sh\nprintf 'ambient:%s:%s\\n' \"$BD_BACKUP_ENABLED\" \"$BD_DISABLE_METRICS\"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", ambientDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -162,7 +174,7 @@ func TestExecCommandRunnerWithEnv_RelativeBDBinUsesAmbientBd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run ambient bd: %v", err)
 	}
-	if got, want := string(out), "ambient:false\n"; got != want {
+	if got, want := string(out), "ambient:false:1\n"; got != want {
 		t.Fatalf("ambient bd output = %q, want %q", got, want)
 	}
 }

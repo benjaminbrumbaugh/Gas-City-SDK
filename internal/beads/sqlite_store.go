@@ -1222,6 +1222,9 @@ func (s *SQLiteStore) ReleaseIfCurrent(id, expectedAssignee string) (bool, error
 		before := b
 		b.Status = "open"
 		b.Assignee = ""
+		for _, key := range releaseClearedIdentityKeys {
+			delete(b.Metadata, key)
+		}
 		b.UpdatedAt = time.Now()
 		if err := s.upsertBeadTx(ctx, tx, b); err != nil {
 			return err

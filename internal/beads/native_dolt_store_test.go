@@ -133,7 +133,16 @@ func TestNativeDoltStoreCreateGetPreservesNoHistory(t *testing.T) {
 
 func TestNativeDoltStoreReleaseIfCurrent(t *testing.T) {
 	store := newNativeDoltStoreForTest(newNativeDoltMemStorage())
-	created, err := store.Create(Bead{Title: "native release", Assignee: "worker-1"})
+	created, err := store.Create(Bead{
+		Title:    "native release",
+		Assignee: "worker-1",
+		Metadata: map[string]string{
+			"gc.session_id":   "gc-k2gh9",
+			"gc.session_name": "worker-1",
+			"gc.sessionId":    "gc-k2gh9",
+			"gc.sessionName":  "worker-1",
+		},
+	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -170,6 +179,11 @@ func TestNativeDoltStoreReleaseIfCurrent(t *testing.T) {
 	}
 	if got.Status != "open" || got.Assignee != "" {
 		t.Fatalf("released bead = %+v, want open and unassigned", got)
+	}
+	for _, key := range []string{"gc.session_id", "gc.session_name", "gc.sessionId", "gc.sessionName"} {
+		if got.Metadata[key] != "" {
+			t.Fatalf("released bead metadata[%q] = %q, want cleared", key, got.Metadata[key])
+		}
 	}
 }
 
@@ -2871,7 +2885,28 @@ func (s *nativeDoltMemStorage) UpdateIssue(_ context.Context, id string, updates
 	if err != nil {
 		return err
 	}
-	return s.store.Update(id, opts)
+	if err := s.store.Update(id, opts); err != nil {
+		return err
+	}
+	// Upstream NativeDoltStorage treats the metadata JSON update as a complete
+	// replacement. MemStore.Update intentionally merges metadata for its public
+	// UpdateOpts contract, so make this test double preserve the upstream
+	// replacement semantics when the native path sends a raw metadata object.
+	if raw, ok := updates["metadata"].(json.RawMessage); ok {
+		metadata, err := metadataMapFromNative(raw)
+		if err != nil {
+			return err
+		}
+		s.store.mu.Lock()
+		defer s.store.mu.Unlock()
+		for i := range s.store.beads {
+			if s.store.beads[i].ID == id {
+				s.store.beads[i].Metadata = metadata
+				break
+			}
+		}
+	}
+	return nil
 }
 
 func (s *nativeDoltMemStorage) UpdateIssueChecked(
