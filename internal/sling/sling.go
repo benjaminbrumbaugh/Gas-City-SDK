@@ -854,6 +854,20 @@ func (e *MissingBeadError) Error() string {
 	return fmt.Sprintf("bead %q not found in store %s", e.BeadID, e.StoreRef)
 }
 
+// EventBeadPoolError reports that an audit event was sent to a multi-session
+// pool. Event beads have no work artifact for a polecat to produce, so they
+// must be refused before formula attachment or routing creates downstream
+// molecule steps.
+type EventBeadPoolError struct {
+	BeadID string
+	Target string
+}
+
+// Error returns the event-admission diagnostic.
+func (e *EventBeadPoolError) Error() string {
+	return fmt.Sprintf("event bead %q cannot be routed to polecat pool %q: event records have no work artifact", e.BeadID, e.Target)
+}
+
 // BeadLookupError reports an operational failure while checking whether a bead
 // exists in the target store.
 type BeadLookupError struct {

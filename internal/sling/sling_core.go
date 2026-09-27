@@ -103,6 +103,9 @@ func preflight(opts SlingOpts, deps SlingDeps, querier BeadQuerier) (SlingResult
 			return result, err
 		}
 	}
+	if err := rejectEventBeadForPool(opts, deps); err != nil {
+		return result, err
+	}
 	if shouldGuardCrossRig(opts) {
 		if err := CrossRigRouteError(opts.BeadOrFormula, a, deps.Cfg); err != nil {
 			return result, err
@@ -159,6 +162,59 @@ func preflight(opts SlingOpts, deps SlingDeps, querier BeadQuerier) (SlingResult
 	}
 
 	return result, nil
+}
+
+// rejectEventBeadForPool prevents an audit-only event from entering a
+// multi-session polecat pool. The check runs after ordinary existence
+// validation and before idempotency, reassign, formula attachment, or route
+// mutation, so an event cannot leave a root, step, route, or convoy behind.
+// Missing beads remain available to the --force direct-route contract; a
+// lookup failure is surfaced because admitting an unknown source would make
+// the type boundary undecidable.
+func rejectEventBeadForPool(opts SlingOpts, deps SlingDeps) error {
+	if opts.IsFormula || !opts.Target.SupportsInstanceExpansion() || strings.TrimSpace(opts.BeadOrFormula) == "" {
+		return nil
+	}
+	// Ad-hoc inline text is not a bead id; there is nothing to look up and a
+	// dry run must not report it as missing.
+	if opts.InlineText {
+		return nil
+	}
+	querier := deps.ValidationQuerier
+	if querier == nil {
+		querier = deps.Store
+	}
+	if querier == nil {
+		return nil
+	}
+	bead, err := querier.Get(opts.BeadOrFormula)
+	if err != nil {
+		if errors.Is(err, beads.ErrNotFound) && opts.Force {
+			return nil
+		}
+		if errors.Is(err, beads.ErrNotFound) {
+			// validateExistingBead already reports the typed missing-bead error
+			// for the normal path; retain that behavior if a source disappears
+			// between the two reads.
+			return &MissingBeadError{BeadID: opts.BeadOrFormula, StoreRef: slingStoreRef(deps.StoreRef)}
+		}
+		return &BeadLookupError{BeadID: opts.BeadOrFormula, StoreRef: slingStoreRef(deps.StoreRef), Err: err}
+	}
+	return rejectEventSourceBeadForPool(opts.Target, bead)
+}
+
+func rejectEventSourceBeadForPool(target config.Agent, bead beads.Bead) error {
+	if target.SupportsInstanceExpansion() && strings.EqualFold(strings.TrimSpace(bead.Type), "event") {
+		return &EventBeadPoolError{BeadID: bead.ID, Target: target.QualifiedName()}
+	}
+	return nil
+}
+
+func slingStoreRef(storeRef string) string {
+	if strings.TrimSpace(storeRef) == "" {
+		return "local"
+	}
+	return strings.TrimSpace(storeRef)
 }
 
 // resolveIdempotentShortCircuit runs the plain-bead pre-flight idempotency
@@ -1722,6 +1778,14 @@ func DoSlingBatch(opts SlingOpts, deps SlingDeps, querier BeadChildQuerier) (Sli
 	var childErrors []error
 	for _, child := range open {
 		childResult := SlingChildResult{BeadID: child.ID}
+		if err := rejectEventSourceBeadForPool(a, child); err != nil {
+			childResult.Failed = true
+			childResult.FailReason = err.Error()
+			batchResult.Children = append(batchResult.Children, childResult)
+			childErrors = append(childErrors, err)
+			failed++
+			continue
+		}
 
 		if !opts.Force {
 			check := CheckBeadStateWithOptions(querier, child.ID, a, deps, BeadCheckOptions{
