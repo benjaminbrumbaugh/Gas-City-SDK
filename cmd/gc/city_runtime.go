@@ -2804,6 +2804,34 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 			cr.requestExecutionStalledDrain,
 			cr.stdout,
 		)
+		// Named on_demand sessions are awake providers rather than disposable
+		// pool seats. Their assigned wisps need the same bounded claim and
+		// claim-to-execution delivery backstops, but only with complete
+		// assigned-work evidence and without pool exhaustion drains.
+		if !result.StoreQueryPartial && !result.SessionQueryPartial {
+			nudgeStalledNamedSessionClaims(
+				cr.sp,
+				cr.cfg,
+				sessStore,
+				stalledPoolBeads,
+				result.AssignedWorkBeads,
+				result.AssignedWorkStores,
+				result.AssignedWorkStoreRefs,
+				time.Now(),
+				cr.stdout,
+			)
+			nudgeStalledNamedSessionExecution(
+				cr.sp,
+				cr.cfg,
+				sessStore,
+				stalledPoolBeads,
+				result.AssignedWorkBeads,
+				result.AssignedWorkStores,
+				result.AssignedWorkStoreRefs,
+				time.Now(),
+				cr.stdout,
+			)
+		}
 	}
 	recordPhase(TraceSiteControllerTickPhase, "bead_reconcile.nudge_stalled_pool_claims", phaseStart, nil)
 }
