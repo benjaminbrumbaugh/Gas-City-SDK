@@ -72,10 +72,16 @@ func (cr *CityRuntime) applyApprovedRoutingDecisions() (int, error) {
 	if _, err := decisionStore.ExpireDue(now, routingDecisionAdmissionLimit, func(decisionID string) string {
 		return "controller-expire:" + decisionID
 	}); err != nil {
+		if errors.Is(err, routingdecision.ErrStoredDecisionInvalid) {
+			return 0, err
+		}
 		return 0, errors.New("routing decision ledger expiry refused")
 	}
 	records, err := decisionStore.ActiveApproved(now, routingDecisionAdmissionLimit, *cr.routingDecisionVerifier)
 	if err != nil {
+		if errors.Is(err, routingdecision.ErrStoredDecisionInvalid) {
+			return 0, err
+		}
 		return 0, errors.New("routing decision ledger query refused")
 	}
 	scopes := cr.routingDecisionScopes()
@@ -262,7 +268,11 @@ func routingDecisionExactStampedCarrier(bead beads.Bead, payload routingdecision
 func (cr *CityRuntime) applyApprovedRoutingDecisionsAndLog() {
 	applied, err := cr.applyApprovedRoutingDecisions()
 	if err != nil {
-		fmt.Fprintf(cr.stderr, "%s: routing decision admission refused\n", cr.logPrefix) //nolint:errcheck // best-effort sanitized diagnostics
+		if errors.Is(err, routingdecision.ErrStoredDecisionInvalid) {
+			fmt.Fprintf(cr.stderr, "%s: routing decision admission refused: validator rejected stored payload\n", cr.logPrefix) //nolint:errcheck // best-effort sanitized diagnostics
+		} else {
+			fmt.Fprintf(cr.stderr, "%s: routing decision admission refused\n", cr.logPrefix) //nolint:errcheck // best-effort sanitized diagnostics
+		}
 	}
 	if applied > 0 {
 		fmt.Fprintf(cr.stderr, "%s: routing decision admission routed %d newly ready work bead(s)\n", cr.logPrefix, applied) //nolint:errcheck // best-effort diagnostics

@@ -142,7 +142,10 @@ func (store *Store) Verify(verifier Verifier) (VerifyReport, error) {
 		stateCounts := make(map[State]uint64, len(AllStates()))
 		if err := tx.Bucket(bucketDecisions).ForEach(func(key, value []byte) error {
 			var record Record
-			if err := decodeRecord(value, &record); err != nil || string(key) != record.Payload.DecisionID {
+			if err := decodeRecord(value, &record); err != nil {
+				return err
+			}
+			if string(key) != record.Payload.DecisionID {
 				return ErrStoreCorrupt
 			}
 			if indexed := tx.Bucket(bucketStateExpiry).Get(stateIndexKey(record)); string(indexed) != record.Payload.DecisionID {
