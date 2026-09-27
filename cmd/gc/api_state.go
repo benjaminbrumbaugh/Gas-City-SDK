@@ -769,6 +769,14 @@ var beadCloseAutocloseDispatch = func(fn func()) { go fn() }
 
 func (cs *controllerState) applyBeadEventToStores(evt events.Event) {
 	if len(evt.Payload) == 0 {
+		// The event payload is only a cache-update optimization. A hook can
+		// emit a valid bead mutation without a payload, but the authoritative
+		// stores are still readable by the next reconcile tick; do not let the
+		// missing cache delta suppress that wake and strand newly-routed work
+		// until patrol.
+		if evt.Actor != cacheReconcileActor {
+			cs.Poke()
+		}
 		return
 	}
 	cs.mu.RLock()
