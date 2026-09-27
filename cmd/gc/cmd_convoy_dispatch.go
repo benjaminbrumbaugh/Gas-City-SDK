@@ -1673,7 +1673,7 @@ func cmdWorkflowDeleteSource(sourceBeadID string, selector sourceWorkflowStoreSe
 		if err != nil {
 			return err
 		}
-		matches, skips, err := collectSourceWorkflowMatches(cfg, cityPath, sourceBeadID, target.storeRef)
+		matches, skips, err := collectSourceWorkflowMatches(cfg, cityPath, sourceBeadID, target.storeRef, true)
 		if err != nil {
 			return err
 		}
@@ -1691,6 +1691,18 @@ func cmdWorkflowDeleteSource(sourceBeadID string, selector sourceWorkflowStoreSe
 		}
 		totalRoots, totalBeads, openCount := summarizeSourceWorkflowMatches(matches)
 		if totalRoots == 0 {
+			// An unknown, explicitly named bead is a miss, not proof that the
+			// requested workflow is clean. In particular, do not clear metadata
+			// when the scan never resolved the named bead.
+			if strings.TrimSpace(target.sourceBead.ID) == "" {
+				_, _ = fmt.Fprintf(
+					stdout,
+					"result=miss source_bead_id=%s matched_roots=0 matched_beads=0 closed=0 deleted=0 metadata_cleared=false\n",
+					sourceBeadID,
+				)
+				resultCode = 1
+				return nil
+			}
 			cleared := false
 			if apply {
 				var clearErr error
@@ -1817,7 +1829,7 @@ func cmdWorkflowReopenSource(sourceBeadID string, selector sourceWorkflowStoreSe
 		if target.storeView.store == nil || strings.TrimSpace(target.sourceBead.ID) == "" {
 			return fmt.Errorf("getting bead %q: %w", sourceBeadID, beads.ErrNotFound)
 		}
-		matches, skips, err := collectSourceWorkflowMatches(cfg, cityPath, sourceBeadID, target.storeRef)
+		matches, skips, err := collectSourceWorkflowMatches(cfg, cityPath, sourceBeadID, target.storeRef, false)
 		if err != nil {
 			return err
 		}
@@ -2070,28 +2082,29 @@ func restoreWorkflowDeleteDeps(store beads.Store, downDeps, upDeps []beads.Dep) 
 	return restoreErr
 }
 
-func collectSourceWorkflowMatches(cfg *config.City, cityPath, sourceBeadID, sourceStoreRef string) ([]sourceWorkflowStoreMatch, []sourceWorkflowStoreSkip, error) {
+func collectSourceWorkflowMatches(cfg *config.City, cityPath, sourceBeadID, sourceStoreRef string, includeNamedRoot bool) ([]sourceWorkflowStoreMatch, []sourceWorkflowStoreSkip, error) {
 	stores, skips, err := openSourceWorkflowStores(cfg, cityPath, sourceBeadID)
 	if err != nil {
 		return nil, skips, err
 	}
-	return collectSourceWorkflowMatchesFromStores(cfg, cityPath, sourceBeadID, sourceStoreRef, stores, skips)
+	return collectSourceWorkflowMatchesFromStores(cfg, cityPath, sourceBeadID, sourceStoreRef, stores, skips, includeNamedRoot)
 }
 
-func collectSourceWorkflowMatchesFromStores(cfg *config.City, cityPath, sourceBeadID, sourceStoreRef string, stores []convoyStoreView, skips []sourceWorkflowStoreSkip) ([]sourceWorkflowStoreMatch, []sourceWorkflowStoreSkip, error) {
+func collectSourceWorkflowMatchesFromStores(cfg *config.City, cityPath, sourceBeadID, sourceStoreRef string, stores []convoyStoreView, skips []sourceWorkflowStoreSkip, includeNamedRoot bool) ([]sourceWorkflowStoreMatch, []sourceWorkflowStoreSkip, error) {
 	cityName := loadedCityName(cfg, cityPath)
 	if err := ensureSelectedSourceStorePresent(cfg, cityPath, cityName, sourceStoreRef, stores, skips); err != nil {
 		return nil, skips, err
 	}
 	c := &sourceWorkflowMatchCollector{
-		cfg:            cfg,
-		cityPath:       cityPath,
-		cityName:       cityName,
-		stores:         stores,
-		skips:          skips,
-		matchesByLabel: map[string]sourceWorkflowStoreMatch{},
-		visited:        map[string]struct{}{},
-		failedStores:   map[int]struct{}{},
+		cfg:              cfg,
+		cityPath:         cityPath,
+		cityName:         cityName,
+		stores:           stores,
+		skips:            skips,
+		matchesByLabel:   map[string]sourceWorkflowStoreMatch{},
+		visited:          map[string]struct{}{},
+		failedStores:     map[int]struct{}{},
+		includeNamedRoot: includeNamedRoot,
 	}
 	if err := c.collect(sourceBeadID, sourceStoreRef); err != nil {
 		return nil, c.skips, err
@@ -2141,12 +2154,16 @@ type sourceWorkflowMatchCollector struct {
 	cityName string
 	stores   []convoyStoreView
 
-	matchesByLabel  map[string]sourceWorkflowStoreMatch
-	visited         map[string]struct{}
-	failedStores    map[int]struct{}
-	skips           []sourceWorkflowStoreSkip
-	anyStoreScanned bool
-	firstScanErr    error
+	matchesByLabel map[string]sourceWorkflowStoreMatch
+	visited        map[string]struct{}
+	// includeNamedRoot treats the named source id as a match when it is itself
+	// a graph.v2 workflow root. delete-source wants this (an operator names the
+	// root to remove); reopen-source must not (the source would block itself).
+	includeNamedRoot bool
+	failedStores     map[int]struct{}
+	skips            []sourceWorkflowStoreSkip
+	anyStoreScanned  bool
+	firstScanErr     error
 }
 
 // collect walks every store for currentSourceID, then recurses into each child
@@ -2195,9 +2212,18 @@ func (c *sourceWorkflowMatchCollector) scanStore(index int, info convoyStoreView
 	}
 	c.visited[visitKey] = struct{}{}
 
-	roots, err := sourceworkflow.ListLiveRoots(info.store, currentSourceID, currentSourceStoreRef, rootStoreRef)
+	roots, err := sourceworkflow.ListRootsIncludingConvoySourced(info.store, currentSourceID, currentSourceStoreRef, rootStoreRef)
 	if err != nil {
 		return nil, c.recordScanFailure(index, info, currentSourceStoreRef, "listing live source workflows", err)
+	}
+	// A user may name the workflow root directly. Its graph.v2 shape has no
+	// source-bead back-pointer, so neither source metadata nor the input-convoy
+	// reverse walk can discover it from its own id.
+	if c.includeNamedRoot {
+		if named, getErr := info.store.Get(currentSourceID); getErr == nil && sourceworkflow.IsWorkflowRoot(named) {
+			roots = append(roots, named)
+			roots = uniqueBeads(roots)
+		}
 	}
 	if err := c.mergeRootMatches(info, roots); err != nil {
 		return nil, c.recordScanFailure(index, info, currentSourceStoreRef, "listing source workflow beads", err)
@@ -2218,23 +2244,40 @@ func (c *sourceWorkflowMatchCollector) mergeRootMatches(info convoyStoreView, ro
 	if len(roots) == 0 {
 		return nil
 	}
+	activeRoots := make([]beads.Bead, 0, len(roots))
 	beadSet := make([]beads.Bead, 0, len(roots))
 	for _, root := range roots {
 		workflowBeads, err := findWorkflowBeadsFromRoot(info.store, root)
 		if err != nil {
 			return err
 		}
+		if !workflowSubtreeNeedsCleanup(workflowBeads) {
+			continue
+		}
+		activeRoots = append(activeRoots, root)
 		beadSet = append(beadSet, workflowBeads...)
+	}
+	if len(activeRoots) == 0 {
+		return nil
 	}
 	mergeSourceWorkflowMatch(c.matchesByLabel, sourceWorkflowStoreMatch{
 		label:  workflowDeleteStoreLabel(c.cfg, c.cityPath, info.path),
 		store:  info.store,
-		roots:  roots,
+		roots:  activeRoots,
 		beads:  uniqueBeads(beadSet),
 		path:   info.path,
 		runner: workflowDeleteRunnerForPath(c.cfg, c.cityPath, info.path),
 	})
 	return nil
+}
+
+func workflowSubtreeNeedsCleanup(workflowBeads []beads.Bead) bool {
+	for _, bead := range workflowBeads {
+		if bead.Status != "closed" && bead.Status != "tombstone" {
+			return true
+		}
+	}
+	return false
 }
 
 // recordScanFailure records a store whose scan failed: it remembers the first
