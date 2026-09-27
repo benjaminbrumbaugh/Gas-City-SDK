@@ -47,6 +47,22 @@ internal/api/dashboardspa/web/frontend/.playwright/
 /.claude/*
 !/.claude/skills/
 
+# ...but NOT the machine-local sink `gc prime` materializes inside it
+# (gc-em7gg). Those entries are absolute symlinks embedding a content-addressed
+# pack-cache hash, e.g.
+#   core.gc-work -> /Users/<user>/.gc/cache/repos/<64-hex>/internal/bootstrap/
+#                   packs/core/skills/gc-work
+# so they are meaningless in any other checkout and all of them flip together
+# whenever the pack cache hash changes. Measured 2026-09-06: `git add -A --
+# dry-run -- .claude` staged eight such entries in this repo, which is the
+# worst case of this class because the parent directory is deliberately
+# TRACKED (the shared gascity-docs skill tree lives here and must stay).
+#
+# Deliberately narrow: only the generated names, so gascity-docs/ and any
+# future hand-authored skill remain tracked.
+/.claude/skills/core.*
+/.claude/skills/.gc-skill-ownership.json
+
 # sync-project-agents writes local migration backups here; don't commit them.
 .agents/migration/
 .gc/
