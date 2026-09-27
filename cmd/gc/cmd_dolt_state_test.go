@@ -1477,9 +1477,6 @@ esac
 }
 
 func TestDoltStatePreflightCleanCmdRemovesSocketsButPreservesDoltInternals(t *testing.T) {
-	if _, err := exec.LookPath("lsof"); err != nil {
-		t.Skip("lsof not installed")
-	}
 	cityPath := t.TempDir()
 	layout, err := resolveManagedDoltRuntimeLayout(cityPath)
 	if err != nil {
@@ -1515,6 +1512,7 @@ func TestDoltStatePreflightCleanCmdRemovesSocketsButPreservesDoltInternals(t *te
 	if _, err := os.Stat(socketPath); err != nil {
 		t.Fatalf("stale socket precondition missing: %v", err)
 	}
+	t.Setenv("PATH", filepath.Join(t.TempDir(), "missing-bin"))
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"dolt-state", "preflight-clean", "--city", cityPath}, &stdout, &stderr)
