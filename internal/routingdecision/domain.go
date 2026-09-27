@@ -292,8 +292,8 @@ func (payload DecisionPayload) Validate() error {
 			return invalidf("%s must be a lowercase SHA-256 value", name)
 		}
 	}
-	if payload.WorkRevision < 0 || payload.ClaimFence < 0 {
-		return invalidf("work revision and claim fence must be non-negative")
+	if payload.ClaimFence < 0 {
+		return invalidf("claim fence must be non-negative")
 	}
 	if payload.CreatedAt.IsZero() || payload.ExpiresAt.IsZero() || !payload.ExpiresAt.After(payload.CreatedAt) {
 		return invalidf("expires_at must be after created_at")

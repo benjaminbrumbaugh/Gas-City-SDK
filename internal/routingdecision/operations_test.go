@@ -99,7 +99,9 @@ func TestStoreVerifyDistinguishesStoredPayloadValidationFromCorruption(t *testin
 		if err := strictUnmarshal(value, &stored); err != nil {
 			return err
 		}
-		stored.Payload.WorkRevision = -1
+		// A negative claim fence is a validator rule, not corruption. (Work
+		// revisions are signed hashes and may legitimately be negative.)
+		stored.Payload.ClaimFence = -1
 		return putJSON(tx.Bucket(bucketDecisions), []byte(record.Payload.DecisionID), stored)
 	}); err != nil {
 		t.Fatal(err)
@@ -109,7 +111,7 @@ func TestStoreVerifyDistinguishesStoredPayloadValidationFromCorruption(t *testin
 	if !errors.Is(err, ErrStoredDecisionInvalid) || !errors.Is(err, ErrInvalidDecision) || errors.Is(err, ErrStoreCorrupt) {
 		t.Fatalf("validator-rejected record error = %v, want stored validator classification only", err)
 	}
-	if !strings.Contains(err.Error(), "work revision and claim fence must be non-negative") {
+	if !strings.Contains(err.Error(), "claim fence must be non-negative") {
 		t.Fatalf("validator-rejected error = %v, want the failing rule", err)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -150,6 +151,75 @@ func TestVerifierRejectsTamperingAndUnknownAuthority(t *testing.T) {
 	}
 	if err := (Verifier{}).Verify(payload, approval, signature); err == nil {
 		t.Fatal("zero verifier did not default deny")
+	}
+}
+
+func TestDecisionValidationAcceptsFullSignedWorkRevisionRange(t *testing.T) {
+	for _, revision := range []int64{-1, -1 << 63} {
+		payload := testDecisionPayload(t)
+		payload.WorkRevision = revision
+		payload.BindingID = BindingID(payload)
+		if err := payload.Validate(); err != nil {
+			t.Errorf("Validate WorkRevision %d: %v", revision, err)
+		}
+	}
+}
+
+func TestNegativeWorkRevisionCanonicalBindingAndSignatureDetectTamper(t *testing.T) {
+	payload := testDecisionPayload(t)
+	payload.WorkRevision = -7
+	payload.BindingID = BindingID(payload)
+	const wantBinding = "25d3423fc34b1323a8eae5799500a0fde85e428f03b8e4efd5779184c47dc9b6"
+	if payload.BindingID != wantBinding {
+		t.Fatalf("negative revision BindingID = %q, want %q", payload.BindingID, wantBinding)
+	}
+	canonical, err := CanonicalDecisionBytes(payload)
+	if err != nil {
+		t.Fatalf("CanonicalDecisionBytes: %v", err)
+	}
+	if !strings.Contains(string(canonical), `"work_revision":-7`) {
+		t.Fatalf("canonical bytes lost negative revision: %s", canonical)
+	}
+
+	privateKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	approval := ApprovalPayload{
+		Schema: SchemaVersion, DecisionID: payload.DecisionID, BindingID: payload.BindingID,
+		AuthorityID: "security-board", ApprovedAt: payload.CreatedAt.Add(time.Second),
+	}
+	signing, err := SigningBytes(payload, approval)
+	if err != nil {
+		t.Fatalf("SigningBytes: %v", err)
+	}
+	if !strings.Contains(string(signing), `"work_revision":-7`) {
+		t.Fatalf("signing bytes lost negative revision: %q", signing)
+	}
+	signature := Signature{
+		Algorithm: SignatureAlgorithmEd25519, AuthorityID: approval.AuthorityID,
+		Value: ed25519.Sign(privateKey, signing),
+	}
+	verifier := NewVerifier(map[string]ed25519.PublicKey{approval.AuthorityID: publicKey})
+	if err := verifier.Verify(payload, approval, signature); err != nil {
+		t.Fatalf("Verify negative revision: %v", err)
+	}
+
+	tampered := payload
+	tampered.WorkRevision--
+	tampered.BindingID = BindingID(tampered)
+	tamperedApproval := approval
+	tamperedApproval.BindingID = tampered.BindingID
+	if err := verifier.Verify(tampered, tamperedApproval, signature); !errors.Is(err, ErrInvalidSignature) {
+		t.Fatalf("Verify tampered negative revision = %v, want ErrInvalidSignature", err)
+	}
+}
+
+func TestDecisionValidationRejectsNegativeClaimFence(t *testing.T) {
+	payload := testDecisionPayload(t)
+	payload.WorkRevision = -1
+	payload.ClaimFence = -1
+	payload.BindingID = BindingID(payload)
+	if err := payload.Validate(); err == nil {
+		t.Fatal("Validate accepted negative claim fence")
 	}
 }
 
