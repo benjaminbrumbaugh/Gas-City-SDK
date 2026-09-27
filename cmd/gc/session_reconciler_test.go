@@ -5246,6 +5246,12 @@ func TestReconcileSessionBeads_SpendLimitModalQuarantinesBeforeHeal(t *testing.T
 func assertRateLimitScrollbackQuarantinesBeforeHeal(t *testing.T, peekOutput string) {
 	t.Helper()
 	env := newReconcilerTestEnv()
+	// A modal that names its reset time quarantines until that instant;
+	// otherwise the fixed default duration applies.
+	wantUntil := env.clk.Now().Add(defaultRateLimitQuarantineDuration)
+	if resetAt, ok := runtime.ProviderRateLimitResetAt(peekOutput, env.clk.Now()); ok {
+		wantUntil = resetAt
+	}
 	rec := events.NewFake()
 	env.rec = rec
 	env.cfg = &config.City{Agents: []config.Agent{{Name: "worker"}}}
@@ -5291,8 +5297,8 @@ func assertRateLimitScrollbackQuarantinesBeforeHeal(t *testing.T, peekOutput str
 	if err != nil {
 		t.Fatalf("quarantined_until parse: %v", err)
 	}
-	if want := env.clk.Now().Add(defaultRateLimitQuarantineDuration); !qUntil.Equal(want) {
-		t.Fatalf("quarantined_until = %s, want %s", qUntil.Format(time.RFC3339), want.Format(time.RFC3339))
+	if !qUntil.Equal(wantUntil) {
+		t.Fatalf("quarantined_until = %s, want %s", qUntil.Format(time.RFC3339), wantUntil.Format(time.RFC3339))
 	}
 	if got.Metadata["session_key"] != "keep-session" {
 		t.Fatalf("session_key = %q, want preserved", got.Metadata["session_key"])

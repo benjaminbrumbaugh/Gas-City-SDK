@@ -90,8 +90,11 @@ func TestFileOpenedByAnyProcessBoundsLsof(t *testing.T) {
 	}
 }
 
-func TestFileOpenedByAnyProcessUsesUnixSocketTableForStaleSocket(t *testing.T) {
-	socketPath := shortUnixSocketPath(t)
+// listeningUnixSocketFD binds and listens on a raw AF_UNIX socket without
+// net.Listen, so the probe under test sees a listener that Go's net package
+// does not own. The caller closes the fd.
+func listeningUnixSocketFD(t *testing.T, socketPath string) int {
+	t.Helper()
 	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		t.Fatalf("socket(AF_UNIX): %v", err)
@@ -104,6 +107,12 @@ func TestFileOpenedByAnyProcessUsesUnixSocketTableForStaleSocket(t *testing.T) {
 		_ = syscall.Close(fd)
 		t.Fatalf("listen unix socket: %v", err)
 	}
+	return fd
+}
+
+func TestFileOpenedByAnyProcessUsesUnixSocketTableForStaleSocket(t *testing.T) {
+	socketPath := shortUnixSocketPath(t)
+	fd := listeningUnixSocketFD(t, socketPath)
 	if err := syscall.Close(fd); err != nil {
 		t.Fatalf("close unix socket: %v", err)
 	}
@@ -137,6 +146,33 @@ func TestFileOpenedByAnyProcessUsesUnixSocketTableForStaleSocket(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("lsof marker stat err = %v, want not exist", err)
+	}
+}
+
+func TestFileOpenedByAnyProcessUsesNativeUnixSocketProbeWithoutLsof(t *testing.T) {
+	socketPath := shortUnixSocketPath(t)
+	fd := listeningUnixSocketFD(t, socketPath)
+	withManagedDoltProcPaths(t, filepath.Join(t.TempDir(), "missing-proc"), filepath.Join(t.TempDir(), "missing-unix"))
+	t.Setenv("PATH", filepath.Join(t.TempDir(), "missing-bin"))
+
+	open, err := fileOpenedByAnyProcess(socketPath)
+	if err != nil {
+		t.Fatalf("fileOpenedByAnyProcess(live socket) error = %v, want nil", err)
+	}
+	if !open {
+		t.Fatal("fileOpenedByAnyProcess(live socket) = false, want true")
+	}
+	if err := syscall.Close(fd); err != nil {
+		t.Fatalf("Close(listener): %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(socketPath) })
+
+	open, err = fileOpenedByAnyProcess(socketPath)
+	if err != nil {
+		t.Fatalf("fileOpenedByAnyProcess(stale socket) error = %v, want nil", err)
+	}
+	if open {
+		t.Fatal("fileOpenedByAnyProcess(stale socket) = true, want false")
 	}
 }
 

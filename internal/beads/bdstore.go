@@ -762,6 +762,11 @@ func truncateRawOutput(data []byte, maxBytes int) string {
 // store bridge, t3bridge, libstore, provider lifecycle — current and future.
 const bdAutoBackupOptOutEnvKey = "BD_BACKUP_ENABLED"
 
+// bdMetricsOptOutEnvKey disables bd's anonymous command telemetry. The
+// upstream v1.1.x file queue had no retention cap, so every gc-spawned bd
+// command must opt out regardless of the operator's user-global setting.
+const bdMetricsOptOutEnvKey = "BD_DISABLE_METRICS"
+
 // execEnvFor assembles the child environment for a runner exec. For bd
 // commands the auto-backup opt-out is injected as a baseline, replacing any
 // value inherited from the parent process (matching the unconditional
@@ -1525,11 +1530,11 @@ func (s *BdStore) ReleaseIfCurrent(id, expectedAssignee string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("bd release-if-current: minting revision: %w", err)
 	}
-	legacyQuery := "UPDATE issues SET status = 'open', assignee = '', updated_at = CURRENT_TIMESTAMP" +
+	legacyQuery := "UPDATE issues SET status = 'open', assignee = '', " + ReleaseClearedIdentitySQL + ", updated_at = CURRENT_TIMESTAMP" +
 		" WHERE id = " + bdSQLStringLiteral(id) +
 		" AND status = 'in_progress'" +
 		" AND assignee = " + bdSQLStringLiteral(expectedAssignee)
-	query := "UPDATE issues SET status = 'open', assignee = '', updated_at = CURRENT_TIMESTAMP, revision = " +
+	query := "UPDATE issues SET status = 'open', assignee = '', " + ReleaseClearedIdentitySQL + ", updated_at = CURRENT_TIMESTAMP, revision = " +
 		strconv.FormatInt(revision, 10) +
 		" WHERE id = " + bdSQLStringLiteral(id) +
 		" AND status = 'in_progress'" +
@@ -1570,12 +1575,12 @@ func (s *BdStore) releaseIfCurrentViaEmbeddedDoltSQL(id, expectedAssignee string
 	if !ok {
 		return false, fmt.Errorf("bd release-if-current embedded fallback: %w", ErrConditionalReleaseUnsupported)
 	}
-	legacyQuery := "UPDATE issues SET status = 'open', assignee = '', updated_at = CURRENT_TIMESTAMP" +
+	legacyQuery := "UPDATE issues SET status = 'open', assignee = '', " + ReleaseClearedIdentitySQL + ", updated_at = CURRENT_TIMESTAMP" +
 		" WHERE id = " + bdSQLStringLiteral(id) +
 		" AND status = 'in_progress'" +
 		" AND assignee = " + bdSQLStringLiteral(expectedAssignee) +
 		"; SELECT ROW_COUNT() AS rows_affected"
-	query := "UPDATE issues SET status = 'open', assignee = '', updated_at = CURRENT_TIMESTAMP, revision = " +
+	query := "UPDATE issues SET status = 'open', assignee = '', " + ReleaseClearedIdentitySQL + ", updated_at = CURRENT_TIMESTAMP, revision = " +
 		strconv.FormatInt(revision, 10) +
 		" WHERE id = " + bdSQLStringLiteral(id) +
 		" AND status = 'in_progress'" +

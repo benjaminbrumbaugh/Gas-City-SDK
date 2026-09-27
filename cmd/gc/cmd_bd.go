@@ -16,6 +16,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/molecule"
 	"github.com/spf13/cobra"
 )
 
@@ -345,6 +346,7 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gc bd: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
+	announceBdBlockedScope(bdArgs, target, stderr)
 
 	// `gc bd sql`, `gc bd query` and the selector verbs (`list`, `search`) are
 	// passthroughs to bd, and bd answers about the bd ledger only. On a split
@@ -473,6 +475,9 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+	if moleculeCloseMutationRefusal(bdArgs, guardStore, guardBeads, stderr) {
+		return 1
+	}
 
 	// Work-record close gate (ADR-0009): a close routed through the SDK seam
 	// must satisfy the typed work-record contract (gc.work_outcome present;
@@ -561,6 +566,54 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 	}
 
 	return 0
+}
+
+// moleculeCloseMutation reports whether bdArgs requests a root-closing
+// status transition. The regular bd subprocess handles the write, but gc must
+// inspect molecule descendants first because it owns the graph-aware safety
+// boundary that bd itself cannot see.
+func moleculeCloseMutation(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "close" {
+		return true
+	}
+	if args[0] != "update" {
+		return false
+	}
+	status := ""
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "--status=") {
+			status = strings.TrimPrefix(arg, "--status=")
+			continue
+		}
+		if arg == "--status" || arg == "-s" {
+			if i+1 < len(args) {
+				i++
+				status = args[i]
+			}
+		}
+	}
+	return strings.EqualFold(status, "closed")
+}
+
+func moleculeCloseMutationRefusal(args []string, store beads.Store, guarded map[string]beads.Bead, stderr io.Writer) bool {
+	if !moleculeCloseMutation(args) || store == nil {
+		return false
+	}
+	closingIDs := make(map[string]struct{}, len(guarded))
+	for id := range guarded {
+		closingIDs[id] = struct{}{}
+	}
+	for id := range guarded {
+		if err := molecule.ValidateRootClosure(store, id, closingIDs); err != nil {
+			fmt.Fprintf(stderr, "gc bd: refusing molecule close for %s: %v\n", id, err) //nolint:errcheck // best-effort stderr
+			return true
+		}
+	}
+	return false
 }
 
 func parseBdReleaseIfCurrentArgs(args []string) (id, expectedAssignee string, ok bool, err error) {
@@ -918,6 +971,19 @@ func scopeLabel(t execStoreTarget) string {
 		return fmt.Sprintf("rig %q", t.RigName)
 	}
 	return t.ScopeKind
+}
+
+// announceBdBlockedScope makes the scope of the unscoped blocked query
+// visible before bd answers. Unlike by-ID commands, `blocked` has no bead ID
+// for the wrapper to use as a routing hint, so a rig-scoped invocation can
+// otherwise look like an authoritative city-wide "nothing is blocked".
+// Keep the notice on stderr so `gc bd blocked --json` remains valid JSON on
+// stdout. Other bd verbs retain their existing output contract.
+func announceBdBlockedScope(args []string, target execStoreTarget, stderr io.Writer) {
+	if len(args) == 0 || args[0] != "blocked" {
+		return
+	}
+	fmt.Fprintf(stderr, "gc bd: answering from the %s store\n", scopeLabel(target)) //nolint:errcheck // best-effort stderr
 }
 
 func bdRigForArg(cfg *config.City, arg string) (config.Rig, bool) {

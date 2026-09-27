@@ -388,6 +388,7 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 		for _, rig := range activeRigs {
 			register(doctor.NewRigPathCheck(rig))
 			register(doctor.NewRigGitCheck(rig))
+			register(NewRigGitignoreDoctorCheck(rig))
 			register(doctor.NewRigRootBranchCheck(rig))
 			register(doctor.NewRigGHDefaultRepoCheck(rig))
 			register(doctor.NewRigBDSplitStoreCheck(cityPath, rig))

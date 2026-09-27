@@ -6976,7 +6976,7 @@ func TestExecutePreparedStartWave_RateLimitPendingCreateDeathClearsClaim(t *test
 	if err != nil {
 		t.Fatalf("Create session: %v", err)
 	}
-	sp.SetPeekOutput("creating-agent", "You've hit your limit, Pro plan\n\n/rate-limit-options")
+	sp.SetPeekOutput("creating-agent", "You've hit your session limit · resets 3:10pm (America/Los_Angeles)")
 	item := preparedStart{
 		candidate: startCandidate{
 			info: sessiontest.SeedBead(t, session),
@@ -7011,6 +7011,9 @@ func TestExecutePreparedStartWave_RateLimitPendingCreateDeathClearsClaim(t *test
 	}
 	if !results[0].rateLimitScreen {
 		t.Fatal("pending-create startup death should still classify provider rate-limit screen")
+	}
+	if results[0].rateLimitResetAt.IsZero() {
+		t.Fatal("startup rate-limit classification should retain the provider reset deadline")
 	}
 
 	if commitStartResult(results[0], sessionFrontDoor(store), clk, events.Discard, 0, ioDiscard{}, ioDiscard{}) {

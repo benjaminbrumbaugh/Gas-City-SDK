@@ -12,6 +12,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/extmsg"
 	"github.com/gastownhall/gascity/internal/mail/beadmail"
+	"github.com/gastownhall/gascity/internal/molecule"
 	"github.com/gastownhall/gascity/internal/nudgequeue"
 	"github.com/gastownhall/gascity/internal/orders"
 	"github.com/gastownhall/gascity/internal/session"
@@ -430,6 +431,11 @@ func (a *beadsGraphAdapter) Children(id string, opts ...beads.QueryOpt) ([]beads
 }
 
 func (a *beadsGraphAdapter) Update(id string, opts beads.UpdateOpts) error {
+	if opts.Status != nil && *opts.Status == "closed" {
+		if err := molecule.ValidateRootClosure(a.store, id, nil); err != nil {
+			return err
+		}
+	}
 	return a.store.Update(id, opts)
 }
 
@@ -446,6 +452,11 @@ func (a *beadsGraphAdapter) UpdateIfMatch(id string, expected int64, opts beads.
 	if !ok {
 		return unsupportedBeadsCapability("conditional update")
 	}
+	if opts.Status != nil && *opts.Status == "closed" {
+		if err := molecule.ValidateRootClosure(a.store, id, nil); err != nil {
+			return err
+		}
+	}
 	return writer.UpdateIfMatch(id, expected, opts)
 }
 
@@ -453,6 +464,9 @@ func (a *beadsGraphAdapter) CloseIfMatch(id string, expected int64) error {
 	writer, ok := beads.ConditionalWriterFor(a.store)
 	if !ok {
 		return unsupportedBeadsCapability("conditional close")
+	}
+	if err := molecule.ValidateRootClosure(a.store, id, nil); err != nil {
+		return err
 	}
 	return writer.CloseIfMatch(id, expected)
 }
@@ -473,11 +487,25 @@ func (a *beadsGraphAdapter) CompareAndSetMetadataKey(id, key, expected, value st
 	return writer.CompareAndSetMetadataKey(id, key, expected, value)
 }
 
-func (a *beadsGraphAdapter) Close(id string) error { return a.store.Close(id) }
+func (a *beadsGraphAdapter) Close(id string) error {
+	if err := molecule.ValidateRootClosure(a.store, id, nil); err != nil {
+		return err
+	}
+	return a.store.Close(id)
+}
 
 func (a *beadsGraphAdapter) Reopen(id string) error { return a.store.Reopen(id) }
 
 func (a *beadsGraphAdapter) CloseAll(ids []string, metadata map[string]string) (int, error) {
+	closingIDs := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		closingIDs[id] = struct{}{}
+	}
+	for _, id := range ids {
+		if err := molecule.ValidateRootClosure(a.store, id, closingIDs); err != nil {
+			return 0, err
+		}
+	}
 	return a.store.CloseAll(ids, metadata)
 }
 

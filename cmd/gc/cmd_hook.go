@@ -504,9 +504,10 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 type hookClaimSessionVerdict int
 
 const (
-	// hookClaimSessionEligible: the session bead is the current incarnation
-	// (matching instance token) and in a state where a live worker legitimately
-	// claims work — proceed to the work query.
+	// hookClaimSessionEligible: the session bead identifies a live incarnation
+	// (matching instance token, or the bounded session-ID/runtime-epoch recovery
+	// proof) and is in a state where a live worker legitimately claims work —
+	// proceed to the work query.
 	hookClaimSessionEligible hookClaimSessionVerdict = iota
 	// hookClaimSessionStale: the session is closed, superseded (its instance token
 	// was reminted onto a newer incarnation), or in a dormant/terminal state. The
@@ -536,7 +537,8 @@ func fenceHookClaimSession(cityPath string, cfg *config.City, sessionID string, 
 	if sessionID == "" || instanceToken == "" {
 		return 0, false
 	}
-	switch verdict, reason := classifyHookClaimSession(cityPath, cfg, sessionID, instanceToken); verdict {
+	runtimeEpoch := strings.TrimSpace(os.Getenv("GC_RUNTIME_EPOCH"))
+	switch verdict, reason := classifyHookClaimSession(cityPath, cfg, sessionID, instanceToken, runtimeEpoch); verdict {
 	case hookClaimSessionStale:
 		fmt.Fprintf(stderr, "gc hook --claim: refusing stale session %s: %s\n", sessionID, reason) //nolint:errcheck
 		return writeHookClaimStaleSessionDrain(opts, stdout, stderr), true
@@ -559,7 +561,7 @@ func fenceHookClaimSession(cityPath string, cfg *config.City, sessionID string, 
 // hookClaimSessionStoreUnavailable (transient, fails open), so an infrastructure
 // hiccup is not mislabeled as staleness AND a vanished session is not laundered
 // into an infrastructure hiccup that lets a stale runtime reach the claim path.
-func classifyHookClaimSession(cityPath string, cfg *config.City, sessionID, instanceToken string) (hookClaimSessionVerdict, string) {
+func classifyHookClaimSession(cityPath string, cfg *config.City, sessionID, instanceToken, runtimeEpoch string) (hookClaimSessionVerdict, string) {
 	store, err := openCityStoreAt(cityPath)
 	if err != nil {
 		return hookClaimSessionStoreUnavailable, fmt.Sprintf("opening session store: %v", err)
@@ -568,7 +570,7 @@ func classifyHookClaimSession(cityPath string, cfg *config.City, sessionID, inst
 	if err != nil {
 		return classifyHookClaimSessionLookupError(err)
 	}
-	return hookClaimSessionEligibility(info, instanceToken)
+	return hookClaimSessionEligibility(info, instanceToken, sessionID, runtimeEpoch)
 }
 
 // classifyHookClaimSessionLookupError maps a session Store.Get error to a fence
@@ -591,27 +593,42 @@ func classifyHookClaimSessionLookupError(err error) (hookClaimSessionVerdict, st
 	}
 }
 
-// hookClaimSessionEligibility is the pure eligibility decision over a session Info
-// snapshot. The instance-token arm proves whether this is the current
-// incarnation; the state arm then admits only the states in which a live worker
-// legitimately claims: active/awake plus the in-startup states creating/
-// start-pending that the deferred-start path passes through before its async
-// active commit lands (refusing those rejects a healthy first claim). An empty
-// MetadataState (session.StateNone) is a pre-metadata legacy bead mid-upgrade,
-// not a dormant state: the session lifecycle canonicalizes empty state to
-// StateActive (canonicalLifecycleState in internal/session/manager.go), so once
-// Closed is false and the instance token matches — proving this is the live
-// current incarnation — it is admitted with the active states, or a healthy
-// upgraded legacy runtime would be drained before claiming its routed work.
-// Every other state — failed-create, draining, drained, asleep, suspended,
-// archived, quarantined — is dormant or terminal and classified stale.
-func hookClaimSessionEligibility(info session.Info, instanceToken string) (hookClaimSessionVerdict, string) {
+// hookClaimSessionEligibility is the pure eligibility decision over a session
+// Info snapshot. Exact instance-token equality proves the current incarnation;
+// when the token projection has drifted, the existing lifecycle contract allows
+// the bounded recovery proof of matching session ID and runtime epoch. The state
+// arm then admits only the states in which a live worker legitimately claims:
+// active/awake plus the in-startup states creating/start-pending that the
+// deferred-start path passes through before its async active commit lands
+// (refusing those rejects a healthy first claim). An empty MetadataState
+// (session.StateNone) is a pre-metadata legacy bead mid-upgrade, not a dormant
+// state: the session lifecycle canonicalizes empty state to StateActive
+// (canonicalLifecycleState in internal/session/manager.go). Every other state —
+// failed-create, draining, drained, asleep, suspended, archived, quarantined —
+// is dormant or terminal and classified stale.
+func hookClaimSessionEligibility(info session.Info, instanceToken, runtimeSessionID, runtimeEpoch string) (hookClaimSessionVerdict, string) {
 	if info.Closed {
 		return hookClaimSessionStale, "session bead is closed"
 	}
 	storedToken := strings.TrimSpace(info.InstanceToken)
-	if storedToken == "" || storedToken != strings.TrimSpace(instanceToken) {
+	runtimeToken := strings.TrimSpace(instanceToken)
+	if storedToken == "" || runtimeToken == "" {
 		return hookClaimSessionStale, "runtime instance token does not match the session bead"
+	}
+	if storedToken != runtimeToken {
+		// Lifecycle recovery already treats a runtime as the same live session
+		// when its durable session ID and runtime epoch both match, even if the
+		// token projection is stale. Keep the hook fence on that same narrow
+		// contract: an ID-only match, an epoch-only match, or an empty value is
+		// not enough to admit a token-drifted runtime.
+		if strings.TrimSpace(info.ID) == "" ||
+			strings.TrimSpace(runtimeSessionID) == "" ||
+			strings.TrimSpace(info.ID) != strings.TrimSpace(runtimeSessionID) ||
+			strings.TrimSpace(info.Generation) == "" ||
+			strings.TrimSpace(runtimeEpoch) == "" ||
+			strings.TrimSpace(info.Generation) != strings.TrimSpace(runtimeEpoch) {
+			return hookClaimSessionStale, "runtime instance token does not match the session bead and runtime identity does not confirm the same session epoch"
+		}
 	}
 	switch state := session.State(strings.TrimSpace(info.MetadataState)); state {
 	case session.StateNone, session.StateActive, session.StateAwake, session.StateCreating, session.StateStartPending:

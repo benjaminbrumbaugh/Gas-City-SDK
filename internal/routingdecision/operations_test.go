@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -80,6 +81,46 @@ func TestStoreVerifyRejectsIndexTamper(t *testing.T) {
 	}
 	if _, err := store.Verify(Verifier{}); !errors.Is(err, ErrStoreCorrupt) {
 		t.Fatalf("Verify tampered index error = %v, want ErrStoreCorrupt", err)
+	}
+}
+
+func TestStoreVerifyDistinguishesStoredPayloadValidationFromCorruption(t *testing.T) {
+	now := time.Date(2026, 8, 7, 22, 0, 0, 0, time.UTC)
+	store := openTestStore(t, now)
+	payload := testDecisionPayload(t)
+	payload.BindingID = BindingID(payload)
+	record, err := store.Create(payload, "create-validator-rejection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.Update(func(tx *boltTx) error {
+		value := tx.Bucket(bucketDecisions).Get([]byte(record.Payload.DecisionID))
+		var stored Record
+		if err := strictUnmarshal(value, &stored); err != nil {
+			return err
+		}
+		stored.Payload.WorkRevision = -1
+		return putJSON(tx.Bucket(bucketDecisions), []byte(record.Payload.DecisionID), stored)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = store.Verify(Verifier{})
+	if !errors.Is(err, ErrStoredDecisionInvalid) || !errors.Is(err, ErrInvalidDecision) || errors.Is(err, ErrStoreCorrupt) {
+		t.Fatalf("validator-rejected record error = %v, want stored validator classification only", err)
+	}
+	if !strings.Contains(err.Error(), "work revision and claim fence must be non-negative") {
+		t.Fatalf("validator-rejected error = %v, want the failing rule", err)
+	}
+
+	if err := store.db.Update(func(tx *boltTx) error {
+		return tx.Bucket(bucketDecisions).Put([]byte(record.Payload.DecisionID), []byte("{"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Verify(Verifier{})
+	if !errors.Is(err, ErrStoreCorrupt) || errors.Is(err, ErrStoredDecisionInvalid) {
+		t.Fatalf("malformed record error = %v, want ErrStoreCorrupt only", err)
 	}
 }
 

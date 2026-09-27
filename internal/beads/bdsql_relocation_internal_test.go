@@ -364,7 +364,10 @@ func TestReleaseIfCurrentIsByteIdenticalWithoutRelocation(t *testing.T) {
 	}
 	want := [][]string{
 		{"bd", "show", "--json", "gcg-abc123"},
-		{"bd", "update", "gcg-abc123", "--if-assignee", "worker-1", "--if-status", "in_progress", "--status", "open", "--assignee", ""},
+		{
+			"bd", "update", "gcg-abc123", "--if-assignee", "worker-1", "--if-status", "in_progress", "--status", "open", "--assignee", "",
+			"--set-metadata", "gc.session_id=", "--set-metadata", "gc.session_name=", "--set-metadata", "gc.sessionId=", "--set-metadata", "gc.sessionName=",
+		},
 	}
 	if len(runner.calls) != len(want) {
 		t.Fatalf("calls = %v, want exactly %v", runner.calls, want)

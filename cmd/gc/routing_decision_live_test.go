@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	bbolt "go.etcd.io/bbolt"
 
 	gcapi "github.com/gastownhall/gascity/internal/api"
 	"github.com/gastownhall/gascity/internal/beadmeta"
@@ -97,6 +100,88 @@ func TestRoutingDecisionServiceBootLatchesAuthorityBeforeOpeningLedger(t *testin
 	status = ready.routingDecisionService.Status()
 	if status.Status != routingdecision.AvailabilityReady || status.Reason != routingdecision.ReasonReady || !status.AuthorityReady || ready.routingDecisionStore == nil || ready.routingDecisionVerifier == nil {
 		t.Fatalf("ready service = status=%+v store=%p verifier=%p", status, ready.routingDecisionStore, ready.routingDecisionVerifier)
+	}
+}
+
+func TestRoutingDecisionServiceDistinguishesStoredValidatorRejection(t *testing.T) {
+	fixture := newApprovedRoutingDecisionFixture(t, "decision-validator-status")
+	publicKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cityRoot := fixture.cr.cityPath
+	if err := fixture.ledger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeRoutingAuthority(t, cityRoot, publicKey)
+	mutateStoredRoutingDecisionWorkRevision(t, cityRoot, fixture.payload.DecisionID, -1)
+
+	cr := &CityRuntime{cityPath: cityRoot, cityName: "test-city", stderr: io.Discard, cfg: &config.City{}}
+	initializeRoutingDecisionService(cr)
+	status := cr.routingDecisionService.Status()
+	if status.Status != routingdecision.AvailabilityDenied || status.Reason != routingdecision.ReasonLedgerValidatorRejected {
+		t.Fatalf("stored validator rejection status = %+v", status)
+	}
+}
+
+func TestRoutingDecisionAdmissionLogClassifiesStoredValidatorRejection(t *testing.T) {
+	fixture := newApprovedRoutingDecisionFixture(t, "decision-validator-log")
+	cityRoot := fixture.cr.cityPath
+	if err := fixture.ledger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mutateStoredRoutingDecisionWorkRevision(t, cityRoot, fixture.payload.DecisionID, -1)
+	reopened, err := routingdecision.OpenStore(cityRoot, routingdecision.StoreOptions{Now: fixture.cr.routingDecisionNowFn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	fixture.cr.routingDecisionStore = reopened
+	var stderr bytes.Buffer
+	fixture.cr.stderr = &stderr
+
+	fixture.cr.applyApprovedRoutingDecisionsAndLog()
+	if !strings.Contains(stderr.String(), "routing decision admission refused: validator rejected stored payload") {
+		t.Fatalf("validator rejection log = %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "work revision") || strings.Contains(stderr.String(), fixture.payload.DecisionID) {
+		t.Fatalf("validator rejection log leaked payload details: %q", stderr.String())
+	}
+}
+
+func mutateStoredRoutingDecisionWorkRevision(t *testing.T, cityRoot, decisionID string, workRevision int64) {
+	t.Helper()
+	path := filepath.Join(cityRoot, routingdecision.StoreRelativePath)
+	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("decisions"))
+		value := bucket.Get([]byte(decisionID))
+		if value == nil {
+			return errors.New("decision record missing")
+		}
+		var record map[string]any
+		if err := json.Unmarshal(value, &record); err != nil {
+			return err
+		}
+		payload, ok := record["payload"].(map[string]any)
+		if !ok {
+			return errors.New("decision payload missing")
+		}
+		payload["work_revision"] = workRevision
+		updated, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte(decisionID), updated)
+	}); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

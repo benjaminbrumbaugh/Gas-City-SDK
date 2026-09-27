@@ -1586,6 +1586,7 @@ func (cr *CityRuntime) replaceOrderDispatcher(next orderDispatcher) {
 			nextMem.carryLastRunCacheFrom(prev)
 			nextMem.carryGateBackoffFrom(prev, time.Now())
 			nextMem.carryOpenWorkSuppressionFrom(prev)
+			nextMem.carryConditionFailureFrom(prev)
 		}
 	}
 	cr.od = next
@@ -2804,6 +2805,34 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 			cr.requestExecutionStalledDrain,
 			cr.stdout,
 		)
+		// Named on_demand sessions are awake providers rather than disposable
+		// pool seats. Their assigned wisps need the same bounded claim and
+		// claim-to-execution delivery backstops, but only with complete
+		// assigned-work evidence and without pool exhaustion drains.
+		if !result.StoreQueryPartial && !result.SessionQueryPartial {
+			nudgeStalledNamedSessionClaims(
+				cr.sp,
+				cr.cfg,
+				sessStore,
+				stalledPoolBeads,
+				result.AssignedWorkBeads,
+				result.AssignedWorkStores,
+				result.AssignedWorkStoreRefs,
+				time.Now(),
+				cr.stdout,
+			)
+			nudgeStalledNamedSessionExecution(
+				cr.sp,
+				cr.cfg,
+				sessStore,
+				stalledPoolBeads,
+				result.AssignedWorkBeads,
+				result.AssignedWorkStores,
+				result.AssignedWorkStoreRefs,
+				time.Now(),
+				cr.stdout,
+			)
+		}
 	}
 	recordPhase(TraceSiteControllerTickPhase, "bead_reconcile.nudge_stalled_pool_claims", phaseStart, nil)
 }
@@ -3136,6 +3165,32 @@ func poolSweepWouldDrain(sessionBeads *sessionBeadSnapshot, desiredState map[str
 	return false
 }
 
+// desiredAsleepCanonicalPoolHolderReclaimable identifies the one desired-state
+// shape that the orphan sweep must still reclaim: an asleep canonical pool
+// bead holding the exact runtime name that a replacement needs. Desired-state
+// membership normally protects a bead from the sweep, but this shape cannot be
+// reused (asleep sessions are deliberately skipped) and its name prevents the
+// replacement from being created, so the protection becomes a livelock.
+//
+// Keep the predicate narrow. Manual/named sessions and expanding pools retain
+// their existing desired-state protection; the normal pending/create/stability
+// guards later in the sweep remain responsible for other pool states.
+func desiredAsleepCanonicalPoolHolderReclaimable(info sessionpkg.Info, cfg *config.City) bool {
+	if cfg == nil || strings.TrimSpace(info.MetadataState) != "asleep" {
+		return false
+	}
+	if !isEphemeralSessionInfo(info) || !isPoolManagedSessionInfo(info) {
+		return false
+	}
+	if isManualSessionInfo(info) || isNamedSessionInfo(info) {
+		return false
+	}
+	template := normalizedSessionTemplateInfo(info, cfg)
+	cfgAgent := findAgentByTemplate(cfg, template)
+	return cfgAgent != nil && cfgAgent.UsesCanonicalSingletonPoolIdentity() &&
+		isCanonicalPoolManagedSessionInfoForTemplate(info, template)
+}
+
 func sweepUndesiredPoolSessionBeads(
 	cityPath string,
 	store beads.SessionStore,
@@ -3156,7 +3211,8 @@ func sweepUndesiredPoolSessionBeads(
 		if info.Closed {
 			continue
 		}
-		if _, desired := desiredState[info.SessionNameMetadata]; desired {
+		if _, desired := desiredState[info.SessionNameMetadata]; desired &&
+			!desiredAsleepCanonicalPoolHolderReclaimable(info, cfg) {
 			continue
 		}
 		if isManualSessionInfo(info) || isNamedSessionInfo(info) {

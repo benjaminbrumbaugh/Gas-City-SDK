@@ -88,6 +88,17 @@ func setFenceClaimEnv(t *testing.T, cityDir, sessionID, instanceToken string) {
 	t.Setenv("GC_INSTANCE_TOKEN", instanceToken)
 }
 
+func setFenceSessionGeneration(t *testing.T, cityDir, sessionID, generation string) {
+	t.Helper()
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	if err := store.SetMetadata(sessionID, "generation", generation); err != nil {
+		t.Fatalf("set generation: %v", err)
+	}
+}
+
 // TestHookCommandClaimStaleSessionDrainsBeforeWorkQuery proves a definitively
 // stale session (here failed-create) is refused before the work query AND that
 // the refusal now honors the gc hook --claim result contract: a --json caller
@@ -210,6 +221,79 @@ func TestHookCommandClaimEmptyLegacyStateReachesWorkQuery(t *testing.T) {
 	}
 	if result.Action != "drain" || result.Reason != hookClaimReasonNoWork {
 		t.Fatalf("result = %+v, want action=drain reason=no_work (probe returns no work)", result)
+	}
+}
+
+// TestHookCommandClaimAllowsLiveTokenDriftWithMatchingRuntimeIdentity proves
+// the hook fence agrees with lifecycle recovery for a live same-session runtime
+// whose shell still presents an older token. The complete session-ID plus
+// runtime-epoch identity tuple admits the work query; token equality remains
+// the normal fast path.
+func TestHookCommandClaimAllowsLiveTokenDriftWithMatchingRuntimeIdentity(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	t.Setenv("GC_BEADS", "file")
+	cityDir := writeFenceTestCity(t)
+	sessionID := newFenceSessionBead(t, cityDir, session.StateActive, "bead-token")
+	setFenceSessionGeneration(t, cityDir, sessionID, "7")
+	queryMarker := installFenceWorkQueryProbe(t)
+	setFenceClaimEnv(t, cityDir, sessionID, "runtime-token")
+	t.Setenv("GC_RUNTIME_EPOCH", "7")
+
+	var stdout, stderr bytes.Buffer
+	code := cmdHookWithOptions(nil, hookCommandOptions{Claim: true, JSON: true}, &stdout, &stderr)
+
+	if _, err := os.Stat(queryMarker); err != nil {
+		t.Fatalf("live token-drift runtime did not reach work query: %v; stderr=%s", err, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "refusing stale session") {
+		t.Fatalf("live token-drift runtime was refused as stale: %s", stderr.String())
+	}
+	if code != 1 {
+		t.Fatalf("code = %d, want 1 (JSON no-work drain without --drain-ack); stderr=%s", code, stderr.String())
+	}
+	var result hookClaimJSONResult
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if result.Action != "drain" || result.Reason != hookClaimReasonNoWork {
+		t.Fatalf("result = %+v, want drain/no_work after identity-confirmed token drift", result)
+	}
+}
+
+// TestHookCommandClaimRejectsTokenDriftWithDifferentRuntimeEpoch proves the
+// identity fallback does not turn a stale incarnation into a claimant. The
+// session ID is intentionally unchanged; the runtime epoch is the fencing
+// boundary that must reject the old process before any work query runs.
+func TestHookCommandClaimRejectsTokenDriftWithDifferentRuntimeEpoch(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	t.Setenv("GC_BEADS", "file")
+	cityDir := writeFenceTestCity(t)
+	sessionID := newFenceSessionBead(t, cityDir, session.StateActive, "bead-token")
+	setFenceSessionGeneration(t, cityDir, sessionID, "7")
+	queryMarker := installFenceWorkQueryProbe(t)
+	setFenceClaimEnv(t, cityDir, sessionID, "runtime-token")
+	t.Setenv("GC_RUNTIME_EPOCH", "8")
+
+	var stdout, stderr bytes.Buffer
+	code := cmdHookWithOptions(nil, hookCommandOptions{Claim: true, JSON: true}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("code = %d, want 1; stdout=%q stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var result hookClaimJSONResult
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if result.Action != "drain" || result.Reason != hookClaimReasonStaleSession {
+		t.Fatalf("result = %+v, want drain/stale_session", result)
+	}
+	if !strings.Contains(stderr.String(), "refusing stale session") || !strings.Contains(stderr.String(), "epoch") {
+		t.Fatalf("stderr = %q, want token-drift epoch refusal", stderr.String())
+	}
+	if _, err := os.Stat(queryMarker); !os.IsNotExist(err) {
+		t.Fatalf("stale token-drift runtime reached work query; stat error = %v", err)
 	}
 }
 
@@ -455,7 +539,7 @@ func TestHookClaimSessionEligibility(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			verdict, reason := hookClaimSessionEligibility(tc.info, tc.token)
+			verdict, reason := hookClaimSessionEligibility(tc.info, tc.token, tc.info.ID, tc.info.Generation)
 			if verdict != tc.want {
 				t.Fatalf("verdict = %d, want %d (reason=%q)", verdict, tc.want, reason)
 			}

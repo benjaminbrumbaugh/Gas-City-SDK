@@ -59,7 +59,11 @@ func initializeRoutingDecisionService(cr *CityRuntime) {
 	}
 	if _, err := store.Verify(verifier); err != nil {
 		_ = store.Close()
-		service.reason = routingdecision.ReasonLedgerInvalid
+		if errors.Is(err, routingdecision.ErrStoredDecisionInvalid) {
+			service.reason = routingdecision.ReasonLedgerValidatorRejected
+		} else {
+			service.reason = routingdecision.ReasonLedgerInvalid
+		}
 		return
 	}
 	service.store = store

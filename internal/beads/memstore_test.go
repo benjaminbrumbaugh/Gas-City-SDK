@@ -71,7 +71,16 @@ func TestMemStoreSetMetadataNotFound(t *testing.T) {
 
 func TestMemStoreReleaseIfCurrent(t *testing.T) {
 	s := beads.NewMemStore()
-	b, err := s.Create(beads.Bead{Title: "work", Assignee: "worker-1"})
+	b, err := s.Create(beads.Bead{
+		Title:    "work",
+		Assignee: "worker-1",
+		Metadata: map[string]string{
+			"gc.session_id":   "gc-k2gh9",
+			"gc.session_name": "worker-1",
+			"gc.sessionId":    "gc-k2gh9",
+			"gc.sessionName":  "worker-1",
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +119,11 @@ func TestMemStoreReleaseIfCurrent(t *testing.T) {
 	}
 	if got.Status != "open" || got.Assignee != "" {
 		t.Fatalf("released bead = %+v, want open and unassigned", got)
+	}
+	for _, key := range []string{"gc.session_id", "gc.session_name", "gc.sessionId", "gc.sessionName"} {
+		if got.Metadata[key] != "" {
+			t.Errorf("released bead metadata[%q] = %q, want cleared", key, got.Metadata[key])
+		}
 	}
 	if got.ClaimFence != 1 {
 		t.Errorf("ReleaseIfCurrent did not bump ClaimFence: got %d, want 1 (release is an ownership transition)", got.ClaimFence)

@@ -120,7 +120,10 @@ func TestReleaseIfCurrentPrefersTheNativeVerb(t *testing.T) {
 	if !released {
 		t.Fatal("ReleaseIfCurrent released = false, want true")
 	}
-	want := []string{"bd", "update", "bd-42", "--if-assignee", "worker-1", "--if-status", "in_progress", "--status", "open", "--assignee", ""}
+	want := []string{
+		"bd", "update", "bd-42", "--if-assignee", "worker-1", "--if-status", "in_progress", "--status", "open", "--assignee", "",
+		"--set-metadata", "gc.session_id=", "--set-metadata", "gc.session_name=", "--set-metadata", "gc.sessionId=", "--set-metadata", "gc.sessionName=",
+	}
 	calls := runner.releaseVerbArgv()
 	if len(calls) != 1 {
 		t.Fatalf("calls = %v, want exactly one", calls)
@@ -326,7 +329,7 @@ func TestReleaseIfCurrentFallsBackToSQLOnAnOldBd(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("calls = %v, want the verb probe then the SQL fallback", calls)
 	}
-	wantQuery := "UPDATE issues SET status = 'open', assignee = '', updated_at = CURRENT_TIMESTAMP, revision = <revision>" +
+	wantQuery := "UPDATE issues SET status = 'open', assignee = '', " + beads.ReleaseClearedIdentitySQL + ", updated_at = CURRENT_TIMESTAMP, revision = <revision>" +
 		" WHERE id = 'bd-42' AND status = 'in_progress' AND assignee = 'worker-''1'"
 	got := append([]string(nil), calls[1]...)
 	got[len(got)-1] = normalizeReleaseRevisionQuery(t, got[len(got)-1])

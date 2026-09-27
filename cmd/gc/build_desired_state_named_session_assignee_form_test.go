@@ -149,3 +149,53 @@ func TestNamedWorkReadyStillIgnoresUnrelatedAssignee(t *testing.T) {
 			"(NamedSessionDemand=%v); the assignee match is too loose", dsResult.NamedSessionDemand)
 	}
 }
+
+// TestBuildDesiredState_OnDemandNamedSession_MessageAssigneeDemand covers the
+// mail-to-wake boundary. Message beads are intentionally absent from Ready(),
+// because they are delivered by the mail path rather than claimed as generic
+// work. They must still count as direct demand for an asleep on-demand named
+// session; otherwise the controller never materializes the session to drain
+// its inbox.
+func TestBuildDesiredState_OnDemandNamedSession_MessageAssigneeDemand(t *testing.T) {
+	cityPath := t.TempDir()
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Title:    "queued escalation mail",
+		Type:     "message",
+		Status:   "open",
+		Assignee: "mayor",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name:              "mayor",
+			StartCommand:      "true",
+			MaxActiveSessions: intPtr(1),
+			WorkQuery:         "printf ''",
+		}},
+		NamedSessions: []config.NamedSession{{
+			Template: "mayor",
+			Mode:     "on_demand",
+		}},
+	}
+
+	result := buildDesiredStateWithSessionBeads(
+		"test-city", cityPath, time.Now().UTC(), cfg, runtime.NewFake(),
+		store, nil, nil, nil, io.Discard,
+	)
+	if !result.NamedSessionDemand["mayor"] {
+		t.Fatalf("NamedSessionDemand[mayor] = false for queued message assigned to on-demand named session: %v", result.NamedSessionDemand)
+	}
+	var materialized bool
+	for _, params := range result.State {
+		if params.ConfiguredNamedIdentity == "mayor" {
+			materialized = true
+			break
+		}
+	}
+	if !materialized {
+		t.Fatal("queued message did not materialize the on-demand named session")
+	}
+}

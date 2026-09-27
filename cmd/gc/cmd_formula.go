@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -86,6 +87,7 @@ formulas.`,
 
 func newFormulaShowCmd(stdout, stderr io.Writer) *cobra.Command {
 	var jsonOutput bool
+	var requireRegistered bool
 	cmd := &cobra.Command{
 		Use:   "show <formula-name>",
 		Short: "Show a compiled formula recipe",
@@ -101,7 +103,12 @@ An explicit --city pins city scope, which has no rig-scoped formula_vars.
 Examples:
   gc formula show mol-feature
   gc formula show mol-feature --var title="Auth system" --var branch=main
-  gc formula show mol-polecat-work --rig mo`,
+  gc formula show mol-polecat-work --rig mo
+
+Use --require-registered for resolver-facing checks that must run against a
+registered rig rather than silently accepting the city or pack-cache fallback.
+An ordinary unregistered checkout still intentionally uses the pack fallback.
+`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -128,6 +135,9 @@ Examples:
 			scope, err := resolveFormulaScope(cfg, cityPath, stderr)
 			if err != nil {
 				return formulaCommandError(stderr, "gc formula show", jsonOutput, err)
+			}
+			if requireRegistered && scope.rig == "" {
+				return formulaCommandError(stderr, "gc formula show", jsonOutput, fmt.Errorf("--require-registered requires a registered rig checkout; use --rig, GC_RIG, or run inside a registered rig"))
 			}
 			searchPaths := scope.searchPaths
 			rigVars := rigFormulaVarsForScope(cfg, cityPath)
@@ -271,6 +281,7 @@ Examples:
 
 	cmd.Flags().StringArray("var", nil, "variable substitution for preview (key=value)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "emit JSON")
+	cmd.Flags().BoolVar(&requireRegistered, "require-registered", false, "require a registered rig checkout; refuse city or pack-cache fallback")
 	return cmd
 }
 
@@ -343,21 +354,30 @@ type formulaCatalogEntryJSON struct {
 }
 
 type formulaShowJSON struct {
-	SchemaVersion string                `json:"schema_version"`
-	OK            bool                  `json:"ok"`
-	CityPath      string                `json:"city_path,omitempty"`
-	Name          string                `json:"name"`
-	Description   string                `json:"description,omitempty"`
-	Metadata      map[string]any        `json:"metadata,omitempty"`
-	Phase         string                `json:"phase,omitempty"`
-	Pour          bool                  `json:"pour,omitempty"`
-	RootOnly      bool                  `json:"root_only,omitempty"`
-	SearchPaths   []string              `json:"search_paths"`
-	Vars          []formulaVarJSON      `json:"vars,omitempty"`
-	Steps         []formulaStepJSON     `json:"steps"`
-	Deps          []formulaDepJSON      `json:"deps,omitempty"`
-	ProvidedVars  map[string]string     `json:"provided_vars,omitempty"`
-	Warnings      []jsonContractWarning `json:"warnings,omitempty"`
+	SchemaVersion string            `json:"schema_version"`
+	OK            bool              `json:"ok"`
+	CityPath      string            `json:"city_path,omitempty"`
+	Name          string            `json:"name"`
+	Description   string            `json:"description,omitempty"`
+	Metadata      map[string]any    `json:"metadata,omitempty"`
+	Phase         string            `json:"phase,omitempty"`
+	Pour          bool              `json:"pour,omitempty"`
+	RootOnly      bool              `json:"root_only,omitempty"`
+	SearchPaths   []string          `json:"search_paths"`
+	Vars          []formulaVarJSON  `json:"vars,omitempty"`
+	Steps         []formulaStepJSON `json:"steps"`
+	Deps          []formulaDepJSON  `json:"deps,omitempty"`
+	ProvidedVars  map[string]string `json:"provided_vars,omitempty"`
+	// Source and SourceSearchPath say WHICH layer answered (gc-1lh1s).
+	// `gc formula show` resolves the same name to different bytes depending on
+	// whether the checkout is rig-REGISTERED — an unregistered worktree
+	// silently gets the pack cache instead of the city override — and with
+	// ok=true and no warning a caller could not tell. Registration, not path
+	// and not staging, is the discriminator, and none of it was observable in
+	// this payload.
+	Source           string                `json:"source,omitempty"`
+	SourceSearchPath string                `json:"source_search_path,omitempty"`
+	Warnings         []jsonContractWarning `json:"warnings,omitempty"`
 }
 
 type formulaVarJSON struct {
@@ -527,6 +547,49 @@ func formulaCommandError(stderr io.Writer, command string, jsonOutput bool, err 
 	return errExit
 }
 
+// formulaSourceSearchPath reports which declared search path produced source,
+// or "" when none did (gc-1lh1s).
+//
+// The point is that a caller can ASSERT on which path answered. In an
+// unregistered checkout the pack cache answers, and the pack cache is itself
+// one of that checkout's declared search paths — so this is non-empty there and
+// the discriminator is its VALUE, not its presence. "" with a non-empty source
+// means the recipe came from outside every declared path, a stronger anomaly
+// than the one gc-1lh1s describes.
+//
+// The LONGEST match wins. Search paths nest (a rig layer can live under the
+// city root), so the first prefix match would attribute a rig-local file to the
+// city layer and report the wrong answer with full confidence.
+func formulaSourceSearchPath(source string, searchPaths []string) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(source)
+	if err != nil {
+		abs = source
+	}
+	best := ""
+	for _, p := range searchPaths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		pAbs, err := filepath.Abs(p)
+		if err != nil {
+			pAbs = p
+		}
+		rel, err := filepath.Rel(pAbs, abs)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if len(pAbs) > len(best) {
+			best = pAbs
+		}
+	}
+	return best
+}
+
 func formulaShowJSONFromRecipe(recipe *formula.Recipe, cityPath string, scope formulaScope, rigVars, providedVars, displayVars map[string]string) formulaShowJSON {
 	out := formulaShowJSON{
 		SchemaVersion: "1",
@@ -540,7 +603,9 @@ func formulaShowJSONFromRecipe(recipe *formula.Recipe, cityPath string, scope fo
 		RootOnly:      recipe.RootOnly,
 		SearchPaths:   scope.searchPaths,
 		ProvidedVars:  providedVars,
+		Source:        recipe.FormulaSource,
 	}
+	out.SourceSearchPath = formulaSourceSearchPath(recipe.FormulaSource, scope.searchPaths)
 	if len(displayVars) > 0 {
 		out.Description = formula.Substitute(out.Description, displayVars)
 	}
