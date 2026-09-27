@@ -128,6 +128,101 @@ func TestConvoyProgressCompleteOps(t *testing.T) {
 	}
 }
 
+func TestConvoyProgressClosedBlockIsNotComplete(t *testing.T) {
+	store := beads.NewMemStore()
+	convoy, err := store.Create(beads.Bead{Title: "review-gated convoy", Type: "convoy", Metadata: map[string]string{
+		"gc.review.candidate": "candidate-1",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := store.Create(beads.Bead{Title: "review", Status: "closed", Metadata: map[string]string{
+		"gc.review.schema":  "1",
+		"gc.review.verdict": "BLOCK",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(review.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DepAdd(convoy.ID, review.ID, "tracks"); err != nil {
+		t.Fatal(err)
+	}
+
+	progress, err := ConvoyProgress(ConvoyDeps{}, MemberClasses{Convoy: store}, convoy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.Closed != 1 || progress.Total != 1 {
+		t.Fatalf("progress = %+v, want one terminal child", progress)
+	}
+	if progress.Complete {
+		t.Fatalf("closed BLOCK review made convoy complete: %+v", progress)
+	}
+}
+
+func TestConvoyProgressRequiredReviewWithoutRecordIsNotComplete(t *testing.T) {
+	store := beads.NewMemStore()
+	convoy, err := store.Create(beads.Bead{Title: "review-gated convoy", Type: "convoy", Metadata: map[string]string{
+		"gc.review.candidate":    "candidate-1",
+		"gc.review.dependencies": "gc-2",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := store.Create(beads.Bead{Title: "review", ParentID: convoy.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.ID != "gc-2" {
+		t.Fatalf("review ID = %s, want gc-2 for explicit dependency fixture", review.ID)
+	}
+	if err := store.Close(review.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DepAdd(convoy.ID, review.ID, "tracks"); err != nil {
+		t.Fatal(err)
+	}
+
+	progress, err := ConvoyProgress(ConvoyDeps{}, MemberClasses{Convoy: store}, convoy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.Closed != 1 || progress.Total != 1 || progress.Complete {
+		t.Fatalf("missing required review record became complete: %+v", progress)
+	}
+}
+
+func TestConvoyProgressUntrackedRequiredReviewIsNotComplete(t *testing.T) {
+	store := beads.NewMemStore()
+	convoy, err := store.Create(beads.Bead{Title: "review-gated convoy", Type: "convoy", Metadata: map[string]string{
+		"gc.review.candidate":    "candidate-1",
+		"gc.review.dependencies": "gc-3",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.Create(beads.Bead{Title: "ordinary child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(child.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DepAdd(convoy.ID, child.ID, "tracks"); err != nil {
+		t.Fatal(err)
+	}
+
+	progress, err := ConvoyProgress(ConvoyDeps{}, MemberClasses{Convoy: store}, convoy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.Complete {
+		t.Fatalf("untracked required review became complete: %+v", progress)
+	}
+}
+
 func TestConvoyProgressTracksDepsOps(t *testing.T) {
 	store := beads.NewMemStore()
 	deps := testConvoyDeps()

@@ -1690,6 +1690,7 @@ func TestContainsProviderRateLimitScreen(t *testing.T) {
 	}{
 		{name: "gemini usage limit", content: "Usage limit reached for gemini-3-flash-preview.", want: true},
 		{name: "claude hit limit", content: "You've hit your limit, Pro plan", want: true},
+		{name: "claude session limit with reset", content: "You've hit your session limit · resets 3:10pm (America/Los_Angeles)", want: true},
 		{name: "claude rate limit options", content: "/rate-limit-options", want: true},
 		{name: "provider menu shape", content: "Rate limit reached\n1. Keep trying\n2. Stop", want: true},
 		{name: "claude spend limit modal", content: "What do you want to do?\nUsage credit balance: $573.37\n❯ Adjust monthly spend limit: $1503.19\n  Wait for limit to reset      Resets Jul 12 at 11pm (America/Los_Angeles)\nEnter to confirm · Esc to cancel", want: true},
@@ -1705,6 +1706,47 @@ func TestContainsProviderRateLimitScreen(t *testing.T) {
 				t.Errorf("ContainsProviderRateLimitScreen(%q) = %v, want %v", tt.content, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestProviderRateLimitResetAt(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 7, 14, 20, 0, 0, time.UTC)
+	got, ok := ProviderRateLimitResetAt("You've hit your session limit · resets 3:10pm (America/Los_Angeles)", now)
+	if !ok {
+		t.Fatal("ProviderRateLimitResetAt returned false for an explicit reset deadline")
+	}
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+	want := time.Date(2026, 9, 7, 15, 10, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Fatalf("reset deadline = %s, want %s", got, want)
+	}
+}
+
+func TestProviderRateLimitResetAtDatedClaudeModal(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	got, ok := ProviderRateLimitResetAt("Wait for limit to reset      Resets Jul 12 at 11pm (America/Los_Angeles)", now)
+	if !ok {
+		t.Fatal("ProviderRateLimitResetAt returned false for a dated reset deadline")
+	}
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+	want := time.Date(2026, 7, 12, 23, 0, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Fatalf("reset deadline = %s, want %s", got, want)
+	}
+}
+
+func TestProviderRateLimitResetAtRejectsUnrelatedText(t *testing.T) {
+	t.Parallel()
+	if _, ok := ProviderRateLimitResetAt("worker failed while parsing rate limit config", time.Now()); ok {
+		t.Fatal("unrelated crash text must not produce a reset deadline")
 	}
 }
 

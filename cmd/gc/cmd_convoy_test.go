@@ -1056,6 +1056,136 @@ func TestConvoyCheckJSONAutoCloseEmitsSingleResult(t *testing.T) {
 	}
 }
 
+func TestConvoyCheckClosedReviewBlockDoesNotBecomeDeliveryEligible(t *testing.T) {
+	store := beads.NewMemStore()
+	_, _ = store.Create(beads.Bead{Title: "wf-1cl", Type: "convoy", Metadata: map[string]string{
+		"gc.review.candidate": "candidate-1",
+	}})
+	review, err := store.Create(beads.Bead{Title: "exact review", Metadata: map[string]string{
+		"verdict": "BLOCK", // legacy incident shape: closure is not approval
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(review.ID); err != nil {
+		t.Fatal(err)
+	}
+	requireNoError(t, store.DepAdd("gc-1", "gc-2", "tracks"))
+
+	var stdout, stderr bytes.Buffer
+	if code := doConvoyCheck(store, events.Discard, &stdout, &stderr); code != 0 {
+		t.Fatalf("doConvoyCheck = %d, stderr=%s", code, stderr.String())
+	}
+	convoy, err := store.Get("gc-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if convoy.Status != "open" || strings.Contains(stdout.String(), "Auto-closed") {
+		t.Fatalf("closed BLOCK review allowed delivery: status=%q stdout=%q", convoy.Status, stdout.String())
+	}
+}
+
+func TestConvoyCheckRequiresExactCanonicalReviewApproval(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		candidate string
+		approved  bool
+	}{
+		{name: "exact approval", candidate: "candidate-1", approved: true},
+		{name: "mismatched approval", candidate: "candidate-2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := beads.NewMemStore()
+			_, _ = store.Create(beads.Bead{Title: "reviewed convoy", Type: "convoy", Metadata: map[string]string{
+				"gc.review.candidate": "candidate-1",
+			}})
+			review, err := store.Create(beads.Bead{Title: "review", Metadata: map[string]string{
+				"gc.review.schema":    "1",
+				"gc.review.verdict":   "APPROVE",
+				"gc.review.candidate": tc.candidate,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(review.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SetMetadata("gc-1", "gc.review.dependencies", review.ID); err != nil {
+				t.Fatal(err)
+			}
+			requireNoError(t, store.DepAdd("gc-1", "gc-2", "tracks"))
+			var stdout, stderr bytes.Buffer
+			if code := doConvoyCheck(store, events.Discard, &stdout, &stderr); code != 0 {
+				t.Fatalf("doConvoyCheck = %d, stderr=%s", code, stderr.String())
+			}
+			convoy, err := store.Get("gc-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (convoy.Status == "closed") != tc.approved {
+				t.Fatalf("status=%q, want closed=%t; stdout=%q", convoy.Status, tc.approved, stdout.String())
+			}
+		})
+	}
+}
+
+func TestConvoyCheckRequiredReviewWithoutRecordStaysOpen(t *testing.T) {
+	store := beads.NewMemStore()
+	_, _ = store.Create(beads.Bead{Title: "reviewed convoy", Type: "convoy", Metadata: map[string]string{
+		"gc.review.candidate":    "candidate-1",
+		"gc.review.dependencies": "gc-2",
+	}})
+	review, err := store.Create(beads.Bead{Title: "review", Status: "closed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DepAdd("gc-1", review.ID, "tracks"); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := doConvoyCheck(store, events.Discard, &stdout, &stderr); code != 0 {
+		t.Fatalf("doConvoyCheck = %d, stderr=%s", code, stderr.String())
+	}
+	convoy, err := store.Get("gc-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if convoy.Status != "open" || strings.Contains(stdout.String(), "Auto-closed") {
+		t.Fatalf("missing required review record allowed delivery: status=%q stdout=%q", convoy.Status, stdout.String())
+	}
+}
+
+func TestConvoyCheckUntrackedRequiredReviewStaysOpen(t *testing.T) {
+	store := beads.NewMemStore()
+	_, _ = store.Create(beads.Bead{Title: "reviewed convoy", Type: "convoy", Metadata: map[string]string{
+		"gc.review.candidate":    "candidate-1",
+		"gc.review.dependencies": "gc-3",
+	}})
+	child, err := store.Create(beads.Bead{Title: "ordinary child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(child.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DepAdd("gc-1", child.ID, "tracks"); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := doConvoyCheck(store, events.Discard, &stdout, &stderr); code != 0 {
+		t.Fatalf("doConvoyCheck = %d, stderr=%s", code, stderr.String())
+	}
+	convoy, err := store.Get("gc-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if convoy.Status != "open" || strings.Contains(stdout.String(), "Auto-closed") {
+		t.Fatalf("untracked required review allowed delivery: status=%q stdout=%q", convoy.Status, stdout.String())
+	}
+}
+
 func TestConvoyCheckJSONReportsWriteError(t *testing.T) {
 	store := beads.NewMemStore()
 
@@ -1392,6 +1522,67 @@ func TestConvoyAutocloseTracksDeps(t *testing.T) {
 	}
 	if b.Status != "closed" {
 		t.Errorf("convoy Status = %q, want closed", b.Status)
+	}
+}
+
+func TestConvoyAutocloseReviewGateRefusesClosedBlockMissingAndUntracked(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		untracked  bool
+		metadata   map[string]string
+		wantReason string
+	}{
+		{name: "closed BLOCK", metadata: map[string]string{"verdict": "BLOCK"}, wantReason: "BLOCK"},
+		{name: "missing record", wantReason: "missing record"},
+		{name: "untracked required review", untracked: true, wantReason: "untracked"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := beads.NewMemStore()
+			convoy, err := store.Create(beads.Bead{Title: "reviewed batch", Type: "convoy", Metadata: map[string]string{
+				"gc.review.candidate": "candidate-1",
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var target beads.Bead
+			if tc.untracked {
+				target, err = store.Create(beads.Bead{Title: "ordinary child"})
+			} else {
+				target, err = store.Create(beads.Bead{Title: "review"})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SetMetadata(convoy.ID, "gc.review.dependencies", func() string {
+				if tc.untracked {
+					return "gc-3"
+				}
+				return target.ID
+			}()); err != nil {
+				t.Fatal(err)
+			}
+			for key, value := range tc.metadata {
+				if err := store.SetMetadata(target.ID, key, value); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.DepAdd(convoy.ID, target.ID, "tracks"); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(target.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			var stdout bytes.Buffer
+			doConvoyAutocloseWith(store, events.Discard, target.ID, &stdout, &bytes.Buffer{})
+			got, err := store.Get(convoy.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != "open" || strings.Contains(stdout.String(), "Auto-closed") {
+				t.Fatalf("%s review gate allowed delivery: status=%q stdout=%q", tc.wantReason, got.Status, stdout.String())
+			}
+		})
 	}
 }
 

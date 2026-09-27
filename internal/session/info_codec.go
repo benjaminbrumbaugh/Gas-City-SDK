@@ -154,6 +154,7 @@ var infoKeyCodec = []infoKeySpec{
 	{"awake_started_at", func(i *Info, v string) { i.AwakeStartedAt = v }},
 	{"usage_compute_emitted_at", func(i *Info, v string) { i.UsageComputeEmittedAt = v }},
 	{"state_reason", func(i *Info, v string) { i.StateReason = v }},
+	{DrainAckRuntimeReplacedKey, func(i *Info, v string) { i.DrainAckRuntimeReplaced = v }},
 	{"creation_complete_at", func(i *Info, v string) { i.CreationCompleteAt = v }},
 	{"continuation_reset_pending", func(i *Info, v string) { i.ContinuationResetPending = v }},
 	{SessionCircuitStateMetadataKey, func(i *Info, v string) { i.SessionCircuitState = v }},

@@ -1261,7 +1261,7 @@ func collectAssignedWorkBeads(
 // snapshot plus index-aligned stores/storeRefs, the store-scoped set of beads
 // that carry real wake-demand readiness (readyAssigned), and a partial flag.
 // readyAssigned holds only beads admitted by the in-progress pass, the
-// assigned-molecule pass, and the store Ready()/deps pass — never the
+// assigned-message and assigned-molecule passes, and the store Ready()/deps pass — never the
 // open-routed orphan-release pass, whose beads have not passed a readiness
 // gate and must not, by status alone, hold a session awake. It is keyed by
 // store ref + bead ID so a ready bead in one store cannot mark a blocked open
@@ -1334,10 +1334,17 @@ func collectAssignedWorkBeadsWithStores(
 			// the backing store's raw --status=open filter, which excludes it —
 			// see listOpenForControllerDemandLive.
 			if openDemand, err := listOpenForControllerDemandLive(source.store); err == nil {
+				// Message beads are excluded from Ready() because they are
+				// delivered by the mail path rather than claimed as generic work.
+				// They are nevertheless direct wake demand when assigned to a
+				// session: an asleep on-demand named session must materialize to
+				// drain its inbox.
+				appendOpenAssignedMessageUnique(&result, &resultStores, &resultStoreRefs, readyIDs, openDemand, seen, source.store, source.ref)
 				appendOpenAssignedMoleculeWorkUnique(&result, &resultStores, &resultStoreRefs, readyIDs, openDemand, seen, source.store, source.ref)
 			} else {
 				errs = append(errs, fmt.Errorf("List(open, live demand): %w", err))
 				if beads.IsPartialResult(err) && len(openDemand) > 0 {
+					appendOpenAssignedMessageUnique(&result, &resultStores, &resultStoreRefs, readyIDs, openDemand, seen, source.store, source.ref)
 					appendOpenAssignedMoleculeWorkUnique(&result, &resultStores, &resultStoreRefs, readyIDs, openDemand, seen, source.store, source.ref)
 				}
 			}
@@ -1486,6 +1493,12 @@ func readyCapturedAssigneeSet(work []beads.Bead, storeRefs []string, readyAssign
 			continue
 		}
 		if bead.Status != "open" && bead.Status != "in_progress" {
+			continue
+		}
+		// Mail is direct wake demand, but it is not a substitute for the
+		// generic Ready() probe: the same assignee may also hold ordinary
+		// ready work that must remain in the assigned-work snapshot.
+		if bead.Type == "message" {
 			continue
 		}
 		// Fail safe (probe rather than skip) when the index-aligned store ref
@@ -1657,6 +1670,11 @@ func defaultScaleCheckCountsAndDemand(cfg *config.City, targets []defaultScaleCh
 	// probe no longer cold-gated, that double-count would be a persistent
 	// warm condition rather than a one-tick wake overshoot, so dedup by ID.
 	countedBeads := make(map[string]map[string]struct{})
+	// countedDemandUnits prevents every ready step in one required
+	// continuation group from minting a separate pool seat. One session is the
+	// unit of capacity for a molecule; the session's continuation preassignment
+	// keeps the remaining steps in that same worktree after the first claim.
+	countedDemandUnits := make(map[string]map[string]struct{})
 	for key, group := range groups {
 		// Ready()/CachedReady() iteration surfaces actionable work
 		// matched against gc.routed_to/gc.run_target. Formula orders that
@@ -1689,6 +1707,18 @@ func defaultScaleCheckCountsAndDemand(cfg *config.City, targets []defaultScaleCh
 				continue
 			}
 			seen[b.ID] = struct{}{}
+			unit := poolDemandUnitKey(b)
+			if unit != "" {
+				units := countedDemandUnits[template]
+				if units == nil {
+					units = make(map[string]struct{})
+					countedDemandUnits[template] = units
+				}
+				if _, dup := units[unit]; dup {
+					continue
+				}
+				units[unit] = struct{}{}
+			}
 			counts[template]++
 			entry := demand[template]
 			entry.Count++
@@ -1723,6 +1753,22 @@ func defaultScaleCheckCountsAndDemand(cfg *config.City, targets []defaultScaleCh
 		}
 	}
 	return counts, demand, partialTemplates, errs
+}
+
+// poolDemandUnitKey returns the capacity unit for a row. Required
+// continuation steps share one unit per molecule root and group; ordinary
+// routed work remains one unit per bead. Root-store-ref participates when
+// present so the same root id in two explicitly scoped stores is not merged,
+// while duplicated views of one scoped row still deduplicate identically.
+func poolDemandUnitKey(b beads.Bead) string {
+	rootID := strings.TrimSpace(b.Metadata[beadmeta.RootBeadIDMetadataKey])
+	group := strings.TrimSpace(b.Metadata[beadmeta.ContinuationGroupMetadataKey])
+	if rootID == "" || group == "" ||
+		strings.TrimSpace(b.Metadata[beadmeta.SessionAffinityMetadataKey]) != "require" {
+		return ""
+	}
+	storeRef := strings.TrimSpace(b.Metadata[beadmeta.RootStoreRefMetadataKey])
+	return "molecule:" + storeRef + ":" + rootID + ":" + group
 }
 
 func mergeScaleCheckDemand(existing, incoming scaleCheckDemand, count int) scaleCheckDemand {
@@ -2377,9 +2423,25 @@ func appendOpenAssignedMoleculeWorkUnique(dst *[]beads.Bead, stores *[]beads.Sto
 	}
 }
 
+// appendOpenAssignedMessageUnique admits open mail as direct wake demand.
+// Ready() intentionally excludes message beads because mail is delivered by
+// the inbox path, not claimed from the generic work queue. The controller must
+// still observe an assigned message here so an asleep on-demand session is
+// materialized and can drain that inbox.
+func appendOpenAssignedMessageUnique(dst *[]beads.Bead, stores *[]beads.Store, storeRefs *[]string, readyIDs map[string]bool, beadList []beads.Bead, seen map[string]struct{}, store beads.Store, storeRef string) {
+	for _, b := range beadList {
+		if b.Type != "message" || b.Status != "open" || strings.TrimSpace(b.Assignee) == "" {
+			continue
+		}
+		if appendWorkUnique(dst, stores, storeRefs, b, seen, store, storeRef) {
+			markReadyAssigned(readyIDs, b)
+		}
+	}
+}
+
 // markReadyAssigned records a bead ID as wake-demand-ready. It is called only
 // by the assigned-work passes that establish real readiness (in-progress,
-// store-Ready()/deps, and assigned molecule roots) — never by the open-routed
+// assigned message, store-Ready()/deps, and assigned molecule roots) — never by the open-routed
 // orphan-release pass, whose beads have not passed any readiness gate.
 func markReadyAssigned(readyIDs map[string]bool, b beads.Bead) {
 	if readyIDs == nil {

@@ -4,17 +4,20 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 var (
-	dialogPollInterval       = 500 * time.Millisecond
-	dialogPollTimeout        = 8 * time.Second
-	startupDialogAcceptDelay = 500 * time.Millisecond
-	bypassDialogConfirmDelay = 200 * time.Millisecond
-	startupDialogPeekLines   = 120
+	providerRateLimitResetPattern = regexp.MustCompile(`(?i)\bresets?\s+(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})\s+at\s+)?(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)(?:\s*\(([^)\r\n]+)\))?`)
+	dialogPollInterval            = 500 * time.Millisecond
+	dialogPollTimeout             = 8 * time.Second
+	startupDialogAcceptDelay      = 500 * time.Millisecond
+	bypassDialogConfirmDelay      = 200 * time.Millisecond
+	startupDialogPeekLines        = 120
 	// When a startup stream emits only irrelevant snapshots and then goes quiet,
 	// fall back instead of waiting the full dialog timeout.
 	startupDialogStreamIdleGrace = 100 * time.Millisecond
@@ -1423,6 +1426,7 @@ func sendDialogKeys(
 func ContainsRateLimitDialog(content string) bool {
 	return strings.Contains(content, "Usage limit reached") ||
 		strings.Contains(content, "You've hit your limit") ||
+		strings.Contains(content, "You've hit your session limit") ||
 		strings.Contains(content, "/rate-limit-options") ||
 		strings.Contains(content, "rate limit") ||
 		strings.Contains(content, "Rate limit")
@@ -1445,6 +1449,7 @@ func ContainsModelSwitchModal(content string) bool {
 func ContainsProviderRateLimitScreen(content string) bool {
 	if strings.Contains(content, "Usage limit reached") ||
 		strings.Contains(content, "You've hit your limit") ||
+		strings.Contains(content, "You've hit your session limit") ||
 		strings.Contains(content, "/rate-limit-options") {
 		return true
 	}
@@ -1457,6 +1462,95 @@ func ContainsProviderRateLimitScreen(content string) bool {
 	return strings.Contains(strings.ToLower(content), "rate limit") &&
 		strings.Contains(content, "Keep trying") &&
 		strings.Contains(content, "Stop")
+}
+
+// ProviderRateLimitResetAt extracts a provider-stated reset deadline from a
+// rate-limit screen. It observes pane text only; callers decide whether the
+// returned instant is suitable for lifecycle state. An omitted timezone uses
+// now's location, while an invalid explicit IANA timezone is rejected rather
+// than guessed.
+func ProviderRateLimitResetAt(content string, now time.Time) (time.Time, bool) {
+	match := providerRateLimitResetPattern.FindStringSubmatch(content)
+	if len(match) != 7 {
+		return time.Time{}, false
+	}
+	loc := now.Location()
+	if zone := strings.TrimSpace(match[6]); zone != "" {
+		var err error
+		loc, err = time.LoadLocation(zone)
+		if err != nil {
+			return time.Time{}, false
+		}
+	}
+	localNow := now.In(loc)
+	hour, err := strconv.Atoi(match[3])
+	if err != nil || hour < 1 || hour > 12 {
+		return time.Time{}, false
+	}
+	minute := 0
+	if match[4] != "" {
+		minute, err = strconv.Atoi(match[4])
+		if err != nil || minute > 59 {
+			return time.Time{}, false
+		}
+	}
+	if strings.EqualFold(match[5], "pm") && hour != 12 {
+		hour += 12
+	}
+	if strings.EqualFold(match[5], "am") && hour == 12 {
+		hour = 0
+	}
+	year, month, day := localNow.Date()
+	if match[1] != "" {
+		parsedMonth, ok := providerRateLimitMonth(match[1])
+		if !ok {
+			return time.Time{}, false
+		}
+		month = parsedMonth
+		day, err = strconv.Atoi(match[2])
+		if err != nil || day < 1 || day > 31 {
+			return time.Time{}, false
+		}
+	}
+	reset := time.Date(year, month, day, hour, minute, 0, 0, loc)
+	if reset.Month() != month || reset.Day() != day || reset.Hour() != hour || reset.Minute() != minute {
+		return time.Time{}, false
+	}
+	if match[1] != "" && !reset.After(localNow) {
+		reset = reset.AddDate(1, 0, 0)
+	}
+	return reset, true
+}
+
+func providerRateLimitMonth(raw string) (time.Month, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "jan":
+		return time.January, true
+	case "feb":
+		return time.February, true
+	case "mar":
+		return time.March, true
+	case "apr":
+		return time.April, true
+	case "may":
+		return time.May, true
+	case "jun":
+		return time.June, true
+	case "jul":
+		return time.July, true
+	case "aug":
+		return time.August, true
+	case "sep":
+		return time.September, true
+	case "oct":
+		return time.October, true
+	case "nov":
+		return time.November, true
+	case "dec":
+		return time.December, true
+	default:
+		return 0, false
+	}
 }
 
 // spendLimitModalWindowLines bounds how many consecutive lines the Claude

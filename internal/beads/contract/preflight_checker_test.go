@@ -382,10 +382,35 @@ func TestPreflightUnreadableScopeReturnsError(t *testing.T) {
 		},
 	}
 
-	if _, err := checker.Check(scope); err == nil || !strings.Contains(err.Error(), "read preflight metadata") {
+	if _, err := checker.Check(scope); err == nil || !strings.Contains(err.Error(), "metadata.json is unreadable") {
 		t.Fatalf("Check() error = %v, want unreadable metadata error", err)
 	}
 	assertPreflightReadOnly(t, fs)
+}
+
+func TestPreflightMissingMetadataNamesRegenerationInsteadOfMigration(t *testing.T) {
+	scope := "/city"
+	checker := PreflightChecker{FS: fsys.NewFake()}
+
+	_, err := checker.Check(scope)
+	if err == nil {
+		t.Fatal("Check() error = nil, want missing metadata diagnosis")
+	}
+	var metadataErr *PreflightMetadataError
+	if !errors.As(err, &metadataErr) {
+		t.Fatalf("Check() error = %T %v, want *PreflightMetadataError", err, err)
+	}
+	if metadataErr.Kind != PreflightMetadataMissing {
+		t.Fatalf("metadata error kind = %q, want %q", metadataErr.Kind, PreflightMetadataMissing)
+	}
+	if strings.Contains(err.Error(), "legacy Dolt workspace") || strings.Contains(err.Error(), "migration is required") {
+		t.Fatalf("missing metadata diagnosis leaked destructive migration guidance: %v", err)
+	}
+	for _, want := range []string{"metadata.json is missing", "gc rig repair", "do not run a migration"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("missing metadata diagnosis = %q, want %q", err, want)
+		}
+	}
 }
 
 func testPreflightChecker(metadata string, ctx PreflightBDContext, dbProjectID string) PreflightChecker {

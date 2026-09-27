@@ -291,6 +291,11 @@ type Info struct {
 	// StateReason is the RAW state_reason metadata. The pool sweep's
 	// post-create-protection window matches state_reason == "creation_complete".
 	StateReason string // state_reason (raw)
+	// DrainAckRuntimeReplaced is the RAW marker set when a drain-ack stop's
+	// intended runtime was replaced before the controller could stop it. The
+	// reconciler consumes it to finalize the stale bead without touching the
+	// replacement runtime.
+	DrainAckRuntimeReplaced string // drain_ack_runtime_replaced (raw)
 	// CreationCompleteAt is the RAW creation_complete_at metadata (RFC3339 or
 	// empty). The pool sweep parses it to age out the post-create protection
 	// window; a missing/zero value is treated as stale (sweepable).

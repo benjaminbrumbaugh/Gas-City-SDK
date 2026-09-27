@@ -1612,3 +1612,97 @@ func TestFormulaCookAttachHelpDoesNotClaimParentChild(t *testing.T) {
 		t.Fatalf("gc formula cook --help does not clarify that --attach is not a parent-child relationship; Long=%q", cmd.Long)
 	}
 }
+
+// gc-1lh1s: `gc formula show` must say WHICH layer answered.
+//
+// The same name resolves to different bytes depending on whether the checkout
+// is rig-registered — an unregistered worktree silently gets the pack cache
+// instead of the city override — and ok stayed true with no warning, so a
+// caller could not tell. This pins the discriminator itself rather than that
+// incident: the payload must name the file that answered AND which declared
+// search path produced it.
+func TestFormulaSourceSearchPathNamesTheAnsweringLayer(t *testing.T) {
+	root := t.TempDir()
+	cityLayer := filepath.Join(root, "city", "formulas")
+	packLayer := filepath.Join(root, "cache", "repos", "deadbeef", "gastown", "formulas")
+	// Deliberately nested under cityLayer: search paths DO nest in this city, and
+	// a first-prefix-wins implementation would attribute this to the city layer.
+	rigLayer := filepath.Join(cityLayer, "rig-overrides")
+	for _, d := range []string{cityLayer, packLayer, rigLayer} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search := []string{cityLayer, packLayer, rigLayer}
+
+	for _, tc := range []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{"city override answers", filepath.Join(cityLayer, "mol-x.toml"), cityLayer},
+		{"pack cache answers", filepath.Join(packLayer, "mol-x.toml"), packLayer},
+		{"nested rig layer answers", filepath.Join(rigLayer, "mol-x.toml"), rigLayer},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formulaSourceSearchPath(tc.source, search); got != tc.want {
+				t.Fatalf("formulaSourceSearchPath(%q) = %q, want %q", tc.source, got, tc.want)
+			}
+		})
+	}
+
+	if got := formulaSourceSearchPath(filepath.Join(root, "elsewhere", "mol-x.toml"), search); got != "" {
+		t.Fatalf("a source outside every search path reported %q, want \"\"", got)
+	}
+	if got := formulaSourceSearchPath("", search); got != "" {
+		t.Fatalf("empty source reported %q, want \"\"", got)
+	}
+}
+
+func TestFormulaShowJSONCarriesTheAnsweringSource(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "mol-x.toml")
+	recipe := &formula.Recipe{Name: "mol-x", FormulaSource: src}
+
+	out := formulaShowJSONFromRecipe(recipe, dir, formulaScope{searchPaths: []string{dir}}, nil, nil, nil)
+
+	if out.Source != src {
+		t.Fatalf("source = %q, want %q: the caller cannot tell which file answered", out.Source, src)
+	}
+	if out.SourceSearchPath != dir {
+		t.Fatalf("source_search_path = %q, want %q: the caller cannot tell which LAYER answered (gc-1lh1s)", out.SourceSearchPath, dir)
+	}
+}
+
+// TestFormulaShowRequiresRegisteredCheckout gives resolver-facing tests a
+// supported, semantic opt-in for the layer they require. Without this flag a
+// fresh worktree is intentionally allowed to use the pack-cache fallback; a
+// test that compares recipe text there would fail with an unrelated mismatch.
+func TestFormulaShowRequiresRegisteredCheckout(t *testing.T) {
+	t.Setenv("GC_DOLT", "skip")
+	cityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(withBuiltinProviderAliasesTOMLForTest(`
+[workspace]
+name = "registered-check"
+provider = "claude"
+`, "claude")+testControlDispatcherAgentTOML("")), 0o644); err != nil {
+		t.Fatalf("write city.toml: %v", err)
+	}
+	t.Chdir(cityDir)
+	t.Setenv("GC_CITY_PATH", cityDir)
+
+	prevCity, prevRig := cityFlag, rigFlag
+	t.Cleanup(func() { cityFlag, rigFlag = prevCity, prevRig })
+	cityFlag, rigFlag = cityDir, ""
+
+	var stdout, stderr bytes.Buffer
+	cmd := newFormulaShowCmd(&stdout, &stderr)
+	cmd.SetArgs([]string{"mol-does-not-matter", "--require-registered", "--json"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatalf("formula show succeeded from city scope, want --require-registered refusal\nstdout=%s\nstderr=%s", stdout.String(), stderr.String())
+	}
+	if !strings.Contains(err.Error(), "requires a registered rig checkout") {
+		t.Fatalf("refusal = %q, want semantic registered-checkout guidance", err)
+	}
+}

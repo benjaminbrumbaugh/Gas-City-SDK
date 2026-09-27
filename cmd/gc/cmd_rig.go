@@ -55,6 +55,7 @@ are scoped to rigs via their "dir" field.`,
 		newRigRestartCmd(stdout, stderr),
 		newRigResumeCmd(stdout, stderr),
 		newRigSetEndpointCmd(stdout, stderr),
+		newRigRepairCmd(stdout, stderr),
 		newRigStatusCmd(stdout, stderr),
 		newRigSuspendCmd(stdout, stderr),
 	)

@@ -2053,6 +2053,22 @@ func TestControllerStateAppliesCacheReconcileBeadEventsToStores(t *testing.T) {
 	}
 }
 
+func TestControllerStatePokesForPayloadlessBeadEvents(t *testing.T) {
+	cs := &controllerState{pokeCh: make(chan struct{}, 1)}
+
+	cs.applyBeadEventToStores(events.Event{
+		Type:    events.BeadUpdated,
+		Actor:   "bd-hook",
+		Subject: "gc-routed-work",
+	})
+
+	select {
+	case <-cs.pokeCh:
+	default:
+		t.Fatal("payloadless bead event did not poke reconciler")
+	}
+}
+
 func TestControllerStateEmitsCompletedFromAuthoritativeGraphStepClose(t *testing.T) {
 	store := beads.NewMemStore()
 	root, err := store.Create(beads.Bead{ID: "gcg-run", Metadata: map[string]string{

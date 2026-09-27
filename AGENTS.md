@@ -50,6 +50,23 @@ When working here, assume three codebases matter:
 - Treat archived plans and audits as evidence, not gospel. Confirm against
   current code and current upstream before porting.
 
+### Dashboard ownership boundary
+
+- The maintained product dashboard lives in
+  `/Users/benjaminbrumbaugh/Documents/Gas City/Gas-City-Dashboard`. Product UI,
+  UX, and dashboard application work belongs there, not in this SDK repository.
+- `internal/api/dashboardspa` is the upstream embedded dashboard retained for
+  compatibility and easier upstream merges. It is disabled in Benjamin's
+  supervisor configuration and is not the product dashboard. Do not extend or
+  polish it unless a task explicitly concerns upstream compatibility.
+- This SDK continues to own the supervisor APIs and typed contracts consumed by
+  the product dashboard. API and contract work belongs here even though product
+  UI work does not.
+- Read `READ_ME_FIRST.md` and
+  `internal/api/dashboardspa/READ_ME_FIRST.md` before changing any
+  dashboard-related SDK path. Do not treat a working embedded preview as
+  evidence that the product dashboard was changed or verified.
+
 ### Feature archaeology workflow
 
 Use git history deliberately when a feature appears missing or regressed:
@@ -461,9 +478,11 @@ Before considering any task complete:
 - `make dashboard-ci` passes for any change touching `internal/api/`,
   `internal/api/openapi.json`, `docs/reference/schema/openapi.*`,
   `internal/api/dashboardspa/`, or generated dashboard types
-- The dashboard starts locally and serves the app for dashboard/API-schema
-  changes; use `npm run preview -- --host 127.0.0.1 --port <port>` from
-  `internal/api/dashboardspa/web` after `make dashboard-ci`
+- For an explicit upstream-compatibility change to the retained embedded UI,
+  start it locally and verify it serves after `make dashboard-ci`; use
+  `npm run preview -- --host 127.0.0.1 --port <port>` from
+  `internal/api/dashboardspa/web`. Product-dashboard verification belongs in
+  the separate `Gas-City-Dashboard` repository.
 - Every exported function has a doc comment
 - No premature abstractions
 - Tests cover happy path AND edge cases

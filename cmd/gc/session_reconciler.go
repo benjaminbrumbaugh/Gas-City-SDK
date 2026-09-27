@@ -332,6 +332,37 @@ var (
 	drainAckStopConfirmDeadPoll    = 250 * time.Millisecond
 )
 
+// markDrainAckRuntimeReplaced durably records that the runtime incarnation
+// targeted by a drain-ack stop is gone because the name now belongs to a
+// replacement. The next reconciler pass can finalize the stale session bead
+// through the normal assigned-work close gate; without this marker it would
+// repeatedly observe and re-queue a stop against the replacement forever.
+func markDrainAckRuntimeReplaced(store beads.Store, sessionID string, stderr io.Writer) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if store == nil || sessionID == "" {
+		return false
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	front := sessionFrontDoor(store)
+	info, err := front.Get(sessionID)
+	if err != nil {
+		fmt.Fprintf(stderr, "session reconciler: marking replaced drain-ack %s: %v\n", sessionID, err) //nolint:errcheck
+		return false
+	}
+	if info.DrainAckRuntimeReplaced == "true" {
+		return true
+	}
+	if _, err := front.ApplyPatchInfo(info, sessionpkg.MetadataPatch{
+		sessionpkg.DrainAckRuntimeReplacedKey: "true",
+	}); err != nil {
+		fmt.Fprintf(stderr, "session reconciler: marking replaced drain-ack %s: %v\n", sessionID, err) //nolint:errcheck
+		return false
+	}
+	return true
+}
+
 func queueDrainAckAsyncStop(cityPath string, store beads.Store, sp runtime.Provider, cfg *config.City, sessionID, name, expectedToken string, processNames []string, tracker *asyncStartTracker, stderr io.Writer) {
 	name = strings.TrimSpace(name)
 	if name == "" || sp == nil {
@@ -369,6 +400,9 @@ func queueDrainAckAsyncStop(cityPath string, store beads.Store, sp runtime.Provi
 		if expectedToken != "" {
 			if actualToken, _ := sp.GetMeta(name, "GC_INSTANCE_TOKEN"); actualToken != "" && actualToken != expectedToken {
 				fmt.Fprintf(stderr, "session reconciler: async drain-ack stop %s skipped: instance token mismatch (session was replaced)\n", name) //nolint:errcheck
+				if markDrainAckRuntimeReplaced(store, sessionID, stderr) {
+					_ = poke(cityPath)
+				}
 				return
 			}
 		}
@@ -385,6 +419,14 @@ func queueDrainAckAsyncStop(cityPath string, store beads.Store, sp runtime.Provi
 		// threaded through so each re-kill stays fenced against a re-woken
 		// same-name replacement. Mirrors #4089's confirm-dead contract.
 		confirmDrainAckRuntimeDead(cityPath, store, sp, cfg, name, expectedToken, processNames, stderr)
+		if expectedToken != "" {
+			if actualToken, _ := sp.GetMeta(name, "GC_INSTANCE_TOKEN"); actualToken != "" && actualToken != expectedToken {
+				if markDrainAckRuntimeReplaced(store, sessionID, stderr) {
+					_ = poke(cityPath)
+				}
+				return
+			}
+		}
 		// The runtime session is now confirmed dead (or the confirm-dead
 		// deadline passed and we proceed best-effort), but its pool session
 		// bead stays open (occupying the pool slot) until
@@ -649,6 +691,12 @@ func finalizeDrainAckStoppedSession(
 	if hasAssignedWork {
 		batch = sessionpkg.CompleteDrainPatch(clk.Now().UTC(), string(sessionpkg.SleepReasonIdle), info.WakeMode == "fresh")
 	}
+	if info.DrainAckRuntimeReplaced == "true" {
+		// The marker is consumed once the stale row has passed the assigned-work
+		// gate. Keep ordinary lifecycle patches byte-identical for all other
+		// callers.
+		batch[sessionpkg.DrainAckRuntimeReplacedKey] = ""
+	}
 	// A drain-ack that completes a restart-request cycle (gc session reset →
 	// agent drain-ack) must also consume restart_requested. The drain-ack
 	// branch handles the stop and continues before the restart-requested
@@ -707,6 +755,13 @@ func reconcileDrainAckStopPending(
 		return false, drainAckFinalizeResult{}
 	}
 	name := strings.TrimSpace(info.SessionNameMetadata)
+	if info.DrainAckRuntimeReplaced == "true" {
+		return true, finalizeDrainAckStoppedSession(
+			cityPath, cfg, store, rigStores, info, tp.TemplateName,
+			!desired || isPoolManagedSessionInfo(info),
+			dops, dt, clk, rec, stderr,
+		)
+	}
 	obs, err := workerObserveSessionTargetWithRuntimeHintsWithConfig(cityPath, store, sp, cfg, info.ID, tp.Hints.ProcessNames)
 	if err != nil || obs.Running || obs.Alive {
 		// Async-stop: queueDrainAckAsyncStop takes the session ID and mutates only
@@ -769,6 +824,16 @@ func finalizeDrainAckStopPendingSessions(
 			continue
 		}
 		name := strings.TrimSpace(info.SessionNameMetadata)
+		if info.DrainAckRuntimeReplaced == "true" {
+			finalizeDrainAckStoppedSession(
+				cityPath, cfg, store, rigStores, info,
+				normalizedSessionTemplateInfo(info, cfg),
+				isPoolManagedSessionInfo(info),
+				dops, dt, clk, rec, stderr,
+			)
+			finalized++
+			continue
+		}
 		// Resolve the configured agent process-name hints for this persisted
 		// stop-pending session, exactly as the reset-driven path threads
 		// tp.Hints.ProcessNames (see reconcileDrainAckStopPending). Without them

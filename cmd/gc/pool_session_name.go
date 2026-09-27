@@ -198,6 +198,7 @@ func releaseOrphanedPoolAssignments(
 
 	openIdentifiers := makeOpenSessionStoreRefIndex(cityPath, cfg, store, openSessionInfos, storeRefAware)
 	legacyOpenIdentifiers := make(map[string]struct{}, len(openSessionInfos)*5)
+	canonicalOpenIdentifiers := make(map[string]struct{}, len(openSessionInfos)*3)
 	openSessionBeadIDs := make(map[string]struct{}, len(openSessionInfos))
 	for _, info := range openSessionInfos {
 		if info.Closed {
@@ -208,6 +209,11 @@ func releaseOrphanedPoolAssignments(
 		}
 		for _, id := range sessionBeadAssigneeIdentitiesInfo(info) {
 			legacyOpenIdentifiers[id] = struct{}{}
+		}
+		for _, id := range []string{info.ID, info.SessionNameMetadata, info.ConfiguredNamedIdentity} {
+			if id = strings.TrimSpace(id); id != "" {
+				canonicalOpenIdentifiers[id] = struct{}{}
+			}
 		}
 	}
 
@@ -237,18 +243,24 @@ func releaseOrphanedPoolAssignments(
 			if wb.Status != "in_progress" {
 				continue
 			}
-		} else if exactOwnerGone = poolClaimExactOwnerIsGone(store, wb, openSessionBeadIDs); !exactOwnerGone {
+		} else {
+			exactOwnerGone = poolClaimExactOwnerIsGone(store, wb, openSessionBeadIDs)
 			workStoreRef := ""
 			if storeRefAware {
 				workStoreRef = assignedWorkStoreRefs[i]
 			}
-			if openSessionOwnsWork(legacyOpenIdentifiers, openIdentifiers, assignee, workStoreRef, storeRefAware) {
-				continue
-			}
+			// A configured named session is the current route authority after a
+			// handoff. Its prior polecat owner is expected to disappear, so the
+			// stale exact-owner stamp must not override the named route guard.
 			if assigneePreservesNamedSessionRoute(cfg, cityPath, template, assignee, workStoreRef, storeRefAware) {
 				continue
 			}
-			if liveOpenSessionAssignmentExists(sessionStore.Store, assignee) {
+			if openSessionOwnsWork(legacyOpenIdentifiers, openIdentifiers, assignee, workStoreRef, storeRefAware) &&
+				(!exactOwnerGone || hasCanonicalSessionIdentifier(canonicalOpenIdentifiers, assignee)) {
+				continue
+			}
+			if liveOpenSessionAssignmentExists(sessionStore.Store, assignee) &&
+				(!exactOwnerGone || liveCanonicalSessionAssignmentExists(sessionStore.Store, assignee)) {
 				continue
 			}
 			// The sessions binding is not the only ledger that can hold a session
@@ -259,7 +271,8 @@ func releaseOrphanedPoolAssignments(
 			// claims. A session bead of that shape lives in the work bead's own
 			// owner store, so probing that one store after the sessions store
 			// misses closes the gap without enumerating every attached store.
-			if ownerStore != nil && liveOpenSessionAssignmentExists(ownerStore, assignee) {
+			if ownerStore != nil && liveOpenSessionAssignmentExists(ownerStore, assignee) &&
+				(!exactOwnerGone || liveCanonicalSessionAssignmentExists(ownerStore, assignee)) {
 				continue
 			}
 		}
@@ -288,6 +301,11 @@ func releaseOrphanedPoolAssignments(
 	return released
 }
 
+func hasCanonicalSessionIdentifier(identifiers map[string]struct{}, assignee string) bool {
+	_, ok := identifiers[strings.TrimSpace(assignee)]
+	return ok
+}
+
 // beadStampedSessionOwner returns the exact session bead ID stamped on a claim.
 func beadStampedSessionOwner(wb beads.Bead) string {
 	if id := strings.TrimSpace(wb.Metadata[beadmeta.SessionIDMetadataKey]); id != "" {
@@ -308,7 +326,7 @@ func poolClaimExactOwnerIsGone(store beads.Store, wb beads.Bead, openSessionBead
 	if liveSessionBeadExistsByIdentity(store, owner) {
 		return false
 	}
-	log.Printf("releaseOrphanedPoolAssignments: %s is orphaned: stamped owner %q is gone while assignee %q resolves to a different session", wb.ID, owner, strings.TrimSpace(wb.Assignee))
+	log.Printf("releaseOrphanedPoolAssignments: %s has stale stamped owner %q; evaluating current assignee %q", wb.ID, owner, strings.TrimSpace(wb.Assignee))
 	return true
 }
 
@@ -697,6 +715,53 @@ func liveOpenSessionAssignmentExists(store beads.Store, assignee string) bool {
 			if assignee == id {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// liveCanonicalSessionAssignmentExists distinguishes a current session
+// identity from an alias-only pool slot. When the stamped owner is gone, a
+// live alias can be a recycled slot held by a different incarnation and must
+// not suppress orphan recovery. A canonical session_name (or explicit named
+// identity/session bead ID), however, is a completed handoff and remains live.
+func liveCanonicalSessionAssignmentExists(store beads.Store, assignee string) bool {
+	assignee = strings.TrimSpace(assignee)
+	if store == nil || assignee == "" {
+		return false
+	}
+	sessions, err := store.List(beads.ListQuery{Label: sessionBeadLabel, Live: true})
+	if err != nil {
+		log.Printf("releaseOrphanedPoolAssignments: canonical live-session validation failed for assignee %q: %v", assignee, err)
+		return true
+	}
+	for _, sb := range sessions {
+		if sb.Status == "closed" || !isSessionBead(sb) {
+			continue
+		}
+		if canonicalSessionIdentityMatches(sb, assignee) {
+			return true
+		}
+	}
+	for _, id := range directSessionBeadIDCandidates(assignee) {
+		sb, err := store.Get(id)
+		if err != nil || sb.Status == "closed" || !isSessionBead(sb) {
+			continue
+		}
+		if canonicalSessionIdentityMatches(sb, assignee) {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalSessionIdentityMatches(sb beads.Bead, assignee string) bool {
+	if strings.TrimSpace(sb.ID) == assignee {
+		return true
+	}
+	for _, key := range []string{"session_name", "configured_named_identity"} {
+		if strings.TrimSpace(sb.Metadata[key]) == assignee {
+			return true
 		}
 	}
 	return false

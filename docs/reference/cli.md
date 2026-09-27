@@ -1782,6 +1782,10 @@ Examples:
   gc formula show mol-feature --var title="Auth system" --var branch=main
   gc formula show mol-polecat-work --rig mo
 
+Use --require-registered for resolver-facing checks that must run against a
+registered rig rather than silently accepting the city or pack-cache fallback.
+An ordinary unregistered checkout still intentionally uses the pack fallback.
+
 ```
 gc formula show <formula-name> [flags]
 ```
@@ -1789,6 +1793,7 @@ gc formula show <formula-name> [flags]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--json` | bool |  | emit JSON |
+| `--require-registered` | bool |  | require a registered rig checkout; refuse city or pack-cache fallback |
 | `--var` | stringArray |  | variable substitution for preview (key=value) |
 
 ## gc formula version-check
@@ -3570,6 +3575,7 @@ gc rig
 | [gc rig add](#gc-rig-add) | Register a project as a rig |
 | [gc rig list](#gc-rig-list) | List registered rigs |
 | [gc rig remove](#gc-rig-remove) | Remove a rig from the city |
+| [gc rig repair](#gc-rig-repair) | Repair a rig's local metadata pointer and formula staging |
 | [gc rig restart](#gc-rig-restart) | Restart all agents in a rig |
 | [gc rig resume](#gc-rig-resume) | Resume a suspended rig |
 | [gc rig set-endpoint](#gc-rig-set-endpoint) | Set the canonical endpoint ownership for a rig |
@@ -3676,6 +3682,24 @@ gc rig remove myrig
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--json` | bool |  | Output in JSONL format |
+
+## gc rig repair
+
+Repair regenerable local rig materialization after verifying the
+named Dolt database belongs to the rig's tracked beads identity file.
+
+The repair writes only .beads/metadata.json and formula symlinks. It never
+runs a beads migration, creates a database, or mutates Dolt data. Pass the
+database name exactly as shown by the healthy Dolt server; a missing or
+unreadable metadata pointer must not be guessed from a prefix.
+
+```
+gc rig repair <name> [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--database` | string |  | verified Dolt database name for this rig (required) |
 
 ## gc rig restart
 

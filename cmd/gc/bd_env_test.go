@@ -841,6 +841,7 @@ func TestBdRuntimeEnvDisablesAutoBackup(t *testing.T) {
 	t.Setenv("GC_BEADS", "bd")
 	t.Setenv("BD_BACKUP_ENABLED", "true")
 	t.Setenv("BEADS_BACKUP_ENABLED", "true")
+	t.Setenv("BD_DISABLE_METRICS", "false")
 
 	env := mustBdRuntimeEnv(t, t.TempDir())
 	if got := env["BD_BACKUP_ENABLED"]; got != "false" {
@@ -849,12 +850,16 @@ func TestBdRuntimeEnvDisablesAutoBackup(t *testing.T) {
 	if got := env["BEADS_BACKUP_ENABLED"]; got != "false" {
 		t.Fatalf("BEADS_BACKUP_ENABLED = %q, want false", got)
 	}
+	if got := env["BD_DISABLE_METRICS"]; got != "1" {
+		t.Fatalf("BD_DISABLE_METRICS = %q, want 1", got)
+	}
 }
 
 func TestCityRuntimeProcessEnvDisablesAutoBackup(t *testing.T) {
 	t.Setenv("GC_BEADS", "bd")
 	t.Setenv("BD_BACKUP_ENABLED", "true")
 	t.Setenv("BEADS_BACKUP_ENABLED", "true")
+	t.Setenv("BD_DISABLE_METRICS", "false")
 
 	values := envEntriesMap(mustCityRuntimeProcessEnv(t, t.TempDir()))
 	if got := values["BD_BACKUP_ENABLED"]; got != "false" {
@@ -863,12 +868,16 @@ func TestCityRuntimeProcessEnvDisablesAutoBackup(t *testing.T) {
 	if got := values["BEADS_BACKUP_ENABLED"]; got != "false" {
 		t.Fatalf("BEADS_BACKUP_ENABLED = %q, want false", got)
 	}
+	if got := values["BD_DISABLE_METRICS"]; got != "1" {
+		t.Fatalf("BD_DISABLE_METRICS = %q, want 1", got)
+	}
 }
 
 func TestSessionBackendEnvDisablesAutoBackup(t *testing.T) {
 	t.Setenv("GC_BEADS", "bd")
 	t.Setenv("BD_BACKUP_ENABLED", "true")
 	t.Setenv("BEADS_BACKUP_ENABLED", "true")
+	t.Setenv("BD_DISABLE_METRICS", "false")
 
 	env := mustSessionBackendEnv(t, t.TempDir(), "", nil)
 	if got := env["BD_BACKUP_ENABLED"]; got != "false" {
@@ -877,12 +886,16 @@ func TestSessionBackendEnvDisablesAutoBackup(t *testing.T) {
 	if got := env["BEADS_BACKUP_ENABLED"]; got != "false" {
 		t.Fatalf("BEADS_BACKUP_ENABLED = %q, want false", got)
 	}
+	if got := env["BD_DISABLE_METRICS"]; got != "1" {
+		t.Fatalf("BD_DISABLE_METRICS = %q, want 1", got)
+	}
 }
 
 func TestRecoverManagedBDCommandDisablesAutoBackup(t *testing.T) {
 	t.Setenv("GC_BEADS", "bd")
 	t.Setenv("BD_BACKUP_ENABLED", "true")
 	t.Setenv("BEADS_BACKUP_ENABLED", "true")
+	t.Setenv("BD_DISABLE_METRICS", "false")
 
 	cityPath := t.TempDir()
 	envFile := filepath.Join(cityPath, "recover-env.txt")
@@ -892,7 +905,8 @@ func TestRecoverManagedBDCommandDisablesAutoBackup(t *testing.T) {
 	}
 	script := "#!/bin/sh\n" +
 		"printf 'BD_BACKUP_ENABLED=%s\\n' \"$BD_BACKUP_ENABLED\" > \"" + envFile + "\"\n" +
-		"printf 'BEADS_BACKUP_ENABLED=%s\\n' \"$BEADS_BACKUP_ENABLED\" >> \"" + envFile + "\"\n"
+		"printf 'BEADS_BACKUP_ENABLED=%s\\n' \"$BEADS_BACKUP_ENABLED\" >> \"" + envFile + "\"\n" +
+		"printf 'BD_DISABLE_METRICS=%s\\n' \"$BD_DISABLE_METRICS\" >> \"" + envFile + "\"\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -916,6 +930,9 @@ func TestRecoverManagedBDCommandDisablesAutoBackup(t *testing.T) {
 	}
 	if got := values["BEADS_BACKUP_ENABLED"]; got != "false" {
 		t.Fatalf("BEADS_BACKUP_ENABLED = %q, want false", got)
+	}
+	if got := values["BD_DISABLE_METRICS"]; got != "1" {
+		t.Fatalf("BD_DISABLE_METRICS = %q, want 1", got)
 	}
 }
 

@@ -1,6 +1,61 @@
 package contract
 
-import "strings"
+import (
+	"fmt"
+	"os"
+	"strings"
+)
+
+// PreflightMetadataErrorKind identifies why the canonical metadata pointer
+// could not be read. These failures are distinct from a legacy workspace: the
+// pointer is a local, regenerable binding, so callers must not send operators
+// down a migration path.
+type PreflightMetadataErrorKind string
+
+const (
+	PreflightMetadataMissing    PreflightMetadataErrorKind = "missing"
+	PreflightMetadataUnreadable PreflightMetadataErrorKind = "unreadable"
+	PreflightMetadataInvalid    PreflightMetadataErrorKind = "invalid"
+)
+
+// PreflightMetadataError is returned when .beads/metadata.json cannot be used
+// as the native-store pointer. Its message includes the safe repair path so a
+// fallback command cannot replace the diagnosis with a destructive migration
+// hint from an older bd binary.
+type PreflightMetadataError struct {
+	Path string
+	Kind PreflightMetadataErrorKind
+	Err  error
+}
+
+func (e *PreflightMetadataError) Error() string {
+	if e == nil {
+		return ""
+	}
+	const repair = "regenerate it with `gc rig repair <rig> --database <verified-database>` after verifying the database identity; do not run a migration"
+	switch e.Kind {
+	case PreflightMetadataMissing:
+		return fmt.Sprintf("metadata.json is missing at %s; this is a missing Dolt pointer, not a legacy workspace — %s", e.Path, repair)
+	case PreflightMetadataInvalid:
+		return fmt.Sprintf("metadata.json is invalid at %s: %v; %s", e.Path, e.Err, repair)
+	default:
+		return fmt.Sprintf("metadata.json is unreadable at %s: %v; repair permissions or %s", e.Path, e.Err, repair)
+	}
+}
+
+func (e *PreflightMetadataError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func preflightMetadataErrorKind(err error) PreflightMetadataErrorKind {
+	if os.IsNotExist(err) {
+		return PreflightMetadataMissing
+	}
+	return PreflightMetadataUnreadable
+}
 
 // PreflightCheckState is the state for one beads backend preflight check.
 type PreflightCheckState string

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -823,6 +824,80 @@ esac
 		if stderr.String() != "" {
 			t.Fatalf("doBd(%v) stderr = %q, want empty", args, stderr.String())
 		}
+	}
+}
+
+func TestGcBdBlockedAnnouncesResolvedStore(t *testing.T) {
+	disableManagedDoltRecoveryForTest(t)
+
+	origCityFlag := cityFlag
+	origRigFlag := rigFlag
+	defer func() {
+		cityFlag = origCityFlag
+		rigFlag = origRigFlag
+	}()
+	cityFlag = ""
+	rigFlag = ""
+
+	cityDir := t.TempDir()
+	rigDir := filepath.Join(cityDir, "repo")
+	if err := os.MkdirAll(filepath.Join(cityDir, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(rigDir, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "demo"
+
+[[rigs]]
+name = "repo"
+prefix = "repo"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, ".gc", "site.toml"), []byte(fmt.Sprintf(`workspace_name = "demo"
+
+[[rig]]
+name = "repo"
+path = %q
+`, rigDir)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rigDir, ".beads", "config.yaml"), []byte("issue_prefix: repo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeBuiltinImportsFixture(t, cityDir, "core", "bd")
+	setCwd(t, rigDir)
+
+	binDir := t.TempDir()
+	bdPath := filepath.Join(binDir, "bd")
+	if err := os.WriteFile(bdPath, []byte(`#!/bin/sh
+set -eu
+if [ "${1:-}" != "blocked" ]; then
+  echo "unexpected bd command: $*" >&2
+  exit 2
+fi
+printf '[{"id":"repo-blocked"}]\n'
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GC_CITY_PATH", cityDir)
+
+	var stdout, stderr bytes.Buffer
+	if got := doBd([]string{"blocked", "--json"}, &stdout, &stderr); got != 0 {
+		t.Fatalf("doBd(blocked) = %d, want 0; stdout=%q stderr=%q", got, stdout.String(), stderr.String())
+	}
+	if got := stdout.String(); got != "[{\"id\":\"repo-blocked\"}]\n" {
+		t.Fatalf("stdout = %q, want the fake bd JSON unchanged", got)
+	}
+	wantNotice := `gc bd: answering from the rig "repo" store`
+	if !strings.Contains(stderr.String(), wantNotice) {
+		t.Fatalf("stderr = %q, want notice %q", stderr.String(), wantNotice)
 	}
 }
 
@@ -2633,7 +2708,7 @@ prefix = "fe"
 	if err != nil {
 		t.Fatalf("read SQL log: %v", err)
 	}
-	wantQuery := "UPDATE issues SET status = 'open', assignee = '', updated_at = CURRENT_TIMESTAMP WHERE id = 'fe-abc' AND status = 'in_progress' AND assignee = 'worker-1'"
+	wantQuery := "UPDATE issues SET status = 'open', assignee = '', metadata = JSON_REMOVE(COALESCE(metadata, JSON_OBJECT()), '$.\"gc.session_id\"', '$.\"gc.session_name\"', '$.\"gc.sessionId\"', '$.\"gc.sessionName\"'), updated_at = CURRENT_TIMESTAMP WHERE id = 'fe-abc' AND status = 'in_progress' AND assignee = 'worker-1'"
 	if strings.TrimSpace(string(query)) != wantQuery {
 		t.Fatalf("SQL query = %q, want %q", strings.TrimSpace(string(query)), wantQuery)
 	}

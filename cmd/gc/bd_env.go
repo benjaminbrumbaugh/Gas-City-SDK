@@ -746,6 +746,20 @@ func appendBdAutoBackupOptOutEnvKeys(keys []string) []string {
 	return keys
 }
 
+// bdMetricsOptOutEnvKeys disables bd's anonymous command telemetry for every
+// gc-managed invocation. The v1.1.x file-backed queue had no retention cap,
+// so it could create millions of files when delivery was unavailable.
+var bdMetricsOptOutEnvKeys = [...]string{
+	"BD_DISABLE_METRICS",
+}
+
+func appendBdMetricsOptOutEnvKeys(keys []string) []string {
+	for _, key := range bdMetricsOptOutEnvKeys {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
 // bdContributorRoutingOptOutEnvKeys disables bd's fork/contributor
 // auto-routing for gc-managed bd invocations. When a gcy-style store has
 // routing.mode=auto and routing.contributor=~/.beads-planning persisted in
@@ -787,6 +801,7 @@ var recoverManagedBDCommand = func(cityPath string) error {
 	setProjectedDoltEnvEmpty(overrides)
 	applyBdCLIRemoteSyncOptOut(overrides)
 	applyBdAutoBackupOptOut(overrides)
+	applyBdMetricsOptOut(overrides)
 	applyBdContributorRoutingOptOut(overrides)
 	environ := mergeRuntimeEnv(processEnvSnapshotExcludingNativeDoltOpen(), overrides)
 	environ = append(environ, providerLifecycleDoltPathEnv(cityPath)...)
@@ -1442,6 +1457,7 @@ func bdRuntimeEnvWithErrorRecoveryContext(ctx context.Context, cityPath string, 
 	// stuck-looping backup_export sync wedged the whole town on 2026-06-08
 	// (ga-0eq); managed backups run through mol-dog-backup, not this path.
 	applyBdAutoBackupOptOut(env)
+	applyBdMetricsOptOut(env)
 	if !cityUsesBdStoreContract(cityPath) {
 		return env, nil
 	}
@@ -1499,6 +1515,7 @@ func cityRuntimeProcessEnvWithError(cityPath string) ([]string, error) {
 		applyBdContributorRoutingOptOut(source)
 		applyBdCLIRemoteSyncOptOut(source)
 		applyBdAutoBackupOptOut(source)
+		applyBdMetricsOptOut(source)
 		if bound, err := applyCityStorageBindingEnv(source, cityPath); err != nil {
 			clearProjectedDoltEnv(source)
 			mirrorBeadsDoltEnv(source)
@@ -1555,6 +1572,18 @@ func applyBdAutoBackupOptOut(env map[string]string) {
 	}
 	for _, key := range bdAutoBackupOptOutEnvKeys {
 		env[key] = "false"
+	}
+}
+
+// applyBdMetricsOptOut forces bd's telemetry collector off for gc-managed bd
+// invocations. It overrides ambient values so each city remains independent of
+// the operator's user-global bd metrics preference.
+func applyBdMetricsOptOut(env map[string]string) {
+	if env == nil {
+		return
+	}
+	for _, key := range bdMetricsOptOutEnvKeys {
+		env[key] = "1"
 	}
 }
 
@@ -1791,6 +1820,7 @@ func mergeRuntimeEnv(environ []string, overrides map[string]string) []string {
 	}
 	keys = appendBdCLIRemoteSyncOptOutEnvKeys(keys)
 	keys = appendBdAutoBackupOptOutEnvKeys(keys)
+	keys = appendBdMetricsOptOutEnvKeys(keys)
 	keys = appendBdContributorRoutingOptOutEnvKeys(keys)
 	if len(overrides) > 0 {
 		for key := range overrides {

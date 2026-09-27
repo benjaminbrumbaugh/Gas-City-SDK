@@ -98,6 +98,14 @@ const (
 	// orderTrackingRetentionWatchdogDeleteBudget bounds the number of
 	// closed order-tracking beads deleted per watchdog invocation.
 	orderTrackingRetentionWatchdogDeleteBudget = 100
+
+	// Condition-triggered orders are level-triggered: a failed action does not
+	// change the predicate that made the order due. Bound that retry loop at the
+	// controller boundary rather than requiring every order author to implement
+	// its own failure memory in a shell command.
+	conditionFailureLimit       = 3
+	conditionFailureBackoffBase = 5 * time.Second
+	conditionFailureBackoffMax  = 1 * time.Minute
 )
 
 // defaultOrderTrackingDeleteAfterClose is derived from the canonical config
@@ -309,6 +317,7 @@ type memoryOrderDispatcher struct {
 	cacheMu              sync.Mutex
 	lastRunCache         map[string]time.Time
 	gateBackoffUntil     map[string]time.Time
+	conditionFailures    map[string]conditionFailureState
 
 	dispatchCtx    context.Context
 	dispatchCancel context.CancelFunc
@@ -316,6 +325,17 @@ type memoryOrderDispatcher struct {
 	inflightMu   sync.Mutex
 	inflightN    int
 	inflightDone chan struct{} // closed when inflightN returns to 0; nil when idle
+}
+
+// conditionFailureState is deliberately controller-local. A condition that
+// becomes false is the recovery signal, so keeping the state in the live
+// dispatcher lets the order resume without requiring a destructive edit to its
+// tracking history. The state is carried across order rescans/reloads and is
+// rebuilt from zero only when the controller itself restarts.
+type conditionFailureState struct {
+	consecutive int
+	retryAt     time.Time
+	escalated   bool
 }
 
 type orderDispatchTrackingIndex struct {
@@ -797,6 +817,12 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			continue
 		}
 		if !result.Due {
+			// A false predicate is the recovery signal for a condition order. It
+			// clears the controller-local failure episode so a later true
+			// predicate gets a fresh bounded retry budget.
+			if a.Trigger == "condition" {
+				m.resetConditionFailure(scoped)
+			}
 			// A condition check killed by its deadline never proves its
 			// condition, so the order silently never fires. Surface that
 			// distinctly (normal "condition false" is not logged) so a check
@@ -806,6 +832,22 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 				logDispatchError(m.stderr, "gc: order dispatch: %s %s — raise check_timeout if the check needs a slow store read", a.ScopedName(), result.Reason)
 			}
 			continue
+		}
+		if a.Trigger == "condition" {
+			blocked, escalate, failures := m.conditionFailureBlocked(scoped, now)
+			if blocked {
+				if escalate {
+					message := fmt.Sprintf("condition order %s circuit breaker opened after %d consecutive failures; retrying is paused until the condition becomes false", scoped, failures)
+					logDispatchError(m.stderr, "gc: order dispatch: %s", message)
+					m.rec.Record(events.Event{
+						Type:    events.OrderFailed,
+						Actor:   "controller",
+						Subject: scoped,
+						Message: message,
+					})
+				}
+				continue
+			}
 		}
 		if lastRunFromCache && orderTriggerUsesLastRun(a) {
 			refreshedLastRun, err := baseLastRunFn(a.ScopedName())
@@ -1400,6 +1442,118 @@ func (m *memoryOrderDispatcher) carryGateBackoffFrom(prev *memoryOrderDispatcher
 	}
 }
 
+// conditionFailureBlocked applies the retry policy after a condition has
+// evaluated true. The check still runs during the backoff window so a fixed
+// predicate can reset the episode; only the expensive action is suppressed.
+// Once the limit is reached, the breaker stays open until the predicate is
+// observed false. The bool pair is (blocked, emitEscalation).
+func (m *memoryOrderDispatcher) conditionFailureBlocked(scoped string, now time.Time) (bool, bool, int) {
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+	state, ok := m.conditionFailures[scoped]
+	if !ok || state.consecutive == 0 {
+		return false, false, 0
+	}
+	if state.consecutive >= conditionFailureLimit {
+		if !state.escalated {
+			state.escalated = true
+			m.conditionFailures[scoped] = state
+			return true, true, state.consecutive
+		}
+		return true, false, state.consecutive
+	}
+	if now.Before(state.retryAt) {
+		return true, false, state.consecutive
+	}
+	return false, false, state.consecutive
+}
+
+// resetConditionFailure forgets a completed failure episode after the check
+// proves the condition is false. It intentionally does not touch tracking
+// history: the history remains the audit trail, while this map is the live
+// circuit-breaker state.
+func (m *memoryOrderDispatcher) resetConditionFailure(scoped string) {
+	m.cacheMu.Lock()
+	delete(m.conditionFailures, scoped)
+	m.cacheMu.Unlock()
+}
+
+// recordConditionOutcome observes the terminal outcome stamped on the run by
+// dispatchExec/dispatchWisp. Reading the typed tracking record here keeps all
+// failure paths covered, including formula preparation, routing, and exec-env
+// failures, without duplicating retry bookkeeping at each return site.
+func (m *memoryOrderDispatcher) recordConditionOutcome(store beads.Store, a orders.Order, trackingID string) {
+	if a.Trigger != "condition" || trackingID == "" {
+		return
+	}
+	run, err := m.orderFrontDoorFor(store).Get(trackingID)
+	if err != nil {
+		logDispatchError(m.stderr, "gc: order dispatch: reading condition failure outcome for %s: %v", a.ScopedName(), err)
+		return
+	}
+	scoped := a.ScopedName()
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+	switch run.Outcome.Display() {
+	case "success":
+		delete(m.conditionFailures, scoped)
+	case "failed":
+		if m.conditionFailures == nil {
+			m.conditionFailures = make(map[string]conditionFailureState)
+		}
+		state := m.conditionFailures[scoped]
+		state.consecutive++
+		state.retryAt = time.Now().Add(conditionFailureBackoff(state.consecutive))
+		// A new failure after a non-broken episode must be eligible to emit its
+		// single escalation when it reaches the breaker again.
+		if state.consecutive < conditionFailureLimit {
+			state.escalated = false
+		}
+		m.conditionFailures[scoped] = state
+	}
+}
+
+func conditionFailureBackoff(consecutive int) time.Duration {
+	if consecutive < 1 {
+		return 0
+	}
+	delay := conditionFailureBackoffBase
+	for i := 1; i < consecutive && delay < conditionFailureBackoffMax; i++ {
+		if delay > conditionFailureBackoffMax/2 {
+			return conditionFailureBackoffMax
+		}
+		delay *= 2
+	}
+	if delay > conditionFailureBackoffMax {
+		return conditionFailureBackoffMax
+	}
+	return delay
+}
+
+// carryConditionFailureFrom preserves an active retry episode across an order
+// rescan/reload. A controller restart intentionally starts a fresh live
+// episode; the closed run history still records what happened for diagnosis.
+func (m *memoryOrderDispatcher) carryConditionFailureFrom(prev *memoryOrderDispatcher) {
+	if m == nil || prev == nil {
+		return
+	}
+	prev.cacheMu.Lock()
+	defer prev.cacheMu.Unlock()
+	if len(prev.conditionFailures) == 0 {
+		return
+	}
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+	if m.conditionFailures == nil {
+		m.conditionFailures = make(map[string]conditionFailureState, len(prev.conditionFailures))
+	}
+	for scoped, state := range prev.conditionFailures {
+		if existing, ok := m.conditionFailures[scoped]; !ok || state.consecutive > existing.consecutive || (state.consecutive == existing.consecutive && state.retryAt.After(existing.retryAt)) {
+			m.conditionFailures[scoped] = state
+		}
+	}
+}
+
 func orderHistoryCacheKey(orderName string, storeKeys []string) string {
 	return orderName + "\x00" + strings.Join(storeKeys, "\x00")
 }
@@ -1422,6 +1576,9 @@ func (m *memoryOrderDispatcher) dispatchOne(ctx context.Context, store beads.Sto
 	// Defer order matters: doneInflight runs last, after Close makes the
 	// tracking bead outcome observable to a waiting drain.
 	defer m.doneInflight()
+	defer func() {
+		m.recordConditionOutcome(store, a, trackingID)
+	}()
 	defer func() {
 		// The tracking bead was born in the orders store, so its close has to
 		// address that store: closing through the target scope on a split city

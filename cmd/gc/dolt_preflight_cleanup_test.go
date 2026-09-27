@@ -140,6 +140,44 @@ func TestFileOpenedByAnyProcessUsesUnixSocketTableForStaleSocket(t *testing.T) {
 	}
 }
 
+func TestFileOpenedByAnyProcessUsesNativeUnixSocketProbeWithoutLsof(t *testing.T) {
+	socketPath := shortUnixSocketPath(t)
+	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatalf("socket(AF_UNIX): %v", err)
+	}
+	if err := syscall.Bind(fd, &syscall.SockaddrUnix{Name: socketPath}); err != nil {
+		_ = syscall.Close(fd)
+		t.Fatalf("bind unix socket: %v", err)
+	}
+	if err := syscall.Listen(fd, 1); err != nil {
+		_ = syscall.Close(fd)
+		t.Fatalf("listen unix socket: %v", err)
+	}
+	withManagedDoltProcPaths(t, filepath.Join(t.TempDir(), "missing-proc"), filepath.Join(t.TempDir(), "missing-unix"))
+	t.Setenv("PATH", filepath.Join(t.TempDir(), "missing-bin"))
+
+	open, err := fileOpenedByAnyProcess(socketPath)
+	if err != nil {
+		t.Fatalf("fileOpenedByAnyProcess(live socket) error = %v, want nil", err)
+	}
+	if !open {
+		t.Fatal("fileOpenedByAnyProcess(live socket) = false, want true")
+	}
+	if err := syscall.Close(fd); err != nil {
+		t.Fatalf("Close(listener): %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(socketPath) })
+
+	open, err = fileOpenedByAnyProcess(socketPath)
+	if err != nil {
+		t.Fatalf("fileOpenedByAnyProcess(stale socket) error = %v, want nil", err)
+	}
+	if open {
+		t.Fatal("fileOpenedByAnyProcess(stale socket) = true, want false")
+	}
+}
+
 func TestFileOpenedByAnyProcessFromProcHonorsCancelledContext(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "LOCK")
 	ctx, cancel := context.WithCancel(context.Background())

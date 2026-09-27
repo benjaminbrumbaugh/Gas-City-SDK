@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,8 +18,9 @@ import (
 var managedDoltPreflightCleanupFn = preflightManagedDoltCleanup
 
 const (
-	managedDoltProcTimeout = 1500 * time.Millisecond
-	managedDoltLsofTimeout = 3 * time.Second
+	managedDoltProcTimeout            = 1500 * time.Millisecond
+	managedDoltLsofTimeout            = 3 * time.Second
+	managedDoltUnixSocketProbeTimeout = 250 * time.Millisecond
 )
 
 var (
@@ -92,6 +94,9 @@ func fileOpenedByAnyProcess(path string) (bool, error) {
 	if checked {
 		return open, nil
 	}
+	if open, checked := unixSocketOpenStateNative(path); checked {
+		return open, nil
+	}
 	if _, err := exec.LookPath("lsof"); err != nil {
 		if procErr != nil {
 			return false, fmt.Errorf("%w: proc probe timed out and lsof unavailable", errManagedDoltOpenStateUnknown)
@@ -124,6 +129,28 @@ func fileOpenedByAnyProcess(path string) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("lsof %s: %w: %s", path, err, strings.TrimSpace(string(out)))
+}
+
+// unixSocketOpenStateNative checks the only liveness property needed for a
+// managed Dolt socket: whether a listener accepts a local Unix connection.
+// This avoids the process-wide lsof scan on platforms without /proc/net/unix.
+// Unknown errors stay unchecked so callers retain their fail-closed fallback.
+func unixSocketOpenStateNative(path string) (bool, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSocket == 0 {
+		return false, false
+	}
+	conn, err := net.DialTimeout("unix", path, managedDoltUnixSocketProbeTimeout)
+	if err == nil {
+		_ = conn.Close()
+		return true, true
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ENOENT) ||
+		errors.Is(err, syscall.ENOTSOCK) {
+		return false, true
+	}
+	return false, false
 }
 
 func unixSocketOpenStateFromTable(path string) (bool, bool) {

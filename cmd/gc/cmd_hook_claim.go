@@ -38,6 +38,10 @@ const (
 const (
 	hookClaimReleaseReasonUndelivered = "result_undelivered"
 	hookClaimReleaseReasonStraddled   = "claim_window_straddled"
+	// hookClaimReleaseReasonContinuationConflict marks a fresh continuation-step
+	// claim given back because another session already owns a sibling in the
+	// same molecule.
+	hookClaimReleaseReasonContinuationConflict = "continuation_claim_conflict"
 )
 
 var hookClaimMutationTimeout = 10 * time.Second
@@ -142,9 +146,13 @@ type hookClaimOptions struct {
 }
 
 type hookClaimOps struct {
-	Runner             WorkQueryRunner
-	Claim              hookClaimFunc
-	ListContinuation   hookListContinuationFunc
+	Runner           WorkQueryRunner
+	Claim            hookClaimFunc
+	ListContinuation hookListContinuationFunc
+	// ListMoleculeSteps returns the open/in-progress affinity steps for one
+	// molecule. It is the read side of the claim-time ownership fence: a pool
+	// session must not receive a step while another session owns a sibling.
+	ListMoleculeSteps  hookListMoleculeStepsFunc
 	AssignContinuation hookAssignContinuationFunc
 	DrainAck           hookDrainAckFunc
 	// EmitClaimRejected publishes a bead.claim_rejected event when a claim is
@@ -201,6 +209,7 @@ type hookClaimOps struct {
 type (
 	hookClaimFunc              func(context.Context, string, []string, string, string) (beads.Bead, bool, error)
 	hookListContinuationFunc   func(context.Context, string, []string, string, string) ([]beads.Bead, error)
+	hookListMoleculeStepsFunc  func(context.Context, string, []string, string, string) ([]beads.Bead, error)
 	hookAssignContinuationFunc func(context.Context, string, []string, string, string) error
 	hookDrainAckFunc           func(io.Writer) error
 	hookEmitClaimRejectedFunc  func(beadID, existingClaimant, attemptedClaimant string)
@@ -341,6 +350,9 @@ func (ops *hookClaimOps) applyDefaults() {
 	}
 	if ops.ListContinuation == nil {
 		ops.ListContinuation = hookListContinuationWithBdStore
+	}
+	if ops.ListMoleculeSteps == nil {
+		ops.ListMoleculeSteps = hookListMoleculeStepsWithBdStore
 	}
 	if ops.AssignContinuation == nil {
 		ops.AssignContinuation = hookAssignContinuationWithBdStore
@@ -698,6 +710,89 @@ func hookCandidateClaimable(candidate beads.Bead, routeTargets []string) bool {
 		hookClaimMatchesRoute(candidate, routeTargets)
 }
 
+// hookContinuationClaimConflicts returns affinity siblings owned by a session
+// other than the current claimant. It intentionally runs only for graph steps
+// that carry all three affinity facts: a root, a continuation group, and the
+// require marker. A root or an ordinary task has no sibling ownership contract
+// here and keeps the historical claim path.
+func hookContinuationClaimConflicts(bead beads.Bead, opts hookClaimOptions, ops hookClaimOps, dir string) ([]beads.Bead, error) {
+	rootID := strings.TrimSpace(bead.Metadata[beadmeta.RootBeadIDMetadataKey])
+	group := strings.TrimSpace(bead.Metadata[beadmeta.ContinuationGroupMetadataKey])
+	if rootID == "" || group == "" ||
+		strings.TrimSpace(bead.Metadata[beadmeta.SessionAffinityMetadataKey]) != "require" ||
+		hookClaimSessionID(opts.Env) == "" || ops.ListMoleculeSteps == nil {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), hookClaimMutationTimeout)
+	defer cancel()
+	steps, err := ops.ListMoleculeSteps(ctx, dir, opts.Env, rootID, group)
+	if err != nil {
+		return nil, err
+	}
+	identities := hookClaimIdentityCandidates(
+		opts.Assignee,
+		hookClaimSessionID(opts.Env),
+		hookClaimSessionName(opts.Env),
+	)
+	conflicts := make([]beads.Bead, 0, len(steps))
+	for _, step := range steps {
+		if strings.TrimSpace(step.ID) == "" ||
+			!strings.EqualFold(strings.TrimSpace(step.Status), "open") &&
+				!strings.EqualFold(strings.TrimSpace(step.Status), "in_progress") {
+			continue
+		}
+		if hookContinuationStepOwnedBy(step, identities) {
+			continue
+		}
+		if hookContinuationStepOwner(step) == "" {
+			// Unassigned siblings are deliberately left for the continuation
+			// preassignment below; they are not a foreign ownership conflict.
+			continue
+		}
+		conflicts = append(conflicts, step)
+	}
+	return conflicts, nil
+}
+
+func hookContinuationStepOwner(step beads.Bead) string {
+	for _, key := range []string{
+		beadmeta.SessionIDMetadataKey,
+		beadmeta.SessionIDCamelMetadataKey,
+		beadmeta.SessionNameMetadataKey,
+		beadmeta.SessionNameCamelMetadataKey,
+	} {
+		if value := strings.TrimSpace(step.Metadata[key]); value != "" {
+			return value
+		}
+	}
+	return strings.TrimSpace(step.Assignee)
+}
+
+func hookContinuationStepOwnedBy(step beads.Bead, identities []string) bool {
+	if hookClaimHasIdentity(step.Assignee, identities) {
+		return true
+	}
+	for _, key := range []string{
+		beadmeta.SessionIDMetadataKey,
+		beadmeta.SessionIDCamelMetadataKey,
+		beadmeta.SessionNameMetadataKey,
+		beadmeta.SessionNameCamelMetadataKey,
+	} {
+		if hookClaimHasIdentity(step.Metadata[key], identities) {
+			return true
+		}
+	}
+	return false
+}
+
+func hookContinuationClaimConflictCause(rootID string, conflicts []beads.Bead) string {
+	parts := make([]string, 0, len(conflicts))
+	for _, step := range conflicts {
+		parts = append(parts, fmt.Sprintf("%s held by %s", strings.TrimSpace(step.ID), hookContinuationStepOwner(step)))
+	}
+	return fmt.Sprintf("molecule %s has continuation step(s) owned by another session (%s); refusing the claim rather than running the step in a foreign worktree", rootID, strings.Join(parts, "; "))
+}
+
 // reportHookClaimRejected publishes a bead.claim_rejected event (ADR-0009) when a
 // claim was lost to a *different* live claimant. An empty or own-identity assignee
 // means the winner is unknown or is us, so there is no rejection to report.
@@ -761,6 +856,28 @@ func writeHookClaimWorkResultForBead(result hookClaimJSONResult, bead beads.Bead
 		cause := fmt.Sprintf("claim of %s landed after the %s claim window closed (invocation age %s); releasing it rather than parking it",
 			bead.ID, ops.claimWindowOrDefault(), ops.invocationAge().Round(time.Millisecond))
 		return unwindUndeliveredHookClaim(hookClaimReleaseReasonStraddled, cause, bead, opts, ops, dir, stderr)
+	}
+	// A continuation group is a session-affinity contract, not merely a hint for
+	// the post-claim preassignment below. Two pool sessions can win different
+	// sibling CAS claims before either one gets to that preassignment. Re-read
+	// the molecule while this claim is still un-stamped and refuse/release when
+	// another session owns a sibling, so no foreign worktree receives an
+	// executable step. Probe failures fail closed for this affinity-sensitive
+	// path; ordinary beads and non-session callers retain the existing behavior.
+	if conflicts, err := hookContinuationClaimConflicts(bead, opts, ops, dir); err != nil {
+		cause := fmt.Sprintf("could not verify continuation ownership for %s: %v; refusing the claim rather than handing work to an unknown session", bead.ID, err)
+		if minted {
+			return unwindUndeliveredHookClaim(hookClaimReleaseReasonContinuationConflict, cause, bead, opts, ops, dir, stderr)
+		}
+		fmt.Fprintf(stderr, "gc hook --claim: %s\n", cause) //nolint:errcheck
+		return 1
+	} else if len(conflicts) > 0 {
+		cause := hookContinuationClaimConflictCause(bead.ID, conflicts)
+		if minted {
+			return unwindUndeliveredHookClaim(hookClaimReleaseReasonContinuationConflict, cause, bead, opts, ops, dir, stderr)
+		}
+		fmt.Fprintf(stderr, "gc hook --claim: %s\n", cause) //nolint:errcheck
+		return 1
 	}
 	result.RootBeadID = strings.TrimSpace(bead.Metadata[beadmeta.RootBeadIDMetadataKey])
 	result.ContinuationGroup = strings.TrimSpace(bead.Metadata[beadmeta.ContinuationGroupMetadataKey])
@@ -1835,6 +1952,51 @@ func hookListContinuationWithBdStore(_ context.Context, dir string, env []string
 		},
 		TierMode: beads.TierBoth,
 	})
+}
+
+// hookListMoleculeStepsWithBdStore reads both claimable and already-claimed
+// affinity steps. The former are what preassignment will pin; the latter are
+// the ownership evidence that makes a concurrent foreign claim rejectable.
+func hookListMoleculeStepsWithBdStore(_ context.Context, dir string, env []string, rootID, group string) ([]beads.Bead, error) {
+	store := hookClaimBdStore(dir, env, "")
+	return hookListMoleculeStepsFromStore(store, rootID, group)
+}
+
+func hookListMoleculeStepsFromStore(store interface {
+	List(beads.ListQuery) ([]beads.Bead, error)
+}, rootID, group string,
+) ([]beads.Bead, error) {
+	query := func(status string) ([]beads.Bead, error) {
+		return store.List(beads.ListQuery{
+			Status: status,
+			Metadata: map[string]string{
+				beadmeta.RootBeadIDMetadataKey:        rootID,
+				beadmeta.ContinuationGroupMetadataKey: group,
+			},
+			TierMode: beads.TierBoth,
+		})
+	}
+	open, err := query("open")
+	if err != nil {
+		return nil, err
+	}
+	inProgress, err := query("in_progress")
+	if err != nil {
+		return nil, err
+	}
+	steps := make([]beads.Bead, 0, len(open)+len(inProgress))
+	seen := make(map[string]struct{}, len(open)+len(inProgress))
+	for _, step := range append(open, inProgress...) {
+		if step.ID == "" {
+			continue
+		}
+		if _, ok := seen[step.ID]; ok {
+			continue
+		}
+		seen[step.ID] = struct{}{}
+		steps = append(steps, step)
+	}
+	return steps, nil
 }
 
 func hookAssignContinuationWithBdStore(_ context.Context, dir string, env []string, beadID, assignee string) error {

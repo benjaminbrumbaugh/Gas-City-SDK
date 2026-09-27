@@ -2064,7 +2064,7 @@ func TestCollectAssignedWorkBeads_ExcludesOpenNonWorkflowRunTargetAssignedWork(t
 	}
 }
 
-func TestCollectAssignedWorkBeads_ExcludesSessionBeads(t *testing.T) {
+func TestCollectAssignedWorkBeads_ExcludesSessionBeadsIncludesMessagesForWake(t *testing.T) {
 	t.Parallel()
 	store := beads.NewMemStore()
 	// Session bead with assignee — should be excluded.
@@ -2077,13 +2077,15 @@ func TestCollectAssignedWorkBeads_ExcludesSessionBeads(t *testing.T) {
 		t.Fatalf("create session bead: %v", err)
 	}
 	// Message bead with assignee — excluded from Ready() (messages are
-	// delivered via nudge, not the ready/dispatch loop).
-	if _, err := store.Create(beads.Bead{
+	// delivered via the mail path, not the ready/dispatch loop), but included
+	// in the controller's assigned-work wake snapshot.
+	message, err := store.Create(beads.Bead{
 		Title:    "you have mail",
 		Type:     "message",
 		Status:   "open",
 		Assignee: "worker-1",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create message bead: %v", err)
 	}
 	// Real task bead with assignee — should be included (in_progress path).
@@ -2097,11 +2099,15 @@ func TestCollectAssignedWorkBeads_ExcludesSessionBeads(t *testing.T) {
 		t.Fatalf("create task bead: %v", err)
 	}
 	got, _ := collectAssignedWorkBeads(&config.City{}, store)
-	if len(got) != 1 {
-		t.Fatalf("collectAssignedWorkBeads returned %d beads, want 1 (task only): %#v", len(got), got)
+	if len(got) != 2 {
+		t.Fatalf("collectAssignedWorkBeads returned %d beads, want task plus message: %#v", len(got), got)
 	}
-	if got[0].ID != task.ID {
-		t.Fatalf("expected task %q, got %q", task.ID, got[0].ID)
+	seen := map[string]bool{}
+	for _, bead := range got {
+		seen[bead.ID] = true
+	}
+	if !seen[task.ID] || !seen[message.ID] {
+		t.Fatalf("collectAssignedWorkBeads = %#v, want task %s and message %s", got, task.ID, message.ID)
 	}
 }
 
@@ -7411,6 +7417,66 @@ func TestBuildDesiredState_OnDemandNamedSession_AssigneeDemandSignalsPoolDesired
 	dsResult := buildDesiredState("test-city", cityPath, time.Now().UTC(), cfg, runtime.NewFake(), store, io.Discard)
 	if !dsResult.NamedSessionDemand["mayor"] {
 		t.Fatal("NamedSessionDemand should include 'mayor' when assignee-only demand exists")
+	}
+}
+
+func TestBuildDesiredState_OnDemandNamedSession_MessageDemandWakesSession(t *testing.T) {
+	cityPath := t.TempDir()
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Title:    "queued escalation mail",
+		Type:     "message",
+		Status:   "open",
+		Assignee: "mayor",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name:              "mayor",
+			StartCommand:      "true",
+			MaxActiveSessions: intPtr(1),
+			WorkQuery:         "printf ''",
+		}},
+		NamedSessions: []config.NamedSession{{
+			Template: "mayor",
+			Mode:     "on_demand",
+		}},
+	}
+	sp := runtime.NewFake()
+	clk := &clock.Fake{Time: time.Date(2026, 9, 8, 8, 0, 0, 0, time.UTC)}
+	result := buildDesiredStateWithSessionBeads(
+		"test-city", cityPath, clk.Now(), cfg, sp, store, nil, nil, nil, io.Discard,
+	)
+	if !result.NamedSessionDemand["mayor"] {
+		t.Fatal("NamedSessionDemand[mayor] = false for queued message")
+	}
+
+	var stdout, stderr bytes.Buffer
+	cfgNames := configuredSessionNames(cfg, cfg.EffectiveCityName(), store)
+	syncSessionBeads(cityPath, store, result.State, sp, cfgNames, cfg, clk, &stderr, true)
+	sessions, err := loadSessionBeads(store)
+	if err != nil {
+		t.Fatalf("loadSessionBeads: %v", err)
+	}
+	poolDesired := PoolDesiredCounts(ComputePoolDesiredStates(cfg, result.AssignedWorkBeads, sessionInfosFromBeads(sessions), result.ScaleCheckCounts))
+	if poolDesired == nil {
+		poolDesired = make(map[string]int)
+	}
+	mergeNamedSessionDemand(poolDesired, result.NamedSessionDemand, cfg)
+	woken := reconcileSessionBeadsAtPath(
+		context.Background(), cityPath, sessions, result.State, cfgNames,
+		cfg, sp, store, nil, result.AssignedWorkBeads, nil,
+		nil, newDrainTracker(), poolDesired, result.StoreQueryPartial, nil, cfg.EffectiveCityName(),
+		nil, clk, events.Discard, 0, 0, &stdout, &stderr,
+	)
+	if woken != 1 {
+		t.Fatalf("woken = %d, want 1 for mayor message demand; stdout:\n%s\nstderr:\n%s", woken, stdout.String(), stderr.String())
+	}
+	sessionName := config.NamedSessionRuntimeName(cfg.Workspace.Name, cfg.Workspace, "mayor")
+	if startCfg := sp.LastStartConfig(sessionName); startCfg == nil {
+		t.Fatalf("LastStartConfig(%q) = nil; stdout:\n%s\nstderr:\n%s", sessionName, stdout.String(), stderr.String())
 	}
 }
 

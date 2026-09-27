@@ -18,6 +18,9 @@ const (
 	ReasonLedgerUnavailable = "ledger_unavailable"
 	// ReasonLedgerInvalid identifies a ledger that failed durable verification.
 	ReasonLedgerInvalid = "ledger_invalid"
+	// ReasonLedgerValidatorRejected identifies decodable records rejected by
+	// the current application validator rather than damaged storage.
+	ReasonLedgerValidatorRejected = "ledger_validator_rejected"
 	// ReasonServiceClosed identifies a city runtime that has begun shutdown.
 	ReasonServiceClosed = "service_closed"
 

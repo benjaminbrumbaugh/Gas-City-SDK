@@ -104,11 +104,11 @@ func (c PreflightChecker) readMetadata(scope string) (preflightMetadata, error) 
 	path := filepath.Join(scope, ".beads", "metadata.json")
 	data, err := files.ReadFile(path)
 	if err != nil {
-		return preflightMetadata{}, fmt.Errorf("read preflight metadata %s: %w", path, err)
+		return preflightMetadata{}, &PreflightMetadataError{Path: path, Kind: preflightMetadataErrorKind(err), Err: err}
 	}
 	var metadata preflightMetadata
 	if err := json.Unmarshal(data, &metadata); err != nil {
-		return preflightMetadata{}, fmt.Errorf("parse preflight metadata %s: %w", path, err)
+		return preflightMetadata{}, &PreflightMetadataError{Path: path, Kind: PreflightMetadataInvalid, Err: err}
 	}
 	return metadata.trimmed(), nil
 }

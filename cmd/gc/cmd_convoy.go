@@ -16,6 +16,7 @@ import (
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/reviewgate"
 	"github.com/spf13/cobra"
 )
 
@@ -1449,8 +1450,28 @@ func doConvoyCheckAcrossStoresJSON(stores []convoyStoreView, rec events.Recorder
 			continue
 		}
 		allClosed := true
+		candidate := item.bead.Metadata[reviewgate.CandidateMetadataKey]
+		required := reviewgate.DependencySet(item.bead.Metadata[reviewgate.DependenciesMetadataKey])
+		seenRequired := make(map[string]bool, len(required))
 		for _, ch := range children {
+			if required[ch.ID] {
+				seenRequired[ch.ID] = true
+			}
 			if !convoycore.IsTerminalStatus(ch.Status) {
+				allClosed = false
+				break
+			}
+			check := reviewgate.Check
+			if required[ch.ID] {
+				check = reviewgate.CheckRequired
+			}
+			if result := check(ch, candidate); !result.Eligible {
+				allClosed = false
+				break
+			}
+		}
+		for id := range required {
+			if !seenRequired[id] {
 				allClosed = false
 				break
 			}
@@ -1887,8 +1908,26 @@ func autocloseConvoyIfComplete(store beads.Store, rec events.Recorder, convoy be
 	if err != nil || len(children) == 0 {
 		return
 	}
+	required := reviewgate.DependencySet(convoy.Metadata[reviewgate.DependenciesMetadataKey])
+	seenRequired := make(map[string]bool, len(required))
 	for _, ch := range children {
+		if required[ch.ID] {
+			seenRequired[ch.ID] = true
+		}
 		if !convoycore.IsTerminalStatus(ch.Status) {
+			return
+		}
+		candidate := convoy.Metadata[reviewgate.CandidateMetadataKey]
+		check := reviewgate.Check
+		if required[ch.ID] {
+			check = reviewgate.CheckRequired
+		}
+		if result := check(ch, candidate); !result.Eligible {
+			return
+		}
+	}
+	for id := range required {
+		if !seenRequired[id] {
 			return
 		}
 	}

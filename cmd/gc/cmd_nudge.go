@@ -124,6 +124,12 @@ type nudgeTarget struct {
 	sessionID         string
 	continuationEpoch string
 	sessionName       string
+	// These fields are populated only from a complete open-session census.
+	// They allow a pinned session ID to be treated as a stale address after
+	// replacement without weakening the fence between live sibling sessions.
+	liveSessionIDs              map[string]struct{}
+	rebindReplacedSession       bool
+	replacementQueueAgentOwners map[string]int
 }
 
 type nudgeStatusJSON struct {
@@ -1828,8 +1834,9 @@ func queuedNudgeIDs(items []queuedNudge) []string {
 }
 
 // queuedNudgeMatchesTargetFence reports whether a claimed nudge may be
-// delivered to target. The fence exists to stop a nudge queued for one session
-// from being handed to a DIFFERENT session; it is not a staleness check.
+// delivered to target. The fence exists to stop a nudge queued for one live
+// session from being handed to a DIFFERENT live session; a complete dispatcher
+// census may explicitly prove that the pinned session was replaced.
 //
 // The continuation epoch is a per-session generation counter, and waking a
 // wake_mode=fresh named session rotates it. A nudge records the epoch at
@@ -1847,7 +1854,7 @@ func queuedNudgeIDs(items []queuedNudge) []string {
 // and stays fenced.
 func queuedNudgeMatchesTargetFence(target nudgeTarget, item queuedNudge) bool {
 	if item.SessionID != "" {
-		return item.SessionID == target.sessionID
+		return item.SessionID == target.sessionID || queuedNudgeTargetsReplacedSession(target, item)
 	}
 	if item.ContinuationEpoch != "" && item.ContinuationEpoch != target.continuationEpoch {
 		return false
@@ -1863,12 +1870,28 @@ func queuedNudgeClaimableForTarget(target nudgeTarget, item queuedNudge) bool {
 		if target.sessionID == "" {
 			return false
 		}
-		return item.SessionID == target.sessionID
+		return item.SessionID == target.sessionID || queuedNudgeTargetsReplacedSession(target, item)
 	}
 	if item.ContinuationEpoch != "" && target.continuationEpoch == "" {
 		return false
 	}
 	return true
+}
+
+// queuedNudgeTargetsReplacedSession permits a stale session fence to rebind
+// only when the pinned session is absent from a complete open-session census,
+// and only when this queue-agent spelling identifies one current session. A
+// live sibling with the same agent key keeps the item fenced; an unavailable
+// census keeps the old fail-closed behavior.
+func queuedNudgeTargetsReplacedSession(target nudgeTarget, item queuedNudge) bool {
+	if item.SessionID == "" || target.sessionID == "" || item.SessionID == target.sessionID ||
+		!target.rebindReplacedSession || target.liveSessionIDs == nil {
+		return false
+	}
+	if _, live := target.liveSessionIDs[item.SessionID]; live {
+		return false
+	}
+	return target.replacementQueueAgentOwners[strings.TrimSpace(item.Agent)] == 1
 }
 
 // nudgeMaintenanceStore lazily opens the Dolt-backed nudge front-door store the

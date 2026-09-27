@@ -6,6 +6,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
+	"github.com/gastownhall/gascity/internal/reviewgate"
 )
 
 // ConvoyDeps bundles the ambient dependencies for convoy operations. Store
@@ -101,9 +102,29 @@ func ConvoyProgress(_ ConvoyDeps, classes MemberClasses, id string) (ConvoyProgr
 
 	total := len(children)
 	closed := 0
+	eligible := true
+	candidate := b.Metadata[reviewgate.CandidateMetadataKey]
+	required := reviewgate.DependencySet(b.Metadata[reviewgate.DependenciesMetadataKey])
+	seenRequired := make(map[string]bool, len(required))
 	for _, c := range children {
+		if required[c.ID] {
+			seenRequired[c.ID] = true
+		}
 		if IsTerminalStatus(c.Status) {
 			closed++
+			check := reviewgate.Check
+			if required[c.ID] {
+				check = reviewgate.CheckRequired
+			}
+			if result := check(c, candidate); !result.Eligible {
+				eligible = false
+			}
+		}
+	}
+	for id := range required {
+		if !seenRequired[id] {
+			eligible = false
+			break
 		}
 	}
 
@@ -111,7 +132,7 @@ func ConvoyProgress(_ ConvoyDeps, classes MemberClasses, id string) (ConvoyProgr
 		ConvoyID: id,
 		Total:    total,
 		Closed:   closed,
-		Complete: total > 0 && closed == total,
+		Complete: total > 0 && closed == total && eligible,
 	}, nil
 }
 

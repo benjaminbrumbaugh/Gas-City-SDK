@@ -49,6 +49,9 @@ var (
 	// ErrAdmissionCommit classifies a lifecycle commit failure after the
 	// admission callback without exposing storage details.
 	ErrAdmissionCommit = errors.New("routing decision admission commit failed")
+	// ErrStoredDecisionInvalid classifies a decodable stored payload rejected
+	// by the current application validator. It is distinct from corruption.
+	ErrStoredDecisionInvalid = errors.New("stored routing decision payload failed validation")
 )
 
 var (
@@ -394,7 +397,10 @@ func (store *Store) ListDecisions(options ListOptions) (DecisionPage, error) {
 		lastScanned := ""
 		for key != nil && scanned < maxActiveQuery && len(page.Items) < options.Limit {
 			var record Record
-			if err := decodeRecord(value, &record); err != nil || string(key) != record.Payload.DecisionID {
+			if err := decodeRecord(value, &record); err != nil {
+				return err
+			}
+			if string(key) != record.Payload.DecisionID {
 				return ErrStoreCorrupt
 			}
 			scanned++
@@ -476,7 +482,10 @@ func (store *Store) PurgeTerminal(options PurgeOptions) (PurgeResult, error) {
 		lastScanned := ""
 		for key != nil && result.Scanned < options.Limit {
 			var record Record
-			if err := decodeRecord(value, &record); err != nil || string(key) != record.Payload.DecisionID {
+			if err := decodeRecord(value, &record); err != nil {
+				return err
+			}
+			if string(key) != record.Payload.DecisionID {
 				return ErrStoreCorrupt
 			}
 			result.Scanned++
@@ -881,7 +890,13 @@ func (store *Store) ActiveApproved(now time.Time, limit int, verifier Verifier) 
 			var record Record
 			decisionID := indexDecisionID(key)
 			value := tx.Bucket(bucketDecisions).Get([]byte(decisionID))
-			if value == nil || decodeRecord(value, &record) != nil || !bytes.Equal(key, stateIndexKey(record)) {
+			if value == nil {
+				return ErrStoreCorrupt
+			}
+			if err := decodeRecord(value, &record); err != nil {
+				return err
+			}
+			if !bytes.Equal(key, stateIndexKey(record)) {
 				return ErrStoreCorrupt
 			}
 			if !record.Payload.IsActiveAt(now) {
@@ -915,7 +930,13 @@ func (store *Store) ExpireDue(now time.Time, limit int, tokenFor func(string) st
 			for key, _ := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix) && len(candidates) < limit; key, _ = cursor.Next() {
 				var record Record
 				value := tx.Bucket(bucketDecisions).Get([]byte(indexDecisionID(key)))
-				if value == nil || decodeRecord(value, &record) != nil || !bytes.Equal(key, stateIndexKey(record)) {
+				if value == nil {
+					return ErrStoreCorrupt
+				}
+				if err := decodeRecord(value, &record); err != nil {
+					return err
+				}
+				if !bytes.Equal(key, stateIndexKey(record)) {
 					return ErrStoreCorrupt
 				}
 				if record.Payload.ExpiresAt.After(now) {
@@ -1161,7 +1182,10 @@ func decodeRecord(data []byte, record *Record) error {
 	if err := decoder.Decode(record); err != nil || requireJSONEOF(decoder) != nil {
 		return ErrStoreCorrupt
 	}
-	if err := record.Payload.Validate(); err != nil || record.RecordRevision == 0 || record.StoreRevision == 0 || !knownState(record.State) {
+	if err := record.Payload.Validate(); err != nil {
+		return fmt.Errorf("%w: %w: decision %q payload: %v", ErrInvalidDecision, ErrStoredDecisionInvalid, record.Payload.DecisionID, err)
+	}
+	if record.RecordRevision == 0 || record.StoreRevision == 0 || !knownState(record.State) {
 		return ErrStoreCorrupt
 	}
 	return nil
@@ -1294,7 +1318,7 @@ func classifyStoreError(err error) error {
 	if err == nil {
 		return nil
 	}
-	for _, sentinel := range []error{ErrStoreLocked, ErrUnsupportedSchema, ErrStoreCorrupt, ErrDecisionNotFound, ErrDecisionExists, ErrStaleRevision, ErrInvalidTransition, ErrIdempotencyConflict, ErrAdmissionCallback, ErrAdmissionCommit, ErrInvalidDecision, ErrAuthorizationRequired, ErrUnknownAuthority, ErrInvalidSignature} {
+	for _, sentinel := range []error{ErrStoreLocked, ErrUnsupportedSchema, ErrStoreCorrupt, ErrDecisionNotFound, ErrDecisionExists, ErrStaleRevision, ErrInvalidTransition, ErrIdempotencyConflict, ErrAdmissionCallback, ErrAdmissionCommit, ErrInvalidDecision, ErrStoredDecisionInvalid, ErrAuthorizationRequired, ErrUnknownAuthority, ErrInvalidSignature} {
 		if errors.Is(err, sentinel) {
 			return err
 		}

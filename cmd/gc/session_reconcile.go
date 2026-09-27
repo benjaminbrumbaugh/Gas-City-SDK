@@ -505,6 +505,7 @@ func checkStability(info sessionpkg.Info, cfg *config.City, alive bool, dt *drai
 func checkRateLimitStability(info sessionpkg.Info, cfg *config.City, alive bool, dt *drainTracker, sessFront *sessionpkg.Store, clk clock.Clock, peek func(lines int) (string, error)) (sessionpkg.Info, bool, error) {
 	facts := sessionExitFactsInfo(info, cfg, alive, dt, clk)
 	facts.ScreenAvailable = peek != nil
+	var resetAt time.Time
 	dec := sessionpkg.DecideSessionExit(facts)
 	for dec == sessionpkg.ExitGatherScreen {
 		facts.Screen = sessionpkg.ScreenOther
@@ -518,6 +519,7 @@ func checkRateLimitStability(info sessionpkg.Info, cfg *config.City, alive bool,
 			}
 			if runtime.ContainsProviderRateLimitScreen(content) {
 				facts.Screen = sessionpkg.ScreenRateLimit
+				resetAt, _ = runtime.ProviderRateLimitResetAt(content, clk.Now())
 			}
 		}
 		dec = sessionpkg.DecideSessionExit(facts)
@@ -525,7 +527,7 @@ func checkRateLimitStability(info sessionpkg.Info, cfg *config.City, alive bool,
 	if dec != sessionpkg.ExitRateLimitQuarantine {
 		return info, false, nil
 	}
-	next, err := recordRateLimitQuarantine(info, sessFront, clk)
+	next, err := recordRateLimitQuarantine(info, sessFront, clk, resetAt)
 	if err != nil {
 		return info, false, err
 	}
@@ -574,8 +576,16 @@ func clearLastWokeAt(info sessionpkg.Info, sessFront *sessionpkg.Store) sessionp
 // advances the typed snapshot with the quarantine write (front-door migration
 // Step 6d, write-returns-Info); returns (info unchanged, err) on persist failure
 // (ApplyPatchInfo leaves the snapshot pinned to the rejected write).
-func recordRateLimitQuarantine(info sessionpkg.Info, sessFront *sessionpkg.Store, clk clock.Clock) (sessionpkg.Info, error) {
-	batch := sessionpkg.RateLimitQuarantinePatch(clk.Now().Add(defaultRateLimitQuarantineDuration))
+func recordRateLimitQuarantine(info sessionpkg.Info, sessFront *sessionpkg.Store, clk clock.Clock, resetAt time.Time) (sessionpkg.Info, error) {
+	now := clk.Now()
+	until := now.Add(defaultRateLimitQuarantineDuration)
+	if !resetAt.IsZero() {
+		until = resetAt
+		if until.Before(now) {
+			until = now
+		}
+	}
+	batch := sessionpkg.RateLimitQuarantinePatch(until)
 	next, err := sessFront.ApplyPatchInfo(info, batch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "recordRateLimitQuarantine: SetMetadataBatch %s: %v\n", info.ID, err) //nolint:errcheck

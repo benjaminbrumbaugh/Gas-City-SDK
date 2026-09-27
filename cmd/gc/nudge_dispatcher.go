@@ -190,8 +190,30 @@ func dispatchAllQueuedNudges(cityPath string, cfg *config.City, store, sessStore
 	// open session this tick. See the no-open-session accounting after the loop
 	// for why the negative space matters.
 	coveredAgents := make(map[string]bool, len(pendingAgents))
-	for _, info := range sessionBeads.OpenInfos() {
-		target := resolveNudgeTargetFromSessionInfo(cityPath, cfg, info)
+	openInfos := sessionBeads.OpenInfos()
+	liveSessionIDs := make(map[string]struct{}, len(openInfos))
+	targets := make([]nudgeTarget, len(openInfos))
+	replacementQueueAgentOwners := make(map[string]int)
+	canRebindReplacedSession := sessionBeads.LoadError() == nil
+	for i, info := range openInfos {
+		liveSessionIDs[info.ID] = struct{}{}
+		targets[i] = resolveNudgeTargetFromSessionInfo(cityPath, cfg, info)
+		seenKeys := make(map[string]struct{})
+		for _, key := range targets[i].queueKeys() {
+			if _, seen := seenKeys[key]; seen {
+				continue
+			}
+			seenKeys[key] = struct{}{}
+			replacementQueueAgentOwners[key]++
+		}
+	}
+	for i, info := range openInfos {
+		target := targets[i]
+		if canRebindReplacedSession {
+			target.liveSessionIDs = liveSessionIDs
+			target.rebindReplacedSession = true
+			target.replacementQueueAgentOwners = replacementQueueAgentOwners
+		}
 		if target.sessionName == "" {
 			skipCounts["no-target"]++
 			logNudgeDispatchSkip(debugOut, "no-target", info.AgentName, info.ID, "")

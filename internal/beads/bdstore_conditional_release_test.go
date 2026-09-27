@@ -10,6 +10,8 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
+const testReleaseClearedIdentitySQL = `metadata = JSON_REMOVE(COALESCE(metadata, JSON_OBJECT()), '$."gc.session_id"', '$."gc.session_name"', '$."gc.sessionId"', '$."gc.sessionName"')`
+
 // bdExit stands in for the *exec.ExitError the bd runner wraps. bdExitCode
 // matches the ExitCode() method rather than the concrete type precisely so this
 // classifier can be driven without spawning a process: the untagged
@@ -120,7 +122,10 @@ func TestReleaseIfCurrentPrefersTheNativeVerb(t *testing.T) {
 	if !released {
 		t.Fatal("ReleaseIfCurrent released = false, want true")
 	}
-	want := []string{"bd", "update", "bd-42", "--if-assignee", "worker-1", "--if-status", "in_progress", "--status", "open", "--assignee", ""}
+	want := []string{
+		"bd", "update", "bd-42", "--if-assignee", "worker-1", "--if-status", "in_progress", "--status", "open", "--assignee", "",
+		"--set-metadata", "gc.session_id=", "--set-metadata", "gc.session_name=", "--set-metadata", "gc.sessionId=", "--set-metadata", "gc.sessionName=",
+	}
 	calls := runner.releaseVerbArgv()
 	if len(calls) != 1 {
 		t.Fatalf("calls = %v, want exactly one", calls)
@@ -324,7 +329,7 @@ func TestReleaseIfCurrentFallsBackToSQLOnAnOldBd(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("calls = %v, want the verb probe then the SQL fallback", calls)
 	}
-	wantQuery := "UPDATE issues SET status = 'open', assignee = '', updated_at = CURRENT_TIMESTAMP" +
+	wantQuery := "UPDATE issues SET status = 'open', assignee = '', " + testReleaseClearedIdentitySQL + ", updated_at = CURRENT_TIMESTAMP" +
 		" WHERE id = 'bd-42' AND status = 'in_progress' AND assignee = 'worker-''1'"
 	want := []string{"bd", "sql", "--json", wantQuery}
 	if strings.Join(calls[1], "\x00") != strings.Join(want, "\x00") {

@@ -713,6 +713,11 @@ func truncateRawOutput(data []byte, maxBytes int) string {
 // store bridge, t3bridge, libstore, provider lifecycle — current and future.
 const bdAutoBackupOptOutEnvKey = "BD_BACKUP_ENABLED"
 
+// bdMetricsOptOutEnvKey disables bd's anonymous command telemetry. The
+// upstream v1.1.x file queue had no retention cap, so every gc-spawned bd
+// command must opt out regardless of the operator's user-global setting.
+const bdMetricsOptOutEnvKey = "BD_DISABLE_METRICS"
+
 // execEnvFor assembles the child environment for a runner exec. For bd
 // commands the auto-backup opt-out is injected as a baseline, replacing any
 // value inherited from the parent process (matching the unconditional
@@ -722,6 +727,7 @@ const bdAutoBackupOptOutEnvKey = "BD_BACKUP_ENABLED"
 func execEnvFor(name string, baseEnv []string, overrides map[string]string) []string {
 	if name == "bd" {
 		baseEnv = append(envWithout(baseEnv, bdAutoBackupOptOutEnvKey), bdAutoBackupOptOutEnvKey+"=false")
+		baseEnv = append(envWithout(baseEnv, bdMetricsOptOutEnvKey), bdMetricsOptOutEnvKey+"=1")
 	}
 	return mergeEnv(baseEnv, overrides)
 }
@@ -1385,7 +1391,7 @@ func (s *BdStore) ReleaseIfCurrent(id, expectedAssignee string) (bool, error) {
 		}
 		s.latchConditionalReleaseUnsupported()
 	}
-	query := "UPDATE issues SET status = 'open', assignee = '', updated_at = CURRENT_TIMESTAMP" +
+	query := "UPDATE issues SET status = 'open', assignee = '', " + releaseClearedIdentitySQL + ", updated_at = CURRENT_TIMESTAMP" +
 		" WHERE id = " + bdSQLStringLiteral(id) +
 		" AND status = 'in_progress'" +
 		" AND assignee = " + bdSQLStringLiteral(expectedAssignee)
@@ -1413,7 +1419,7 @@ func (s *BdStore) releaseIfCurrentViaEmbeddedDoltSQL(id, expectedAssignee string
 	if !ok {
 		return false, fmt.Errorf("bd release-if-current embedded fallback: %w", ErrConditionalReleaseUnsupported)
 	}
-	query := "UPDATE issues SET status = 'open', assignee = '', updated_at = CURRENT_TIMESTAMP" +
+	query := "UPDATE issues SET status = 'open', assignee = '', " + releaseClearedIdentitySQL + ", updated_at = CURRENT_TIMESTAMP" +
 		" WHERE id = " + bdSQLStringLiteral(id) +
 		" AND status = 'in_progress'" +
 		" AND assignee = " + bdSQLStringLiteral(expectedAssignee) +

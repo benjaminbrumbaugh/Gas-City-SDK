@@ -3,6 +3,7 @@ package beads
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -132,6 +133,16 @@ func OpenStoreAtForCity(ctx context.Context, opts StoreOpenOptions) (StoreOpenRe
 			PreflightReason:     err.Error(),
 		}
 		logNativeUnavailable(opts.Logger, opts.ScopeRoot, diag.PreflightGate, diag.PreflightReason)
+		var metadataErr *contract.PreflightMetadataError
+		if errors.As(err, &metadataErr) {
+			// A missing or unreadable pointer cannot be made usable by bd's
+			// fallback: older bd binaries turn the same condition into a
+			// misleading legacy-migration instruction. Return the typed,
+			// non-destructive repair diagnosis instead. A checker with no bd
+			// context reader still falls back when metadata is present; this
+			// special case is only the missing/unreadable pointer boundary.
+			return StoreOpenResult{Diagnostic: diag}, fmt.Errorf("beads preflight requires metadata repair: %w", err)
+		}
 		return opts.openBdFallback(provider, diag)
 	}
 	diag := diagnosticFromPreflight(result)

@@ -2042,6 +2042,81 @@ func TestOrderDispatchExecFailure(t *testing.T) {
 	}
 }
 
+func TestOrderDispatchConditionFailureBackoffAndCircuitBreaker(t *testing.T) {
+	store := beads.NewMemStore()
+	var rec memRecorder
+	var stderr bytes.Buffer
+	var calls int
+	failingExec := func(context.Context, string, string, []string) ([]byte, error) {
+		calls++
+		return nil, fmt.Errorf("deterministic failure")
+	}
+	a := orders.Order{
+		Name:    "condition-fail",
+		Trigger: "condition",
+		Check:   "true",
+		Exec:    "scripts/fail.sh",
+	}
+	mad := buildOrderDispatcherFromListExec([]orders.Order{a}, store, nil, failingExec, &rec).(*memoryOrderDispatcher)
+	mad.stderr = &stderr
+
+	dispatch := func(at time.Time) {
+		mad.dispatch(context.Background(), t.TempDir(), at)
+		if !mad.drain(context.Background()) {
+			t.Fatal("condition failure dispatch did not drain")
+		}
+	}
+
+	dispatch(time.Now())
+	if calls != 1 {
+		t.Fatalf("initial failing action calls = %d, want 1", calls)
+	}
+
+	// A due condition does not immediately re-fire during the first backoff.
+	dispatch(time.Now().Add(time.Second))
+	if calls != 1 {
+		t.Fatalf("calls during retry backoff = %d, want 1", calls)
+	}
+
+	// The second and third attempts are permitted only after their increasing
+	// backoffs. The third failure opens the breaker.
+	dispatch(time.Now().Add(conditionFailureBackoffBase + time.Second))
+	dispatch(time.Now().Add(conditionFailureBackoffBase*3 + time.Second))
+	if calls != 3 {
+		t.Fatalf("calls after bounded retries = %d, want 3", calls)
+	}
+
+	// Once open, the breaker suppresses every later due tick and emits exactly
+	// one operator-facing escalation.
+	dispatch(time.Now().Add(time.Hour))
+	dispatch(time.Now().Add(2 * time.Hour))
+	if calls != 3 {
+		t.Fatalf("calls after breaker opened = %d, want 3", calls)
+	}
+	escalations := 0
+	for _, event := range rec.events {
+		if event.Subject == a.Name && strings.Contains(event.Message, "circuit breaker opened") {
+			escalations++
+		}
+	}
+	if escalations != 1 {
+		t.Fatalf("circuit-breaker escalations = %d, want 1; events=%#v", escalations, rec.events)
+	}
+	if got := len(trackingBeads(t, store, "order-run:"+a.Name)); got != conditionFailureLimit {
+		t.Fatalf("tracking runs = %d, want %d", got, conditionFailureLimit)
+	}
+
+	// A false predicate closes the episode; a later true predicate gets a new
+	// bounded budget rather than remaining permanently disabled.
+	mad.aa[0].Check = "false"
+	dispatch(time.Now().Add(3 * time.Hour))
+	mad.aa[0].Check = "true"
+	dispatch(time.Now().Add(4 * time.Hour))
+	if calls != 4 {
+		t.Fatalf("calls after predicate recovery = %d, want 4", calls)
+	}
+}
+
 func TestOrderDispatchExecEnvFailureUsesEnvFailureLabel(t *testing.T) {
 	t.Setenv("GC_BEADS", "bd")
 

@@ -6,8 +6,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -751,6 +751,51 @@ func TestNoRuntimeRegistryAccess(t *testing.T) {
 	}
 }
 
+// TestCensusIgnoresUntrackedNestedCheckout proves the source boundary is the
+// repository's tracked publication surface, not whatever Go files happen to
+// be below the module root. A nested worktree can contain a historical
+// constructor with the same name; it must not change the real census.
+func TestCensusIgnoresUntrackedNestedCheckout(t *testing.T) {
+	root := censusModuleRoot(t)
+	tempRoot := filepath.Join(root, "temp")
+	tempRootCreated := false
+	if _, err := os.Stat(tempRoot); err != nil {
+		if !os.IsNotExist(err) {
+			t.Fatalf("checking ignored temp root: %v", err)
+		}
+		if err := os.MkdirAll(tempRoot, 0o755); err != nil {
+			t.Fatalf("creating ignored temp root: %v", err)
+		}
+		tempRootCreated = true
+	}
+	fixture, err := os.MkdirTemp(tempRoot, "census-ignored-")
+	if err != nil {
+		t.Fatalf("creating ignored nested fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(fixture)
+		if tempRootCreated {
+			_ = os.Remove(tempRoot)
+		}
+	})
+	fixtureFile := filepath.Join(fixture, "cmd", "gc", "storage_provider_bundle.go")
+	if err := os.MkdirAll(filepath.Dir(fixtureFile), 0o755); err != nil {
+		t.Fatalf("creating ignored fixture parent: %v", err)
+	}
+	if err := os.WriteFile(fixtureFile, []byte("package main\nfunc NewProviderRegistry() {}\n"), 0o644); err != nil {
+		t.Fatalf("writing ignored fixture: %v", err)
+	}
+
+	for _, source := range censusSources(t) {
+		if strings.HasPrefix(source.rel, "temp/") {
+			t.Fatalf("tracked census included ignored nested source %s", source.rel)
+		}
+	}
+	if declarations := censusDeclarations(t, "NewProviderRegistry"); declarations != 1 {
+		t.Fatalf("ignored nested constructor changed real declaration count to %d", declarations)
+	}
+}
+
 // TestUnpublishedStoreSetUnreachable proves the candidate and its authority
 // expose no field and cross no exported signature except Build and Publish.
 func TestUnpublishedStoreSetUnreachable(t *testing.T) {
@@ -898,41 +943,33 @@ func censusModuleRoot(t *testing.T) string {
 	}
 }
 
-// censusSources reads every non-test Go file in the module. It fails when the
-// walk returns implausibly few files, so a broken walk cannot silently turn
-// every census into a pass.
+// censusSources reads every tracked non-test Go file in the module. The Git
+// index is the publication boundary: ignored nested worktrees and scratch
+// directories under the module root are not part of the source under test. It
+// fails when enumeration returns implausibly few files, so a broken query
+// cannot silently turn every census into a pass.
 func censusSources(t *testing.T) []censusSource {
 	t.Helper()
 	root := censusModuleRoot(t)
 	var sources []censusSource
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	output, err := exec.Command("git", "-C", root, "ls-files", "-z", "--", "*.go").CombinedOutput()
+	if err != nil {
+		t.Fatalf("listing tracked Go files in %s: %v: %s", root, err, strings.TrimSpace(string(output)))
+	}
+	for _, rawPath := range bytes.Split(output, []byte{0}) {
+		if len(rawPath) == 0 {
+			continue
 		}
-		if entry.IsDir() {
-			switch entry.Name() {
-			case ".git", ".claude", "node_modules", "vendor", "testdata":
-				return fs.SkipDir
-			}
-			return nil
+		relative := filepath.ToSlash(string(rawPath))
+		if strings.HasSuffix(relative, "_test.go") {
+			continue
 		}
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			return nil
-		}
+		path := filepath.Join(root, filepath.FromSlash(relative))
 		source, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			t.Fatalf("reading tracked source %s: %v", relative, err)
 		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		sources = append(sources, censusSource{rel: filepath.ToSlash(relative), src: source})
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walking %s: %v", root, err)
+		sources = append(sources, censusSource{rel: relative, src: source})
 	}
 	if len(sources) < censusMinimumFiles {
 		t.Fatalf("census scanned %d non-test Go files, want at least %d; the module walk is broken", len(sources), censusMinimumFiles)

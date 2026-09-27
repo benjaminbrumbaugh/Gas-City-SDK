@@ -305,6 +305,9 @@ func (m *MemStore) ReleaseIfCurrent(id, expectedAssignee string) (bool, error) {
 		}
 		m.beads[i].Status = "open"
 		m.beads[i].Assignee = ""
+		for _, key := range releaseClearedIdentityKeys {
+			delete(m.beads[i].Metadata, key)
+		}
 		m.beads[i].UpdatedAt = time.Now()
 		m.beads[i].Revision++
 		m.beads[i].ClaimFence++ // clearing an owner is an ownership transition
