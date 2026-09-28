@@ -182,6 +182,97 @@ func TestCityRuntimeRepairsUncompensatedApprovedStamp(t *testing.T) {
 	}
 }
 
+func TestRoutingDecisionServiceIngestReconcilesApprovedImmediately(t *testing.T) {
+	fixture := newApprovedRoutingDecisionFixture(t, "decision-ingest-template")
+	ledger, err := routingdecision.OpenStore(t.TempDir(), routingdecision.StoreOptions{Now: fixture.cr.routingDecisionNow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ledger.Close() })
+	payload := fixture.payload
+	payload.DecisionID = "decision-ingest-reconcile"
+	payload.BindingID = routingdecision.BindingID(payload)
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := routingdecision.NewVerifier(map[string]ed25519.PublicKey{"board": publicKey})
+	approval := routingdecision.ApprovalPayload{
+		Schema: routingdecision.SchemaVersion, DecisionID: payload.DecisionID, BindingID: payload.BindingID,
+		AuthorityID: "board", ApprovedAt: fixture.cr.routingDecisionNow(),
+	}
+	signing, err := routingdecision.SigningBytes(payload, approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := routingdecision.Signature{
+		Algorithm: routingdecision.SignatureAlgorithmEd25519, AuthorityID: "board", Value: ed25519.Sign(privateKey, signing),
+	}
+	fixture.cr.routingDecisionStore = ledger
+	fixture.cr.routingDecisionVerifier = &verifier
+	service := &cityRoutingDecisionService{
+		store: ledger, verifier: &verifier, status: routingdecision.AvailabilityReady,
+		reconcile: fixture.cr.reconcileRoutingDecisionsAndLog,
+	}
+	fixture.cr.routingDecisionService = service
+	result, err := service.Ingest(context.Background(), routingdecision.IngestApprovedRequest{
+		Payload: payload, Approval: approval, Signature: signature, IdempotencyToken: "ingest-" + payload.DecisionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Record.State != routingdecision.StateAdmitted || result.Receipt.State != routingdecision.StateAdmitted || result.Record.RecordRevision != result.Receipt.RecordRevision {
+		t.Fatalf("ingest response = %+v, want current admitted record and receipt", result)
+	}
+	record, err := ledger.Get(payload.DecisionID)
+	if err != nil || record.State != routingdecision.StateAdmitted {
+		t.Fatalf("post-ingest lifecycle = (%+v, %v), want admitted", record, err)
+	}
+
+	payload2 := payload
+	payload2.DecisionID = "decision-ingest-close-race"
+	payload2.BindingID = routingdecision.BindingID(payload2)
+	approval2 := approval
+	approval2.DecisionID = payload2.DecisionID
+	approval2.BindingID = payload2.BindingID
+	signing2, err := routingdecision.SigningBytes(payload2, approval2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature2 := signature
+	signature2.Value = ed25519.Sign(privateKey, signing2)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	raceService := &cityRoutingDecisionService{
+		store: ledger, verifier: &verifier, status: routingdecision.AvailabilityReady,
+		reconcile: func() { close(entered); <-release },
+	}
+	ingestDone := make(chan error, 1)
+	go func() {
+		_, ingestErr := raceService.Ingest(context.Background(), routingdecision.IngestApprovedRequest{
+			Payload: payload2, Approval: approval2, Signature: signature2, IdempotencyToken: "ingest-" + payload2.DecisionID,
+		})
+		ingestDone <- ingestErr
+	}()
+	<-entered
+	closeDone := make(chan struct{})
+	go func() { raceService.Close(); close(closeDone) }()
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned while accepted ingest reconciliation was in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-ingestDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not complete after ingest reconciliation returned")
+	}
+}
+
 func TestCityRuntimeAppliesApprovedRoutingDecisionMetadataOnly(t *testing.T) {
 	fixture := newApprovedRoutingDecisionFixture(t, "decision-ready")
 
