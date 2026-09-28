@@ -1542,16 +1542,20 @@ type SlingRequest struct {
 	Bead           string
 	Formula        string
 	AttachedBeadID string
-	Title          string
-	Vars           map[string]string
-	ScopeKind      string
-	ScopeRef       string
-	Force          bool
-	Reassign       bool
-	Merge          string
-	NoConvoy       bool
-	Owned          bool
-	NoFormula      bool
+	// LaunchOrigin is an opaque actor identity captured by the launching CLI.
+	// The API client transports it without parsing or deriving provider,
+	// harness, role, runtime, URL, or credential information.
+	LaunchOrigin string
+	Title        string
+	Vars         map[string]string
+	ScopeKind    string
+	ScopeRef     string
+	Force        bool
+	Reassign     bool
+	Merge        string
+	NoConvoy     bool
+	Owned        bool
+	NoFormula    bool
 }
 
 // SlingResult is the outcome of a sling mutation.
@@ -1581,6 +1585,7 @@ func (c *Client) Sling(req SlingRequest) (SlingResult, error) {
 	setStrPtr(&body.Bead, req.Bead)
 	setStrPtr(&body.Formula, req.Formula)
 	setStrPtr(&body.AttachedBeadId, req.AttachedBeadID)
+	setStrPtr(&body.LaunchOrigin, req.LaunchOrigin)
 	setStrPtr(&body.Title, req.Title)
 	setStrPtr(&body.ScopeKind, req.ScopeKind)
 	setStrPtr(&body.ScopeRef, req.ScopeRef)

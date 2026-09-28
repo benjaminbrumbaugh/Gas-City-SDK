@@ -5175,6 +5175,9 @@ type SlingInputBody struct {
 	// Formula Formula name for workflow launch.
 	Formula *string `json:"formula,omitempty"`
 
+	// LaunchOrigin Opaque actor identity captured by the launching client.
+	LaunchOrigin *string `json:"launch_origin,omitempty"`
+
 	// Merge Merge strategy: direct, mr, or local.
 	Merge *string `json:"merge,omitempty"`
 

@@ -3525,6 +3525,7 @@ export const zSlingInputBody = z.object({
     bead: z.string().optional(),
     force: z.boolean().optional(),
     formula: z.string().optional(),
+    launch_origin: z.string().optional(),
     merge: z.string().optional(),
     no_convoy: z.boolean().optional(),
     no_formula: z.boolean().optional(),
