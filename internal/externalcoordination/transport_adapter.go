@@ -74,6 +74,21 @@ func (a *TransportAdapter) Deliver(ctx context.Context, request Request) (Delive
 		if result != nil && result.FailureKind != "" {
 			errText = string(result.FailureKind)
 		}
+		// The transport already classified this. A transient or rate-limited
+		// publish says nothing about the request -- the adapter is registered
+		// but momentarily unreachable -- so surface it as ErrUnavailable and
+		// let the dispatcher requeue rather than burning the record. Dropping
+		// the classification here is what turned a restarting bridge into
+		// destroyed requests.
+		if result != nil && (result.FailureKind == extmsg.PublishFailureTransient ||
+			result.FailureKind == extmsg.PublishFailureRateLimited) {
+			return DeliveryReceipt{
+				RequestID:  request.RequestID,
+				State:      StateQueued,
+				Error:      errText,
+				RetryAfter: result.RetryAfter,
+			}, fmt.Errorf("%w: %s", ErrUnavailable, errText)
+		}
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: errText}, nil
 	}
 	return DeliveryReceipt{
@@ -93,14 +108,18 @@ func bridgeMetadata(request Request) (map[string]string, error) {
 	if len(request.CorrelationID) > maxBridgeMetadataValueBytes {
 		return nil, fmt.Errorf("%w: correlation_id exceeds bridge metadata limit", ErrInvalidInput)
 	}
+	// These keys are the bridge-facing wire contract. They were named hca_*
+	// while this package was called the human coordinator adapter; the name no
+	// longer describes anything the package does, and no released bridge reads
+	// the old spelling, so they carry the package's own vocabulary instead.
 	return map[string]string{
-		"hca_request_id":    request.RequestID,
-		"hca_attempt":       strconv.Itoa(request.Attempt),
-		"source_agent":      boundBridgeMetadataValue(request.SourceAgent),
-		"reason":            boundBridgeMetadataValue(string(request.Reason)),
-		"work_ref":          boundBridgeMetadataValue(request.WorkRef),
-		"correlation_id":    request.CorrelationID,
-		"content_retention": string(request.ContentRetention),
+		"coordination_request_id": request.RequestID,
+		"coordination_attempt":    strconv.Itoa(request.Attempt),
+		"source_agent":            boundBridgeMetadataValue(request.SourceAgent),
+		"reason":                  boundBridgeMetadataValue(string(request.Reason)),
+		"work_ref":                boundBridgeMetadataValue(request.WorkRef),
+		"correlation_id":          request.CorrelationID,
+		"content_retention":       string(request.ContentRetention),
 	}, nil
 }
 

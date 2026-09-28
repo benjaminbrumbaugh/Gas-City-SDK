@@ -3,11 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -99,8 +101,13 @@ func TestExternalCoordinationRequestRouteRejectsCallerTargetOverride(t *testing.
 
 func TestExternalCoordinationResponseRouteAcceptsCurrentExternalAdapterRegistration(t *testing.T) {
 	state := newExternalCoordinationResponseTestState(t)
-	h := newTestCityHandler(t, state)
+	srv := New(state)
+	h := newTestCityHandlerWith(t, state, srv)
 	registration := registerExternalCoordinationResponseTestAdapter(t, h, state)
+	// Registering an adapter triggers a background drain. Let it finish
+	// before claiming by hand, or the drain and the test race for the
+	// same queued record and the claim below fails intermittently.
+	srv.waitForBackground()
 	if registration.Credential == "" || registration.Generation == 0 || registration.Instance == "" {
 		t.Fatal("registration is missing a callback credential, generation, or instance")
 	}
@@ -122,8 +129,13 @@ func TestExternalCoordinationResponseRouteAcceptsCurrentExternalAdapterRegistrat
 
 func TestExternalCoordinationResponseRouteAcknowledgesExactReplayAndRejectsDivergenceAfterRestart(t *testing.T) {
 	state := newExternalCoordinationResponseTestState(t)
-	h := newTestCityHandler(t, state)
+	srv := New(state)
+	h := newTestCityHandlerWith(t, state, srv)
 	registration := registerExternalCoordinationResponseTestAdapter(t, h, state)
+	// Registering an adapter triggers a background drain. Let it finish
+	// before claiming by hand, or the drain and the test race for the
+	// same queued record and the claim below fails intermittently.
+	srv.waitForBackground()
 	claimed := claimExternalCoordinationResponseTestRequest(t, state)
 	receivedAt := time.Date(2026, 8, 31, 14, 0, 0, 0, time.UTC)
 	exactBody := externalCoordinationResponseTestBody(claimed, "response-1", "approved", receivedAt)
@@ -156,9 +168,14 @@ func TestExternalCoordinationResponseRouteAcknowledgesExactReplayAndRejectsDiver
 
 func TestExternalCoordinationResponseRouteRejectsReplacedExternalAdapterRegistration(t *testing.T) {
 	state := newExternalCoordinationResponseTestState(t)
-	h := newTestCityHandler(t, state)
+	srv := New(state)
+	h := newTestCityHandlerWith(t, state, srv)
 	first := registerExternalCoordinationResponseTestAdapter(t, h, state)
 	second := registerExternalCoordinationResponseTestAdapter(t, h, state)
+	// Registering an adapter triggers a background drain. Let it finish
+	// before claiming by hand, or the drain and the test race for the
+	// same queued record and the claim below fails intermittently.
+	srv.waitForBackground()
 	if first.Credential == "" || second.Credential == "" || first.Credential == second.Credential || first.Generation >= second.Generation || first.Instance == second.Instance {
 		t.Fatal("replacement did not issue a distinct callback credential, generation, and instance")
 	}
@@ -379,4 +396,310 @@ func postExternalCoordinationResponse(t *testing.T, h http.Handler, state State,
 	t.Helper()
 	body := externalCoordinationResponseTestBody(claimed, "response-1", "", time.Now())
 	return postExternalCoordinationResponseBody(t, h, state, body, "", registration)
+}
+
+// bridgeCallbackAdapter stands in for a registered external coordination
+// bridge. It records what the city pushes so this handler-level test can assert
+// the registration-triggered causal chain without opening another loopback
+// listener. HTTP wire behavior remains owned by extmsg.HTTPAdapter tests.
+type bridgeCallbackAdapter struct {
+	name      string
+	caps      extmsg.AdapterCapabilities
+	mu        sync.Mutex
+	published []extmsg.PublishRequest
+}
+
+func (b *bridgeCallbackAdapter) Name() string { return b.name }
+
+func (b *bridgeCallbackAdapter) Capabilities() extmsg.AdapterCapabilities { return b.caps }
+
+func (b *bridgeCallbackAdapter) VerifyAndNormalizeInbound(context.Context, extmsg.InboundPayload) (*extmsg.ExternalInboundMessage, error) {
+	return nil, errors.New("inbound not supported by callback fixture")
+}
+
+func (b *bridgeCallbackAdapter) Publish(_ context.Context, request extmsg.PublishRequest) (*extmsg.PublishReceipt, error) {
+	b.mu.Lock()
+	b.published = append(b.published, request)
+	b.mu.Unlock()
+	return &extmsg.PublishReceipt{MessageID: "bridge-message-1", Delivered: true}, nil
+}
+
+func (b *bridgeCallbackAdapter) EnsureChildConversation(context.Context, extmsg.ConversationRef, string) (*extmsg.ConversationRef, error) {
+	return nil, errors.New("child conversations not supported by callback fixture")
+}
+
+func (b *bridgeCallbackAdapter) deliveries() []extmsg.PublishRequest {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]extmsg.PublishRequest(nil), b.published...)
+}
+
+func registerExternalCoordinationBridge(t *testing.T, h http.Handler, state State, callbackURL string) {
+	t.Helper()
+	body := fmt.Sprintf(`{"provider":"hermes","account_id":"desktop","name":"hermes","callback_url":%q}`, callbackURL)
+	req := httptest.NewRequest(http.MethodPost, cityURL(state, "/extmsg/adapters"), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GC-Request", "coordination-bridge-register")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, req)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("POST /extmsg/adapters status = %d, want 201; body = %s", response.Code, response.Body.String())
+	}
+}
+
+// TestExternalCoordinationDeliversQueuedRequestWhenAdapterRegistersAfterEnqueue
+// is the regression this file exists for. Delivery used to be attempted exactly
+// once, inline with the enqueue, so a request queued before its bridge
+// registered had no later dispatch opportunity and sat at attempt 0 forever —
+// which is precisely what stalled the first city-to-coordinator handoff.
+// Registration is now itself a dispatch trigger.
+func TestExternalCoordinationDeliversQueuedRequestWhenAdapterRegistersAfterEnqueue(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	srv := New(state)
+	h := newTestCityHandlerWith(t, state, srv)
+	bridge := &bridgeCallbackAdapter{}
+	srv.newHTTPAdapter = func(name, _ string, caps extmsg.AdapterCapabilities) extmsg.TransportAdapter {
+		bridge.name = name
+		bridge.caps = caps
+		return bridge
+	}
+
+	body := `{"source_agent":"mayor","reason":"direct_request","prompt":"is the bridge reachable?","correlation_id":"corr-register-after-enqueue","idempotency_key":"idem-register-after-enqueue"}`
+	req := httptest.NewRequest(http.MethodPost, cityURL(state, "/external-coordination/requests"), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GC-Request", "coordination-register-after-enqueue")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST /external-coordination/requests status = %d, body = %s", response.Code, response.Body.String())
+	}
+	srv.waitForBackground()
+
+	var enqueued struct {
+		ID    string `json:"id"`
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &enqueued); err != nil {
+		t.Fatal(err)
+	}
+	if enqueued.ID == "" || enqueued.State != "queued" {
+		t.Fatalf("enqueued record = %+v, want a queued record", enqueued)
+	}
+	if got := len(bridge.deliveries()); got != 0 {
+		t.Fatalf("bridge saw %d callback(s) before it registered, want 0", got)
+	}
+
+	service := externalcoordination.NewService(state.CityBeadStore())
+	queued, err := service.Get(context.Background(), enqueued.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.State != externalcoordination.StateQueued || queued.Attempt != 0 {
+		t.Fatalf("record before registration = state %q attempt %d, want queued/0", queued.State, queued.Attempt)
+	}
+
+	registerExternalCoordinationBridge(t, h, state, "http://127.0.0.1")
+	srv.waitForBackground()
+
+	delivered := bridge.deliveries()
+	if len(delivered) != 1 {
+		t.Fatalf("bridge saw %d callback(s) after registering, want exactly 1", len(delivered))
+	}
+	if delivered[0].Metadata["coordination_request_id"] != queued.Request.RequestID {
+		t.Fatalf("callback coordination_request_id = %q, want %q", delivered[0].Metadata["coordination_request_id"], queued.Request.RequestID)
+	}
+	if delivered[0].Metadata["correlation_id"] != "corr-register-after-enqueue" {
+		t.Fatalf("callback correlation_id = %q, want corr-register-after-enqueue", delivered[0].Metadata["correlation_id"])
+	}
+	if delivered[0].IdempotencyKey != "idem-register-after-enqueue" {
+		t.Fatalf("callback idempotency_key = %q, want idem-register-after-enqueue", delivered[0].IdempotencyKey)
+	}
+
+	stored, err := service.Get(context.Background(), enqueued.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != externalcoordination.StateRunning {
+		t.Fatalf("record after registration state = %q, want running", stored.State)
+	}
+	if stored.Attempt != 1 {
+		t.Fatalf("record after registration attempt = %d, want 1", stored.Attempt)
+	}
+	if stored.DeliveredAt.IsZero() {
+		t.Fatal("record after registration has no delivered_at; delivery was not recorded on the causal record")
+	}
+
+	// A second registration re-triggers the drain. The delivered request is no
+	// longer queued, so the coordinator must not be asked to take a second turn.
+	registerExternalCoordinationBridge(t, h, state, "http://127.0.0.1")
+	srv.waitForBackground()
+	if got := len(bridge.deliveries()); got != 1 {
+		t.Fatalf("bridge saw %d callback(s) after re-registering, want the original 1", got)
+	}
+}
+
+// TestExternalCoordinationDrainLeavesQueueIntactWhenNoAdapterIsRegistered pins
+// the other half of the contract: adapter absence must never be turned into a
+// false success, and the causal record must survive it.
+func TestExternalCoordinationDrainLeavesQueueIntactWhenNoAdapterIsRegistered(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	srv := New(state)
+	h := newTestCityHandlerWith(t, state, srv)
+
+	body := `{"source_agent":"mayor","reason":"escalation","prompt":"nobody is listening yet","correlation_id":"corr-no-adapter","idempotency_key":"idem-no-adapter"}`
+	req := httptest.NewRequest(http.MethodPost, cityURL(state, "/external-coordination/requests"), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GC-Request", "coordination-no-adapter")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST /external-coordination/requests status = %d, body = %s", response.Code, response.Body.String())
+	}
+	srv.waitForBackground()
+
+	var enqueued struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &enqueued); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := externalcoordination.NewService(state.CityBeadStore()).Get(context.Background(), enqueued.ID)
+	if err != nil {
+		t.Fatalf("causal record was lost while no adapter was registered: %v", err)
+	}
+	if stored.State != externalcoordination.StateQueued || stored.Attempt != 0 {
+		t.Fatalf("record with no adapter = state %q attempt %d, want queued/0", stored.State, stored.Attempt)
+	}
+}
+
+// TestExternalCoordinationRegistrationOfAnUnrelatedAdapterDoesNotDeliver keeps
+// the registration trigger scoped to the configured coordination target, so an
+// unrelated chat adapter registering cannot hand a coordination request to a
+// bridge that was never selected for it.
+func TestExternalCoordinationRegistrationOfAnUnrelatedAdapterDoesNotDeliver(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	srv := New(state)
+	h := newTestCityHandlerWith(t, state, srv)
+	bridge := &bridgeCallbackAdapter{}
+	srv.newHTTPAdapter = func(name, _ string, caps extmsg.AdapterCapabilities) extmsg.TransportAdapter {
+		bridge.name = name
+		bridge.caps = caps
+		return bridge
+	}
+
+	body := `{"source_agent":"mayor","reason":"direct_request","prompt":"only hermes may answer","correlation_id":"corr-unrelated-adapter","idempotency_key":"idem-unrelated-adapter"}`
+	req := httptest.NewRequest(http.MethodPost, cityURL(state, "/external-coordination/requests"), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GC-Request", "coordination-unrelated-adapter")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST /external-coordination/requests status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	registerBody := fmt.Sprintf(`{"provider":"discord","account_id":"acct-1","name":"discord","callback_url":%q}`, "http://127.0.0.1")
+	registerReq := httptest.NewRequest(http.MethodPost, cityURL(state, "/extmsg/adapters"), strings.NewReader(registerBody))
+	registerReq.Header.Set("Content-Type", "application/json")
+	registerReq.Header.Set("X-GC-Request", "coordination-unrelated-adapter-register")
+	registerResponse := httptest.NewRecorder()
+	h.ServeHTTP(registerResponse, registerReq)
+	if registerResponse.Code != http.StatusCreated {
+		t.Fatalf("POST /extmsg/adapters status = %d, want 201; body = %s", registerResponse.Code, registerResponse.Body.String())
+	}
+	srv.waitForBackground()
+
+	if got := len(bridge.deliveries()); got != 0 {
+		t.Fatalf("unrelated adapter received %d coordination callback(s), want 0", got)
+	}
+}
+
+// getExternalCoordinationCapability performs the pre-flight check an
+// orchestrator is instructed to run before using external coordination.
+func getExternalCoordinationCapability(t *testing.T, h http.Handler, state State) config.ExternalCoordinationCapability {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, cityURL(state, "/external-coordination"), nil)
+	req.Header.Set("X-GC-Request", "coordination-capability")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /external-coordination status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var capability config.ExternalCoordinationCapability
+	if err := json.Unmarshal(response.Body.Bytes(), &capability); err != nil {
+		t.Fatal(err)
+	}
+	return capability
+}
+
+// TestExternalCoordinationCapabilityTracksLiveAdapterRegistration pins the
+// signifier to what can actually deliver. Adapter registrations are in-memory
+// and do not survive a controller restart, so [external_coordination] can stay
+// enabled while the registry is empty. Reporting available=true in that window
+// gave an orchestrator following its own pre-flight instructions a false green,
+// and every request it enqueued sat undelivered until a bridge re-registered.
+func TestExternalCoordinationCapabilityTracksLiveAdapterRegistration(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	h := newTestCityHandler(t, state)
+
+	capability := getExternalCoordinationCapability(t, h, state)
+	if capability.Available || capability.Registered {
+		t.Fatalf("capability with an empty adapter registry = %+v, want available=false registered=false", capability)
+	}
+	if !capability.Configured {
+		t.Fatalf("capability.Configured = false with [external_coordination] enabled: %+v", capability)
+	}
+
+	registration := registerExternalCoordinationResponseTestAdapter(t, h, state)
+
+	capability = getExternalCoordinationCapability(t, h, state)
+	if !capability.Available || !capability.Registered || !capability.Configured {
+		t.Fatalf("capability after adapter registration = %+v, want available/registered/configured all true", capability)
+	}
+
+	if response := unregisterExternalCoordinationTestAdapter(t, h, state, registration); response.Code != http.StatusOK {
+		t.Fatalf("DELETE /extmsg/adapters status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
+
+	capability = getExternalCoordinationCapability(t, h, state)
+	if capability.Available || capability.Registered {
+		t.Fatalf("capability after adapter unregistration = %+v, want available=false registered=false", capability)
+	}
+}
+
+// TestExternalCoordinationCapabilityIgnoresUnrelatedAdapterRegistration keeps
+// the signifier scoped to the configured (provider, account_id). An unrelated
+// chat adapter registering cannot carry a coordination request, so it must not
+// flip the signifier green either.
+func TestExternalCoordinationCapabilityIgnoresUnrelatedAdapterRegistration(t *testing.T) {
+	state := newExternalCoordinationResponseTestState(t)
+	h := newTestCityHandler(t, state)
+
+	body := `{"provider":"discord","account_id":"acct-1","name":"discord","callback_url":"http://127.0.0.1:9/callback"}`
+	req := httptest.NewRequest(http.MethodPost, cityURL(state, "/extmsg/adapters"), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GC-Request", "coordination-capability-unrelated-register")
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, req)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("POST /extmsg/adapters status = %d, want 201; body = %s", response.Code, response.Body.String())
+	}
+
+	capability := getExternalCoordinationCapability(t, h, state)
+	if capability.Available || capability.Registered {
+		t.Fatalf("capability with only an unrelated adapter registered = %+v, want available=false registered=false", capability)
+	}
+}
+
+// TestExternalCoordinationCapabilityReportsUnconfiguredCityAsUnavailable keeps
+// the two negative cases distinguishable: a city with no [external_coordination]
+// table at all is not merely unreachable, it is unconfigured.
+func TestExternalCoordinationCapabilityReportsUnconfiguredCityAsUnavailable(t *testing.T) {
+	state := newFakeState(t)
+	state.adapterReg = extmsg.NewAdapterRegistry()
+	h := newTestCityHandler(t, state)
+
+	capability := getExternalCoordinationCapability(t, h, state)
+	if capability.Available || capability.Registered || capability.Configured {
+		t.Fatalf("capability for an unconfigured city = %+v, want available/registered/configured all false", capability)
+	}
 }

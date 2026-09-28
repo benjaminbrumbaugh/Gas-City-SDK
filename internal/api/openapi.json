@@ -3726,6 +3726,9 @@
             "format": "int64",
             "type": "integer"
           },
+          "configured": {
+            "type": "boolean"
+          },
           "delivery": {
             "type": "string"
           },
@@ -3737,6 +3740,9 @@
           },
           "logical_role": {
             "type": "string"
+          },
+          "registered": {
+            "type": "boolean"
           },
           "session_policy": {
             "type": "string"
@@ -3756,6 +3762,8 @@
         },
         "required": [
           "available",
+          "configured",
+          "registered",
           "logical_role",
           "target",
           "adapter",

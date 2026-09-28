@@ -212,7 +212,7 @@ backup_prune_alert_failure() {
         "Dolt backup pruning failed [HIGH]" \
         "Backup sync completed for $SYNCED/$TOTAL databases, but manifest-aware pruning was not confirmed for:$PRUNE_FAILED_DBS
 
-Inspect the named file:// backup destinations and Dolt errors. Do not delete manifest-referenced files manually. If safe remediation is unclear, request queued outside help through HCA." \
+Inspect the named file:// backup destinations and Dolt errors. Do not delete manifest-referenced files manually. If safe remediation is unclear, request queued outside help through external coordination." \
         "backup_size_alert_send"
 }
 
@@ -297,7 +297,7 @@ Path: $BACKUP_ARTIFACT_DIR
 Latest sync: $SYNCED/$TOTAL succeeded; failed=$FAILED_COUNT
 Prune result: completed=$PRUNE_COMPLETED, safely-skipped=$PRUNE_SKIPPED, failed=$PRUNE_FAILED, grace=$BACKUP_PRUNE_GRACE_PERIOD
 
-Inspect backup pruning and Dolt compaction. Do not delete manifest-referenced files manually. If safe remediation is unclear, request queued outside help through HCA."
+Inspect backup pruning and Dolt compaction. Do not delete manifest-referenced files manually. If safe remediation is unclear, request queued outside help through external coordination."
     alert_state_failure \
         "$BACKUP_SIZE_ALERT_STATE_FILE" \
         "$fingerprint" \
@@ -321,41 +321,6 @@ backup_url_from_list() {
                 value="${value% }"
                 printf '%s\n' "$value"
                 return 0
-                ;;
-        esac
-    done
-    return 1
-}
-
-# backup_name_for_path reads a `dolt backup -v` listing on stdin and emits the
-# name of the first remote whose file:// URL resolves to the given path. It
-# exists because a database's backup can legitimately carry a name other than
-# the managed `<db>-backup` — `bd backup` configures one called `default` — and
-# such a remote IS coverage. Matching only on the managed name made the script
-# try to add a second remote at an address Dolt already has claimed, which Dolt
-# refuses outright, so the database silently lost all backup coverage
-# (gc-534qw). Matching is by resolved path, never by name, so this cannot widen
-# what counts as a valid destination.
-backup_name_for_path() {
-    local target="$1"
-    local line
-    local name
-    local url
-
-    while IFS= read -r line; do
-        [ -n "$line" ] || continue
-        name="${line%%[[:space:]]*}"
-        [ -n "$name" ] || continue
-        url="${line#"$name"}"
-        url="${url#"${url%%[![:space:]]*}"}"
-        url="${url%\{\}}"
-        url="${url% }"
-        case "$url" in
-            file://*)
-                if same_path "${url#file://}" "$target"; then
-                    printf '%s\n' "$name"
-                    return 0
-                fi
                 ;;
         esac
     done
