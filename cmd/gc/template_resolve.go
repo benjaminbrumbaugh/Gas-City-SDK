@@ -454,7 +454,7 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 			wsProvider = p.workspace.Provider
 		}
 		provider := effectiveAgentProviderFamily(cfgAgent, wsProvider, p.providers)
-		if _, ok := materialize.VendorSink(provider); ok {
+		if vendorSink, ok := materialize.VendorSink(provider); ok {
 			scopeRoot := agentScopeRoot(cfgAgent, p.cityPath, p.rigs)
 			canonWorkDir := canonicaliseFilePath(workDir, p.cityPath)
 			stage1Delivers := canStage1Materialize(p.sessionProvider, cfgAgent) && canonWorkDir == scopeRoot
@@ -471,7 +471,11 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 						agentCat = c
 					}
 				}
-				if frag := buildAssignedSkillsPromptFragment(cfgAgent, p.sharedSkillCatalogForAgent(cfgAgent), agentCat); frag != "" {
+				// Stage 1 writes into the scope root, which the guard above
+				// equates with the workdir; stage 2 materializes into the
+				// session workdir. Either way the sink sits under workDir.
+				sinkDir := filepath.Join(workDir, vendorSink)
+				if frag := buildAssignedSkillsPromptFragment(cfgAgent, p.sharedSkillCatalogForAgent(cfgAgent), agentCat, sinkDir); frag != "" {
 					prompt = prompt + "\n\n" + frag
 				}
 			}

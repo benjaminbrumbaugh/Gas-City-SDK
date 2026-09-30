@@ -1852,6 +1852,10 @@ Examples:
   gc formula show mol-feature --var title="Auth system" --var branch=main
   gc formula show mol-polecat-work --rig mo
 
+Use --require-registered for resolver-facing checks that must run against a
+registered rig rather than silently accepting the city or pack-cache fallback.
+An ordinary unregistered checkout still intentionally uses the pack fallback.
+
 ```
 gc formula show <formula-name> [flags]
 ```
@@ -1859,6 +1863,7 @@ gc formula show <formula-name> [flags]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--json` | bool |  | emit JSON |
+| `--require-registered` | bool |  | require a registered rig checkout; refuse city or pack-cache fallback |
 | `--var` | stringArray |  | variable substitution for preview (key=value) |
 
 ## gc formula version-check
