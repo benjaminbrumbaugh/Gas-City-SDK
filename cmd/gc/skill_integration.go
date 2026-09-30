@@ -308,10 +308,17 @@ func effectiveInjectAssignedSkills(agent *config.Agent) bool {
 // entry so agents see both the name and a one-line purpose. Origin
 // tags identify where a shared skill came from: the city pack, an
 // imported pack binding, or a legacy compatibility bootstrap pack.
+//
+// sinkDir is the vendor sink the materialiser delivered into. Naming
+// it (and that its entries are symlinks) matters: without the path,
+// agents verified the appendix with `find -type f -name SKILL.md`,
+// which skips symlinks, saw nothing, and widened the walk to $HOME —
+// tripping macOS TCC prompts attributed to gc.
 func buildAssignedSkillsPromptFragment(
 	agent *config.Agent,
 	city *materialize.CityCatalog,
 	agentCat materialize.AgentCatalog,
+	sinkDir string,
 ) string {
 	if agent == nil {
 		return ""
@@ -338,8 +345,8 @@ func buildAssignedSkillsPromptFragment(
 
 	var b strings.Builder
 	b.WriteString("## Skills available to this session\n\n")
-	fmt.Fprintf(&b, "You are `%s`. The following skills are materialized in your provider's skill directory and load automatically — you don't need to invoke anything extra.\n\n", //nolint:errcheck // fmt.Fprintf into a strings.Builder never errors
-		agent.QualifiedName())
+	fmt.Fprintf(&b, "You are `%s`. The following skills are materialized in `%s` and load automatically — you don't need to invoke anything extra. Each entry there is a symlink into the pack cache (so `find -type f` will not list them). Do not search the filesystem for them; wide `find`/`grep` walks from `~` or `/Users` hit macOS-protected folders and raise permission prompts.\n\n", //nolint:errcheck // fmt.Fprintf into a strings.Builder never errors
+		agent.QualifiedName(), sinkDir)
 
 	if len(agentCat.Entries) > 0 {
 		b.WriteString("### Assigned to you\n\n")

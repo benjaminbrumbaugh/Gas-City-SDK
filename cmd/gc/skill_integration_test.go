@@ -433,7 +433,7 @@ func TestBuildAssignedSkillsPromptFragmentPartitions(t *testing.T) {
 		},
 	}
 	a := &config.Agent{Name: "mayor", Scope: "city"}
-	got := buildAssignedSkillsPromptFragment(a, city, agentCat)
+	got := buildAssignedSkillsPromptFragment(a, city, agentCat, "/sink")
 
 	mustContain := []string{
 		"## Skills available to this session",
@@ -462,7 +462,7 @@ func TestBuildAssignedSkillsPromptFragmentPartitions(t *testing.T) {
 func TestBuildAssignedSkillsPromptFragmentEmptyInputs(t *testing.T) {
 	t.Parallel()
 	a := &config.Agent{Name: "x"}
-	if got := buildAssignedSkillsPromptFragment(a, nil, materialize.AgentCatalog{}); got != "" {
+	if got := buildAssignedSkillsPromptFragment(a, nil, materialize.AgentCatalog{}, "/sink"); got != "" {
 		t.Errorf("empty inputs should return empty fragment, got: %q", got)
 	}
 	// City-only (no agent-local) still renders, just without the Assigned section.
@@ -471,7 +471,7 @@ func TestBuildAssignedSkillsPromptFragmentEmptyInputs(t *testing.T) {
 			{Name: "gc-work", Source: "/x", Origin: "core", Description: "Work stuff"},
 		},
 	}
-	got := buildAssignedSkillsPromptFragment(a, city, materialize.AgentCatalog{})
+	got := buildAssignedSkillsPromptFragment(a, city, materialize.AgentCatalog{}, "/sink")
 	if got == "" {
 		t.Fatal("expected non-empty fragment when city catalog has entries")
 	}
@@ -489,7 +489,7 @@ func TestBuildAssignedSkillsPromptFragmentAgentOnlyNoCity(t *testing.T) {
 	agentCat := materialize.AgentCatalog{
 		Entries: []materialize.SkillEntry{{Name: "only-mine", Source: "/x", Origin: "agent"}},
 	}
-	got := buildAssignedSkillsPromptFragment(a, nil, agentCat)
+	got := buildAssignedSkillsPromptFragment(a, nil, agentCat, "/sink")
 	if got == "" {
 		t.Fatal("agent-local-only should still render")
 	}
@@ -509,7 +509,7 @@ func TestBuildAssignedSkillsPromptFragmentOmitsDescriptionWhenMissing(t *testing
 			{Name: "bare", Source: "/x", Origin: "city"}, // no Description
 		},
 	}
-	got := buildAssignedSkillsPromptFragment(a, city, materialize.AgentCatalog{})
+	got := buildAssignedSkillsPromptFragment(a, city, materialize.AgentCatalog{}, "/sink")
 	// Name present, no dash-separator.
 	if !strings.Contains(got, "`bare`") {
 		t.Errorf("missing bare skill name:\n%s", got)
@@ -581,4 +581,26 @@ func namesOf(entries []materialize.SkillEntry) []string {
 		out[i] = e.Name
 	}
 	return out
+}
+
+// The appendix must name the sink directory and say entries are
+// symlinks. Without the path, agents went looking for SKILL.md with
+// `find`, saw nothing (`-type f` skips symlinks), and widened the walk
+// to $HOME — tripping macOS TCC prompts attributed to gc.
+func TestBuildAssignedSkillsPromptFragmentNamesSinkDir(t *testing.T) {
+	t.Parallel()
+	a := &config.Agent{Name: "x"}
+	city := &materialize.CityCatalog{
+		Entries: []materialize.SkillEntry{{Name: "gc-work", Source: "/x", Origin: "core"}},
+	}
+	got := buildAssignedSkillsPromptFragment(a, city, materialize.AgentCatalog{}, "/city/.agents/skills")
+	for _, want := range []string{
+		"`/city/.agents/skills`",
+		"symlink",
+		"Do not search the filesystem for them",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("fragment missing %q:\n%s", want, got)
+		}
+	}
 }
