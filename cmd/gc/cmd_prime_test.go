@@ -1386,3 +1386,73 @@ func createPrimeHookSession(t *testing.T, cityDir, sessionName, template string)
 	}
 	return created.ID
 }
+
+// `gc prime` run by an agent mid-session must tell it where its skills
+// are. Managed sessions get the appendix in the launch prompt, but an
+// agent re-priming after compaction (or a session whose launch prompt
+// was lost) otherwise has only the vendor's skill list — and a wrong
+// guess at the path leads to a $HOME-wide find that trips macOS TCC.
+func TestDoPrime_AppendsSkillsFromSinkOnDisk(t *testing.T) {
+	cityDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cityDir, "agents", "ada"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`
+[workspace]
+name = "backstage"
+provider = "codex"
+
+[providers.codex]
+base = "builtin:codex"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "pack.toml"), []byte(`
+[pack]
+name = "backstage"
+schema = 2
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "agents", "ada", "prompt.template.md"), []byte("Agent: {{ .AgentName }}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A materialized codex sink in the agent's workdir, symlinked like
+	// the real materializer does.
+	cache := filepath.Join(t.TempDir(), "gc-work")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "SKILL.md"), []byte("---\nname: gc-work\ndescription: Working with beads\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workDir := filepath.Join(cityDir, ".gc", "agents", "ada")
+	sink := filepath.Join(workDir, ".agents", "skills")
+	if err := os.MkdirAll(sink, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(cache, filepath.Join(sink, "core.gc-work")); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GC_CITY", cityDir)
+	t.Setenv("GC_ALIAS", "")
+	t.Setenv("GC_AGENT", "")
+	t.Setenv("GC_DIR", workDir)
+
+	var stdout, stderr bytes.Buffer
+	if code := doPrimeWithMode([]string{"ada"}, &stdout, &stderr, false, true); code != 0 {
+		t.Fatalf("doPrime() = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	got := stdout.String()
+	for _, want := range []string{
+		"## Skills available to this session",
+		"`" + sink + "`",
+		"`core.gc-work` — Working with beads",
+		"Do not search the filesystem for them",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prime output missing %q:\n%s", want, got)
+		}
+	}
+}

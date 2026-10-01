@@ -1393,3 +1393,53 @@ func setupBootstrapHome(t *testing.T, packs map[string][]string) string {
 func globalRepoCachePathHelper(gcHome, source, commit string) string {
 	return config.GlobalRepoCachePath(gcHome, source, commit)
 }
+
+// Sink entries are symlinks into the pack cache. ReadDir's IsDir is false
+// for a symlink, so the catalog loaders skip them; the sink reader must
+// follow the link and still see SKILL.md.
+func TestListSinkSkillsFollowsSymlinks(t *testing.T) {
+	t.Parallel()
+	cache := t.TempDir()
+	for _, name := range []string{"gc-work", "gc-city"} {
+		dir := filepath.Join(cache, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"),
+			[]byte("---\nname: "+name+"\ndescription: Desc "+name+"\n---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sink := filepath.Join(t.TempDir(), ".agents", "skills")
+	if err := os.MkdirAll(sink, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(cache, "gc-work"), filepath.Join(sink, "core.gc-work")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(cache, "gc-city"), filepath.Join(sink, "core.gc-city")); err != nil {
+		t.Fatal(err)
+	}
+	// Dangling link and ownership marker must be ignored.
+	if err := os.Symlink(filepath.Join(cache, "missing"), filepath.Join(sink, "core.gone")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sink, ownershipManifestFile), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ListSinkSkills(sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Name != "core.gc-city" || got[1].Name != "core.gc-work" {
+		t.Fatalf("unexpected entries: %+v", got)
+	}
+	if got[1].Description != "Desc gc-work" {
+		t.Errorf("description not read through symlink: %+v", got[1])
+	}
+
+	if got, err := ListSinkSkills(filepath.Join(sink, "nope")); err != nil || got != nil {
+		t.Errorf("missing sink should be (nil, nil), got %v, %v", got, err)
+	}
+}
