@@ -14,6 +14,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/materialize"
 	"github.com/gastownhall/gascity/internal/runtime"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
 	"github.com/spf13/cobra"
@@ -367,6 +368,7 @@ func doPrimeWithHookFormatOpts(args []string, stdout, stderr io.Writer, hookMode
 			prompt := renderPrompt(fsys.OSFS{}, cityPath, cityName, a.PromptTemplate, ctx, cfg.Workspace.SessionTemplate, stderr,
 				packDirs, fragments, nil)
 			if prompt != "" {
+				prompt += primeSkillsAppendix(cfg, &a, ctx, stderr)
 				injection := primeHookContextSuffix(cityPath, hookMode, hookContext, stderr, consumeHandoff)
 				writePrimePromptWithFormat(stdout, cityName, ctx.AgentName, prompt, hookMode, hookFormat, suppressHookPrompt, injection.text, injection.afterDelivery)
 				return 0
@@ -853,6 +855,35 @@ func findAgentByName(cfg *config.City, name string) (config.Agent, bool) {
 		}
 	}
 	return config.Agent{}, false
+}
+
+// primeSkillsAppendix renders the skills appendix for a `gc prime`
+// invocation from the vendor sink on disk. The launch-time prompt gets
+// the same appendix from catalog snapshots (template_resolve.go), but
+// `gc prime` runs inside an already-started session — after compaction,
+// or when the launch prompt never arrived — and the sink the
+// materializer wrote is the ground truth there. Returns "" when the
+// agent opted out, the provider has no sink, or the sink is empty.
+// A read error is reported to stderr and yields "" so a transient I/O
+// fault never breaks priming.
+func primeSkillsAppendix(cfg *config.City, a *config.Agent, ctx PromptContext, stderr io.Writer) string {
+	if !effectiveInjectAssignedSkills(a) || ctx.WorkDir == "" {
+		return ""
+	}
+	provider := effectiveAgentProviderFamily(a, cfg.Workspace.Provider, cfg.Providers)
+	vendorSink, ok := materialize.VendorSink(provider)
+	if !ok {
+		return ""
+	}
+	frag, err := buildSinkSkillsPromptFragment(ctx.AgentName, filepath.Join(ctx.WorkDir, vendorSink))
+	if err != nil {
+		fmt.Fprintf(stderr, "gc prime: skills appendix skipped: %v\n", err) //nolint:errcheck // stderr diagnostics are best effort
+		return ""
+	}
+	if frag == "" {
+		return ""
+	}
+	return "\n\n" + frag
 }
 
 // buildPrimeContext constructs a PromptContext for gc prime. Uses GC_*

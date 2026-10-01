@@ -303,6 +303,49 @@ func LoadAgentCatalog(agentSkillsDir string) (AgentCatalog, error) {
 	return AgentCatalog{Entries: entries, OwnedRoot: abs}, nil
 }
 
+// ListSinkSkills enumerates the skills a vendor sink currently delivers,
+// following the symlinks the materializer wrote. Unlike readSkillDir,
+// which classifies by ReadDir's IsDir (false for a symlink), this reads
+// through each link and keeps every entry whose target holds a SKILL.md.
+// Dangling links and the ownership manifest are skipped. Returns
+// (nil, nil) when the sink does not exist. Entries carry the sink name
+// (e.g. "core.gc-work") and an empty Origin.
+func ListSinkSkills(sinkDir string) ([]SkillEntry, error) {
+	info, err := os.Stat(sinkDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading skill sink %q: %w", sinkDir, err)
+	}
+	if !info.IsDir() {
+		return nil, nil
+	}
+	dirEntries, err := os.ReadDir(sinkDir)
+	if err != nil {
+		return nil, fmt.Errorf("reading skill sink %q: %w", sinkDir, err)
+	}
+	var out []SkillEntry
+	for _, e := range dirEntries {
+		dir := filepath.Join(sinkDir, e.Name())
+		target, statErr := os.Stat(dir) // follows symlinks
+		if statErr != nil || !target.IsDir() {
+			continue
+		}
+		skillMD := filepath.Join(dir, "SKILL.md")
+		if _, statErr := os.Stat(skillMD); statErr != nil {
+			continue
+		}
+		out = append(out, SkillEntry{
+			Name:        e.Name(),
+			Source:      dir,
+			Description: readSkillDescription(skillMD),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
 // EffectiveSet merges the shared city catalog and an agent's local
 // catalog into the final desired symlink set. Agent-local entries win
 // on name collision with shared entries. Returns a stable, sorted

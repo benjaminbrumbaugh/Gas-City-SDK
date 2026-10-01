@@ -344,9 +344,7 @@ func buildAssignedSkillsPromptFragment(
 	}
 
 	var b strings.Builder
-	b.WriteString("## Skills available to this session\n\n")
-	fmt.Fprintf(&b, "You are `%s`. The following skills are materialized in `%s` and load automatically — you don't need to invoke anything extra. Each entry there is a symlink into the pack cache (so `find -type f` will not list them). Do not search the filesystem for them; wide `find`/`grep` walks from `~` or `/Users` hit macOS-protected folders and raise permission prompts.\n\n", //nolint:errcheck // fmt.Fprintf into a strings.Builder never errors
-		agent.QualifiedName(), sinkDir)
+	writeSkillsAppendixHeader(&b, agent.QualifiedName(), sinkDir)
 
 	if len(agentCat.Entries) > 0 {
 		b.WriteString("### Assigned to you\n\n")
@@ -360,8 +358,44 @@ func buildAssignedSkillsPromptFragment(
 		b.WriteString("\n")
 	}
 
-	b.WriteString("These are discovery-time hints, not execution gates — the vendor loads every skill from the sink directory regardless of what this appendix lists.\n")
+	b.WriteString(skillsAppendixFooter)
 	return b.String()
+}
+
+// buildSinkSkillsPromptFragment renders the same appendix from what a
+// vendor sink actually holds on disk. Used by `gc prime`, which runs
+// inside an already-started session and has no catalog snapshot — but
+// does have the sink the materializer wrote. Returns "" when the sink
+// is absent or empty.
+func buildSinkSkillsPromptFragment(agentName, sinkDir string) (string, error) {
+	entries, err := materialize.ListSinkSkills(sinkDir)
+	if err != nil {
+		return "", err
+	}
+	if len(entries) == 0 {
+		return "", nil
+	}
+	var b strings.Builder
+	writeSkillsAppendixHeader(&b, agentName, sinkDir)
+	writeSkillBullets(&b, entries, "")
+	b.WriteString("\n")
+	b.WriteString(skillsAppendixFooter)
+	return b.String(), nil
+}
+
+const skillsAppendixHeading = "## Skills available to this session"
+
+const skillsAppendixFooter = "These are discovery-time hints, not execution gates — the vendor loads every skill from the sink directory regardless of what this appendix lists.\n"
+
+// writeSkillsAppendixHeader names the sink path and warns that its
+// entries are symlinks. Both matter: without the path, agents verified
+// the appendix with `find -type f -name SKILL.md`, which skips symlinks,
+// saw nothing, and widened the walk to $HOME — tripping macOS TCC
+// prompts attributed to gc.
+func writeSkillsAppendixHeader(b *strings.Builder, agentName, sinkDir string) {
+	b.WriteString(skillsAppendixHeading + "\n\n")
+	fmt.Fprintf(b, "You are `%s`. The following skills are materialized in `%s` and load automatically — you don't need to invoke anything extra. Each entry there is a symlink into the pack cache (so `find -type f` will not list them). Do not search the filesystem for them; wide `find`/`grep` walks from `~` or `/Users` hit macOS-protected folders and raise permission prompts.\n\n", //nolint:errcheck // fmt.Fprintf into a strings.Builder never errors
+		agentName, sinkDir)
 }
 
 // writeSkillBullets renders a bullet list of skill entries. When
