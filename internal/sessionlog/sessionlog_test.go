@@ -2170,11 +2170,11 @@ func TestFindCodexSessionFileMatchesEquivalentResolvedWorkDir(t *testing.T) {
 		t.Skip("macOS /private/tmp path aliases only apply on darwin")
 	}
 	sessDir := t.TempDir()
-	workDir := filepath.Join(os.TempDir(), "gascity-codex-live")
-	aliasedWorkDir := strings.TrimPrefix(workDir, "/private")
-	if aliasedWorkDir == workDir {
-		aliasedWorkDir = "/private" + workDir
-	}
+	// Only /tmp has the macOS /private/tmp alias. TMPDIR may point under
+	// /Users (or anywhere else), where prepending /private invents a different
+	// directory. These paths are metadata only; no files are written there.
+	workDir := "/tmp/gascity-codex-live"
+	aliasedWorkDir := "/private/tmp/gascity-codex-live"
 	dayDir := filepath.Join(sessDir, "2026", "06", "21")
 	if err := os.MkdirAll(dayDir, 0o755); err != nil {
 		t.Fatal(err)
