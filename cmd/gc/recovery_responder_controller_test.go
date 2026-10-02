@@ -72,6 +72,57 @@ func TestCityRuntimeRecoveryResponderNoConfigIsNoOp(t *testing.T) {
 	}
 }
 
+func TestInstalledRecoveryAccountRefsRejectsExecutableAliases(t *testing.T) {
+	cfg := &config.City{Providers: map[string]config.ProviderSpec{
+		"claude-personal": {Command: "true"},
+		"opencode-go":     {Command: "true", PathCheck: "true"},
+		"missing-account": {Command: "gc-ibou-command-that-is-not-installed"},
+		"no-command":      {},
+	}}
+	if got := installedRecoveryAccountRefs(cfg); len(got) != 0 {
+		t.Fatalf("arbitrary executable aliases admitted as accounts: %v", got)
+	}
+}
+
+func TestInstalledRecoveryAccountRefsRejectsWorkspaceCommandOverride(t *testing.T) {
+	cfg := &config.City{Workspace: config.Workspace{StartCommand: "not-installed"}, Providers: map[string]config.ProviderSpec{
+		"true": {Command: "true"},
+	}}
+	if got := installedRecoveryAccountRefs(cfg); len(got) != 0 {
+		t.Fatalf("workspace command override admitted as installed identity: %v", got)
+	}
+}
+
+func TestInstalledRecoveryAccountRefsRejectsPathCheckOnlyInstallation(t *testing.T) {
+	cfg := &config.City{Providers: map[string]config.ProviderSpec{
+		"gc-ibou-not-installed": {Command: "gc-ibou-not-installed", PathCheck: "true"},
+	}}
+	if got := installedRecoveryAccountRefs(cfg); len(got) != 0 {
+		t.Fatalf("path_check admitted a missing account executable: %v", got)
+	}
+}
+
+func TestCityRuntimeRecoveryResponderMissingAccountsFallsBack(t *testing.T) {
+	store := recoveryControllerStore()
+	var stderr bytes.Buffer
+	cr := &CityRuntime{
+		cfg: &config.City{RecoveryResponder: &config.RecoveryResponderConfig{
+			Targets: []string{"rig/responder"}, MaxAttempts: 1,
+			WayfinderURL: "http://127.0.0.1:1",
+		}},
+		standaloneCityStore: store,
+		stderr:              &stderr,
+	}
+	fields := cr.reconcileRecoveryResponder(context.Background(), time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC))
+	if fields["created"] != 1 || !strings.Contains(stderr.String(), "same-named installed executable") {
+		t.Fatalf("fallback fields = %#v, stderr = %q", fields, stderr.String())
+	}
+	works, err := store.List(beads.ListQuery{Label: worker.RecoveryWorkLabel, IncludeClosed: true})
+	if err != nil || len(works) != 1 || works[0].Metadata[beadmeta.RoutedToMetadataKey] != "rig/responder" {
+		t.Fatalf("fallback work = %+v, error = %v", works, err)
+	}
+}
+
 func TestCityRuntimeRecoveryResponderLoadsContainedWayfinderTemplate(t *testing.T) {
 	cityPath := t.TempDir()
 	templatePath := filepath.Join(cityPath, ".gc", "wayfinder-recovery.json")
@@ -85,7 +136,7 @@ func TestCityRuntimeRecoveryResponderLoadsContainedWayfinderTemplate(t *testing.
 	var stderr bytes.Buffer
 	cr := &CityRuntime{
 		cityPath: cityPath,
-		cfg: &config.City{RecoveryResponder: &config.RecoveryResponderConfig{
+		cfg: &config.City{Providers: recoveryControllerProviders(t), RecoveryResponder: &config.RecoveryResponderConfig{
 			// The contained template is valid but has no candidate for the only
 			// configured target. This proves file-backed advisor construction and
 			// deterministic fallback without opening a listener.
@@ -131,7 +182,7 @@ func TestCityRuntimeRecoveryResponderRejectsTemplateTraversalAndFallsBack(t *tes
 	var stderr bytes.Buffer
 	cr := &CityRuntime{
 		cityPath: cityPath,
-		cfg: &config.City{RecoveryResponder: &config.RecoveryResponderConfig{
+		cfg: &config.City{Providers: recoveryControllerProviders(t), RecoveryResponder: &config.RecoveryResponderConfig{
 			Targets: []string{"rig/responder"}, WayfinderURL: "http://127.0.0.1:1",
 			WayfinderRequestFile: rel, MaxAttempts: 1,
 		}},
@@ -177,6 +228,29 @@ func recoveryControllerStore() *beads.MemStore {
 	}}, nil)
 	store.HonorExplicitIDs = true
 	return store
+}
+
+func recoveryControllerProviders(t *testing.T) map[string]config.ProviderSpec {
+	t.Helper()
+	command := filepath.Join(t.TempDir(), "claude-personal")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return map[string]config.ProviderSpec{"claude-personal": {Command: command}}
+}
+
+func TestInstalledRecoveryAccountRefsAcceptsSameNamedExecutables(t *testing.T) {
+	providers := recoveryControllerProviders(t)
+	for _, name := range []string{"codex", "claude-gladstone"} {
+		command := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(command, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		providers[name] = config.ProviderSpec{Command: command}
+	}
+	if got := strings.Join(installedRecoveryAccountRefs(&config.City{Providers: providers}), ","); got != "claude-gladstone,claude-personal,codex" {
+		t.Fatalf("installed account refs = %q", got)
+	}
 }
 
 func recoveryControllerWayfinderTemplate(t *testing.T, target string) []byte {

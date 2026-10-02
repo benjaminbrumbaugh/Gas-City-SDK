@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func TestWayfinderFingerprintsMatchPublishedRoutingV3Golden(t *testing.T) {
+func TestWayfinderFingerprintsMatchCanonicalAccountFixture(t *testing.T) {
 	template, err := os.ReadFile("../../cmd/gc/testdata/recovery_wayfinder_request.json")
 	if err != nil {
 		t.Fatal(err)
@@ -27,17 +27,17 @@ func TestWayfinderFingerprintsMatchPublishedRoutingV3Golden(t *testing.T) {
 	canonicalizeWayfinderRequest(&request)
 	want := wayfinderFingerprints{
 		Request:         "sha256:c7d0999e640bb12d9cd0ea3e52592a149111f01702eab5447632f15a8d71e586",
-		Inventory:       "sha256:0c30eb45f40581e221188df04c7d532961e5504623e4392a18fb7760fb2e2bb8",
+		Inventory:       "sha256:dd5a1db1e58c742da7a4855b702cb6da01123480291f163f462ac9ce1971c5bc",
 		ModelAssessment: "sha256:f63fbfc6a1e858704e12a54ce386e0e9755118df62940e793a361801ebcbe14f",
-		AccountScope:    "sha256:be2be160af1c6eaf3a7cd554fd4c58c9f4db61c3fbb0a5e23a0d7cc9465dafd4",
+		AccountScope:    "sha256:25e698fbf67a707a66fae0c86beaf62247edfe6185e1402b7c1806473ec0bb19",
 		Evidence:        "sha256:4689f322336a7e75d6c2e232585606f3882b1f82e9b20fb2e36a1bee8e647cc1",
 		Policy:          "sha256:b6a4d9701edcb52c3f5a836d8c1f4216bc2409a0be4014d57909632923971f40",
 		Clock:           "sha256:c1a1e119e56d6b9c025e9279dd1b243adacc69a2ea28bf75ee90c80d1e351b5b",
 	}
 	if got := wayfinderRequestFingerprints(request); !reflect.DeepEqual(got, want) {
-		t.Fatalf("fingerprints = %+v, want published routing/v3 golden %+v", got, want)
+		t.Fatalf("fingerprints = %+v, want canonical account fixture %+v", got, want)
 	}
-	if got := wayfinderDecisionID(want); got != "routing/v3:21d21557a54b6beeaa63b0cdd6772c601c760355950cd43cbece98bab6208de7" {
+	if got := wayfinderDecisionID(want); got != "routing/v3:b25651106515cb0c2817f2a03db39b984b02634304d2e852c59eabb10f72d9e4" {
 		t.Fatalf("decision id = %q", got)
 	}
 }
@@ -45,7 +45,7 @@ func TestWayfinderFingerprintsMatchPublishedRoutingV3Golden(t *testing.T) {
 func TestWayfinderRecoveryAdvisorSubmitsCanonicalBoundRoutingV3Request(t *testing.T) {
 	template := recoveryWayfinderTemplate(t, "rig/second", "rig/first")
 	var gotBody []byte
-	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", template)
+	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", template, testWayfinderAccountRefs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestWayfinderRecoveryAdvisorNarrowsCandidatesTargetsAndEvidenceTogether(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", encodedTemplate)
+	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", encodedTemplate, testWayfinderAccountRefs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,11 +184,11 @@ func TestWayfinderRecoveryAdvisorRejectsMoreThanMaximumTargetsBeforeHTTP(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", encoded); err == nil {
+	if _, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", encoded, testWayfinderAccountRefs()); err == nil {
 		t.Fatal("template with more than maximum allowed targets was accepted")
 	}
 
-	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", recoveryWayfinderTemplate(t, "rig/first"))
+	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", recoveryWayfinderTemplate(t, "rig/first"), testWayfinderAccountRefs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestWayfinderRecoveryAdvisorRejectsMoreThanMaximumTargetsBeforeHTTP(t *test
 
 func TestWayfinderRecoveryAdvisorRejectsOversizedFinalRequestBeforeHTTP(t *testing.T) {
 	template := nearLimitWayfinderTemplate(t)
-	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", template)
+	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", template, testWayfinderAccountRefs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func nearLimitWayfinderTemplate(t *testing.T) []byte {
 		suffix := strconv.Itoa(i)
 		candidateCopy := candidate
 		candidateCopy.CandidateID = "candidate-" + suffix
-		candidateCopy.ExecutionTarget.AccountRef = "account-" + suffix
+		candidateCopy.ExecutionTarget.AccountRef = "claude-personal"
 		assessmentCopy := assessment
 		assessmentCopy.RecordID = "assessment-" + suffix
 		candidateCopy.ModelAssessmentRef = stringPointer(assessmentCopy.RecordID)
@@ -407,10 +407,32 @@ func TestWayfinderRecoveryAdvisorRejectsUnsafeTemplateBeforeHTTP(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", encoded); err == nil {
+			if _, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", encoded, testWayfinderAccountRefs()); err == nil {
 				t.Fatalf("unsafe template accepted: %s", encoded)
 			}
 		})
+	}
+}
+
+func TestWayfinderRecoveryAdvisorRejectsUninstalledAccountBeforeHTTP(t *testing.T) {
+	if _, err := NewWayfinderRecoveryAdvisor(
+		"http://127.0.0.1:1234", recoveryWayfinderTemplate(t, "rig/first"), []string{"claude-gladstone"},
+	); err == nil || !strings.Contains(err.Error(), "installed configured account") {
+		t.Fatalf("constructor error = %v, want uninstalled account rejection", err)
+	}
+}
+
+func TestWayfinderRecoveryAdvisorRejectsUninstalledAccountInResponse(t *testing.T) {
+	request := recoveryWayfinderRequest(t, string(recoveryWayfinderTemplate(t, "rig/first")))
+	result := validWayfinderResult(request, "rig/first")
+	result.Candidates[0].ExecutionTarget.AccountRef = "personal-max"
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advisor := recoveryWayfinderAdvisorWithResponse(t, encoded)
+	if _, err := advisor.Recommend(context.Background(), recoveryRequest()); err == nil || !strings.Contains(err.Error(), "installed configured account") {
+		t.Fatalf("Recommend() error = %v, want uninstalled response account rejection", err)
 	}
 }
 
@@ -466,7 +488,7 @@ func TestWayfinderRecoveryAdvisorRejectsStaleUnauthorizedOrUnboundCandidateEvide
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", encoded); err == nil {
+			if _, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", encoded, testWayfinderAccountRefs()); err == nil {
 				t.Fatal("stale, unauthorized, or unbound evidence accepted")
 			}
 		})
@@ -481,7 +503,7 @@ func TestWayfinderRecoveryAdvisorRejectsDuplicateAndCaseVariantKeys(t *testing.T
 		strings.Replace(valid, `"profile_source":"caller"`, `"profile_source":"caller","Profile_Source":"caller"`, 1),
 	}
 	for _, template := range templates {
-		if _, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", []byte(template)); err == nil {
+		if _, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", []byte(template), testWayfinderAccountRefs()); err == nil {
 			t.Fatalf("ambiguous template accepted: %s", template)
 		}
 	}
@@ -796,7 +818,7 @@ func TestWayfinderRecoveryAdvisorAcceptsCrossDomainEvidenceIDCollision(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", encodedTemplate)
+	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", encodedTemplate, testWayfinderAccountRefs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -900,7 +922,7 @@ func TestWayfinderRecoveryAdvisorContextTimeoutWinsDeterministically(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", recoveryWayfinderTemplate(t, "rig/first"))
+	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", recoveryWayfinderTemplate(t, "rig/first"), testWayfinderAccountRefs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -923,7 +945,7 @@ func TestWayfinderRecoveryAdvisorContextTimeoutWinsDeterministically(t *testing.
 
 func TestWayfinderRecoveryAdvisorFallsBackWithoutMatchingCandidate(t *testing.T) {
 	calls := 0
-	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", recoveryWayfinderTemplate(t, "rig/first"))
+	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", recoveryWayfinderTemplate(t, "rig/first"), testWayfinderAccountRefs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -947,7 +969,7 @@ func TestWayfinderRecoveryAdvisorRejectsMalformedTemplateAndResponse(t *testing.
 		[]byte(`{"schema_version":"routing/v3"}`),
 		append(append([]byte(nil), valid...), []byte(` {}`)...),
 	} {
-		if _, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", template); err == nil {
+		if _, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", template, testWayfinderAccountRefs()); err == nil {
 			t.Fatalf("invalid template accepted: %s", template)
 		}
 	}
@@ -1017,7 +1039,7 @@ func recoveryWayfinderCandidate(target, suffix string) wayfinderCandidate {
 			SupportsTools: true, SupportsStructuredOutput: true, SupportsStreaming: true,
 		},
 		ExecutionTarget: wayfinderExecutionTarget{
-			TargetID: target, FabricKind: "cloud_endpoint", ProviderID: "provider/operator", AccountRef: "account/opaque-" + suffix,
+			TargetID: target, FabricKind: "cloud_endpoint", ProviderID: "provider/operator", AccountRef: "claude-personal",
 			AdmissionModel: "immediate", ActivationModel: "always_on", CapacityModel: "unmetered",
 			DeploymentMaxContextTokens: 8192, DeploymentMaxOutputTokens: 2048, Residency: "us-west",
 			DataHandling: "remote_provider", Isolation: "shared_tenant", ConfigDigest: wayfinderDigest("config-" + target),
@@ -1123,7 +1145,7 @@ func recoveryWayfinderAdvisorWithResponse(t *testing.T, response []byte) *Wayfin
 
 func recoveryWayfinderAdvisorWithBody(t *testing.T, body io.ReadCloser) *WayfinderRecoveryAdvisor {
 	t.Helper()
-	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", recoveryWayfinderTemplate(t, "rig/first"))
+	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", recoveryWayfinderTemplate(t, "rig/first"), testWayfinderAccountRefs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1145,6 +1167,8 @@ func recoveryRequest() RecoveryRequest {
 	return RecoveryRequest{CorrelationID: "incident-1", Now: time.Unix(150, 0), Targets: []string{"rig/first"}}
 }
 
+func testWayfinderAccountRefs() []string { return []string{"claude-personal"} }
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
@@ -1158,7 +1182,7 @@ func TestWayfinderCanonicalizationDoesNotMutateTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", template)
+	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", template, testWayfinderAccountRefs())
 	if err != nil {
 		t.Fatal(err)
 	}

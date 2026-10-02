@@ -79,7 +79,7 @@
         "target_id": "anthropic-personal-max-opus-5-high",
         "fabric_kind": "cloud_endpoint",
         "provider_id": "anthropic",
-        "account_ref": "personal-max",
+        "account_ref": "claude-personal",
         "admission_model": "immediate",
         "activation_model": "always_on",
         "capacity_model": "concurrency_slots",
@@ -133,7 +133,7 @@
   "entitlements": [
     {
       "record_id": "ent-personal-max",
-      "account_ref": "personal-max",
+      "account_ref": "claude-personal",
       "enabled": true,
       "authorization_state": "authorized",
       "billing_mode": "subscription",

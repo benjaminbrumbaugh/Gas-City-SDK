@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,7 +23,7 @@ func (cr *CityRuntime) reconcileRecoveryResponder(ctx context.Context, now time.
 		return nil
 	}
 	cfg := cr.cfg.RecoveryResponder
-	advisor, advisorErr := recoveryAdvisorForConfig(cr.cityPath, cfg)
+	advisor, advisorErr := recoveryAdvisorForConfig(cr.cityPath, cfg, cr.cfg)
 	if advisorErr != nil {
 		// Advisory failure is fail-open by design: configured target order remains
 		// the deterministic recovery path.
@@ -46,9 +48,13 @@ func (cr *CityRuntime) reconcileRecoveryResponder(ctx context.Context, now time.
 	}
 }
 
-func recoveryAdvisorForConfig(cityPath string, cfg *config.RecoveryResponderConfig) (worker.RecoveryAdvisor, error) {
+func recoveryAdvisorForConfig(cityPath string, cfg *config.RecoveryResponderConfig, cityCfg *config.City) (worker.RecoveryAdvisor, error) {
 	if cfg == nil || strings.TrimSpace(cfg.WayfinderURL) == "" {
 		return nil, nil
+	}
+	accountRefs := installedRecoveryAccountRefs(cityCfg)
+	if len(accountRefs) == 0 {
+		return nil, fmt.Errorf("no configured Wayfinder account resolves to a same-named installed executable")
 	}
 	_, _, _, err := recoveryWayfinderRequestCandidate(cityPath, cfg.WayfinderRequestFile)
 	if err != nil {
@@ -58,13 +64,47 @@ func recoveryAdvisorForConfig(cityPath string, cfg *config.RecoveryResponderConf
 		baseURL:               cfg.WayfinderURL,
 		cityPath:              cityPath,
 		configuredRequestPath: cfg.WayfinderRequestFile,
+		accountRefs:           accountRefs,
 	}, nil
+}
+
+// installedRecoveryAccountRefs admits only explicit catalog identities backed
+// by a same-named executable. ResolveProvider alone permits arbitrary aliases,
+// path_check indirection, and unchecked workspace start_command overrides.
+// This is executable admission, NOT credential/authentication or backend-account
+// attestation: wrappers and front ends remain operator-owned trust boundaries.
+func installedRecoveryAccountRefs(cityCfg *config.City) []string {
+	if cityCfg == nil || len(cityCfg.Providers) == 0 {
+		return nil
+	}
+	refs := make([]string, 0, len(cityCfg.Providers))
+	for name := range cityCfg.Providers {
+		resolved, err := config.ResolveProvider(
+			&config.Agent{Provider: name}, &cityCfg.Workspace, cityCfg.Providers, exec.LookPath,
+		)
+		if err != nil || resolved == nil {
+			continue
+		}
+		// No shell parsing or identifier normalization. Absolute paths are local
+		// only; their basename must match the exact operator-declared identity.
+		command := resolved.Command
+		if command != name && (!filepath.IsAbs(command) || filepath.Base(command) != name) {
+			continue
+		}
+		if _, err := exec.LookPath(command); err != nil {
+			continue
+		}
+		refs = append(refs, name)
+	}
+	sort.Strings(refs)
+	return refs
 }
 
 type fileRecoveryAdvisor struct {
 	baseURL               string
 	cityPath              string
 	configuredRequestPath string
+	accountRefs           []string
 }
 
 func (a fileRecoveryAdvisor) Recommend(ctx context.Context, request worker.RecoveryRequest) (string, error) {
@@ -89,7 +129,7 @@ func (a fileRecoveryAdvisor) Recommend(ctx context.Context, request worker.Recov
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	advisor, err := worker.NewWayfinderRecoveryAdvisor(a.baseURL, template)
+	advisor, err := worker.NewWayfinderRecoveryAdvisor(a.baseURL, template, a.accountRefs)
 	if err != nil {
 		return "", err
 	}
