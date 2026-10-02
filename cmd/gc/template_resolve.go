@@ -57,6 +57,7 @@ type TemplateParams struct {
 	// launch or warm reuse. The controller supplies it; it is never persisted.
 	RoutingLaunchCheck         func(session.Info, runtime.Config) error
 	RoutingLaunchAuthorization session.LaunchAuthorization
+	RoutingWakeAuthorization   func(session.Info, string, string) error
 	// Command is the resolved provider command string.
 	Command string
 	// Prompt is the fully rendered prompt (with beacon).

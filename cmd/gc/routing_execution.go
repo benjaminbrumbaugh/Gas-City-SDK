@@ -18,15 +18,18 @@ import (
 // Legacy decisions retain their prior launch behavior. No adapter means deny,
 // never copying the signed tuple back as an alleged local observation.
 func (cr *CityRuntime) checkRoutingExecutionLaunch(target, rig string, info sessionpkg.Info, final runtime.Config) error {
+	if err := cr.checkUnavailableRoutingExecutionAuthority(info); err != nil {
+		return err
+	}
 	var bound *routingdecision.ExecutionSessionAuthorization
 	if cr.routingDecisionStore != nil && info.ID != "" {
 		var err error
-		bound, err = cr.routingDecisionStore.ExecutionSession(info.ID)
+		bound, err = cr.routingDecisionStore.ExecutionSessionIncarnation(info.ID, info.Generation, info.InstanceToken)
 		if err != nil {
 			return errors.New("routing session authority unavailable")
 		}
 		if bound != nil {
-			if info.TriggerBeadID != bound.WorkID || info.Generation != bound.Generation || info.InstanceToken != bound.InstanceToken {
+			if (info.RoutingExecutionDecisionID != "" && info.RoutingExecutionDecisionID != bound.DecisionID) || info.TriggerBeadID != bound.WorkID || info.Generation != bound.Generation || info.InstanceToken != bound.InstanceToken {
 				return errors.New("routing session authority changed")
 			}
 			info.RoutingExecutionDecisionID = bound.DecisionID

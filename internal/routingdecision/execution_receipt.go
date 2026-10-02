@@ -135,7 +135,10 @@ func (store *Store) RecordExecutionLaunchAttempt(auth ExecutionSessionAuthorizat
 			return err
 		}
 		if !bytes.Equal(sessions.Get([]byte(auth.SessionID)), data) {
-			return ErrAuthorizationRequired
+			successors := tx.Bucket(bucketExecutionSuccessors)
+			if successors == nil || !bytes.Equal(successors.Get(executionIncarnationKey(auth)), data) {
+				return ErrAuthorizationRequired
+			}
 		}
 		hash := sha256.Sum256(append(append([]byte("gascity.execution-launch.v3\x00"), data...), []byte("\x00"+attemptID)...))
 		id := "execution_" + hex.EncodeToString(hash[:])
@@ -148,6 +151,16 @@ func (store *Store) RecordExecutionLaunchAttempt(auth ExecutionSessionAuthorizat
 				return ErrStoreCorrupt
 			}
 			return nil
+		}
+		if err := checkExecutionIncarnationHead(tx, auth); err != nil {
+			return err
+		}
+		heads, err := tx.CreateBucketIfNotExists(bucketExecutionHeads)
+		if err != nil {
+			return err
+		}
+		if err := heads.Put([]byte(auth.SessionID), data); err != nil {
+			return err
 		}
 		result = ExecutionLaunchReceipt{ExecutionID: id, Authorization: auth, AttemptID: attemptID, StartedAt: store.now().UTC()}
 		encoded, err := json.Marshal(result)

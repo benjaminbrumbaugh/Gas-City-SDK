@@ -873,7 +873,7 @@ func prepareStartCandidateForCity(
 			// byte-coherent with the persisted state without a second Get. It shares
 			// preWakeCommit's error contract: a failed re-read already returned above,
 			// so the twin is never folded from a stale/rejected bead.
-			_, _, fold, err := preWakeCommit(current, sessFront, clk)
+			_, _, fold, err := preWakeCommit(current, sessFront, clk, candidate.tp.RoutingWakeAuthorization)
 			if err != nil {
 				return err
 			}
@@ -882,7 +882,7 @@ func prepareStartCandidateForCity(
 		}); err != nil {
 			return nil, err
 		}
-	} else if _, _, fold, err := preWakeCommit(candidate.info, sessionFrontDoor(store), clk); err != nil {
+	} else if _, _, fold, err := preWakeCommit(candidate.info, sessionFrontDoor(store), clk, candidate.tp.RoutingWakeAuthorization); err != nil {
 		return nil, err
 	} else {
 		candidate.info = candidate.info.ApplyPatch(fold)

@@ -60,6 +60,21 @@ func TestRoutingExecutionProductionCutoverInstallsOnlySupportedAdapter(t *testin
 	}
 }
 
+func awaitRoutingExecutionWitness(t *testing.T, output, expected string, count int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		data, _ := os.ReadFile(output)
+		if strings.Count(string(data), expected) >= count {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("recording child did not execute")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestRoutingExecutionRecordingChildRecoveryAndNonmigration(t *testing.T) {
 	fixture := newApprovedRoutingDecisionFixture(t, "legacy-child")
 	root := t.TempDir()
@@ -139,18 +154,7 @@ func TestRoutingExecutionRecordingChildRecoveryAndNonmigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sp.Stop(info.SessionName) })
-	awaitRecord := func(count int) {
-		t.Helper()
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			data, _ := os.ReadFile(output)
-			if strings.Count(string(data), "Literal/Model") >= count {
-				return
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		t.Fatal("recording child did not execute")
-	}
+	awaitRecord := func(count int) { awaitRoutingExecutionWitness(t, output, "Literal/Model", count) }
 	awaitRecord(1)
 	data, _ := os.ReadFile(output)
 	want := executable + "\n--model\nLiteral/Model\n--effort\nhigh\nHOME=" + root + "\nACCOUNT=account-a\nANTHROPIC_MODEL=unset\nOPENAI_API_KEY=unset\n"

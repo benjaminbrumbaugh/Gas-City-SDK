@@ -35,6 +35,27 @@ func ExecutionSessionBound(cityRoot, id string) (bool, error) {
 		return false, ErrStoreLocked
 	}
 	defer db.Close() //nolint:errcheck
+	if err := db.View(func(tx *bbolt.Tx) error {
+		for _, name := range requiredBucketNames {
+			if tx.Bucket(name) == nil {
+				return ErrStoreCorrupt
+			}
+		}
+		meta := tx.Bucket(bucketMeta)
+		schema, ok := decodeUint64(meta.Get(keySchemaVersion))
+		if !ok {
+			return ErrStoreCorrupt
+		}
+		if schema != SchemaVersion {
+			return ErrUnsupportedSchema
+		}
+		if _, ok := decodeUint64(meta.Get(keyStoreRevision)); !ok {
+			return ErrStoreCorrupt
+		}
+		return nil
+	}); err != nil {
+		return false, err
+	}
 	store := &Store{db: db}
 	auth, err := store.ExecutionSession(id)
 	return auth != nil, err

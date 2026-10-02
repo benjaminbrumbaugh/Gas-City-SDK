@@ -600,6 +600,11 @@ type Config struct {
 	// ambient PATH or shell-init environment. Only caller-owned v3 authorization
 	// sets this; false preserves legacy subprocess behavior.
 	IsolatedLocalExecution bool
+	// BoundExecutable and BoundArgs select direct exec, never a wrapping shell.
+	// Only the controller authorizer supplies these after final-command validation.
+	BoundExecutable  string
+	BoundArgs        []string
+	BoundEnvironment map[string]string
 	// WorkDir is the working directory for the session process.
 	WorkDir string
 
