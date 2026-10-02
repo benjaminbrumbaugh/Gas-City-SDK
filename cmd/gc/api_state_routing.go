@@ -5,7 +5,21 @@ import (
 	"errors"
 
 	"github.com/gastownhall/gascity/internal/routingdecision"
+	"github.com/gastownhall/gascity/internal/session"
 )
+
+func (s *controllerState) RoutingExecutionLaunchAuthorization() session.LaunchAuthorization {
+	service := s.routingDecisions()
+	if service == nil {
+		return nil
+	}
+	service.mu.RLock()
+	defer service.mu.RUnlock()
+	if service.closed {
+		return nil
+	}
+	return service.launchAuthorization
+}
 
 func (s *controllerState) routingDecisions() *cityRoutingDecisionService {
 	s.mu.RLock()

@@ -1960,7 +1960,11 @@ func startPreparedStartCandidate(
 		}
 		return true, handle.StartResolved(ctx, item.cfg.Command, item.cfg)
 	}
-	handle, err := workerHandleForSessionWithStaleKeyDetectionWaiter(cityPath, store, sp, cfg, item.candidate.info.ID, staleKeyDetectionWaiter)
+	factory, err := workerFactoryWithLaunchAuthorization(cityPath, store, sp, cfg, staleKeyDetectionWaiter, item.candidate.tp.RoutingLaunchAuthorization)
+	if err != nil {
+		return true, err
+	}
+	handle, err := factory.SessionByID(item.candidate.info.ID)
 	if err != nil {
 		return true, err
 	}

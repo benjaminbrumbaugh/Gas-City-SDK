@@ -262,6 +262,8 @@ type City struct {
 	// RecoveryResponder optionally routes bounded recovery work for durable,
 	// high-confidence provider/session impairments.
 	RecoveryResponder *RecoveryResponderConfig `toml:"recovery_responder,omitempty"`
+	// RoutingExecution is root-owned, explicitly disabled by default execution authorization.
+	RoutingExecution *RoutingExecutionConfig `toml:"routing_execution,omitempty"`
 	// Mail configures the mail provider backend.
 	Mail MailConfig `toml:"mail,omitempty"`
 	// Events configures the events provider backend.

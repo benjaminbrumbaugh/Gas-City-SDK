@@ -1,5 +1,78 @@
 # Wayfinder v3 SDK execution-consumption contract
 
+## Actual root CLI / City convergence (2026-10-02)
+
+The built `gc` root now discovers all six routing result schemas through the
+normal embedded command-path schema registry: status, targets, eligible,
+decisions, outcomes, and ingest. No root gate is bypassed. A built-executable
+regression checks each capability manifest and invokes each `--json` path in an
+isolated HOME/GC_HOME. A real HTTP fixture additionally proves the v3 outcome
+page is emitted verbatim, without an extra CLI `ok` field; the v2 branch retains
+its existing success envelope. Both generations have explicit result schemas.
+
+The actual City `TestCityV3CrossRepositoryConvergence` passed against this SDK
+worktree and producer `a3eda7e521019e675ba23d7a23dfb0e9c15bb3ab` (producer source
+was dirty, so this is not final producer-byte approval). It freshly built the SDK
+root and producer CLI, exercised real producer selection and City signing,
+SDK ingest/replay/admission, final-argv drift denial, the real recording child,
+durable session/launch receipts, and both service and actual CLI production
+forwarders. City durable exact record bytes/SHA256 acknowledgement and producer
+create/replay, including local-ack loss, passed. Terminal completion remains
+`unknown`; a successful Start is not terminal evidence. No City/plugin source or
+live keys/config/providers/restarts were changed.
+
+Reproduce the full cross-repository proof (not merely the SDK child witness):
+
+```sh
+export TMPDIR="$HOME/.hermes/cache/scratch"
+export CGO_CPPFLAGS="-I$(brew --prefix icu4c)/include"
+export CGO_LDFLAGS="-L$(brew --prefix icu4c)/lib"
+cd /absolute/path/to/City/source
+CITY_V3_SDK_ROOT=/absolute/path/to/SDK/source \
+CITY_V3_PRODUCER_ROOT=/absolute/path/to/Wayfinder/source \
+go test ./cmd/gcfactory -run '^TestCityV3CrossRepositoryConvergence$' -count=1 -v -timeout=15m
+```
+
+The successful-Start receipt replay test uses the **original attempt ID** across
+ledger reopen and requires exact receipt identity and persisted timestamp.
+Claimed-work recovery remains bound to the original authorization and produces
+a distinct receipt only for a distinct successful Start. Cleared mutable session
+markers/trigger cannot erase the independent durable authorization; absent,
+locked, or corrupt authority never licenses a marked legacy launch.
+
+**Trust limit:** the adapter hashes executable bytes before exec but does not
+atomically pin the opened image. Require caller-controlled immutable executable
+installation and configuration; do not claim resistance to concurrent same-user
+replacement between attestation and exec. Remote runtimes, provider credential
+validity, live inference, terminal success, and rollout are unproved. The lane
+remains opt-in and disabled by default. Final independent review is required.
+
+## Candidate implementation and current proof (2026-10-02)
+
+The sections below describe the original foundation and its obligations; this section records the subsequent candidate, not approval for live activation. The opt-in controller installs a caller-owned adapter only for direct or seam-backed local subprocess. Session launch authorization and successful-start receipt writing run through the real worker/session boundary. Original decision/session/work/generation/instance identity is persisted independently of mutable bead markers. When the caller adapter is absent, the session manager probes an existing ledger read-only; a locked/corrupt ledger is unknown and denies rather than downgrading to legacy. No ledger is created by that fallback probe.
+
+Executable basename must equal the exact account identity. Literal serving and reasoning argv, isolated environment, command, workdir, executable digest, full configuration, and adapter/invocation digest are checked against the signed tuple. `max` and `xhigh` remain unrepresentable, never translated. Real recording-child tests now cover hostile outer PATH/shell init, changed tuple/account/provider/adapter/config/executable bytes, fallback-command substitution, claimed-work recovery with two distinct successful-start receipts, and cleared-marker/trigger plus missing-adapter denial. Terminal facts remain unknown.
+
+The additive producer v3 page is exercised through controller state, Huma routes, generated HTTP client, and CLI, and validated against the actual Wayfinder producer schema. Reproduce without live keys/config/providers/restarts:
+
+```sh
+scripts/test-wayfinder-v3-convergence.sh /absolute/path/to/Wayfinder
+```
+
+Artifacts are `temp/wayfinder-v3-proof/convergence.log` and `outcomes-v3.json`. This is a disposable real local execution witness, not proof of live provider authentication or an installed City-to-plugin submission.
+
+The failed full consumer suite had exactly two API failures: `TestOpenAPISpecInSync` (three stale OpenAPI artifacts) and `TestPaginationDialectGuard` (new bounded v3 page missing from the approved 100-row keyset map). Regenerated the spec and generated client; declared the new page alongside the existing bounded outcome page. Both tests pass on the candidate and on the initial HEAD `5f6a914829bd364fe31d235a42b6dbdef22c2058` and campaign baseline `5b1013338` under the same scratch/ICU environment. Incidental corrupt-bead/request logs were not the failure cause.
+
+**Unproved:** check-to-launch replacement of a writable executable by a concurrent same-user process remains a TOCTOU limit, as does remote runtime attestation. No final independent approval or live rollout is claimed. The lane remains disabled unless explicitly configured; the original foundation notes below must not be read as current implementation evidence.
+
+## Candidate production convergence interface
+
+The consumer lane is opt-in via root `[routing_execution] enabled = true`; absent/false denies new v3 execution. The local registry binds each exact static target to an absolute caller-owned executable, SHA-256 of its bytes, isolated environment, literal model/effort argv positions, account/provider, work directory, and `subprocess` transport. No aliases or effort translation are supplied.
+
+The proposed producer interface is additive `GET /v0/city/{cityName}/routing/outcomes-v3`, returning `schema_version=routing/outcome/v3`, `items`, `next_cursor`, `total`, and `partial`. Existing typed v2 HTTP/client signatures remain unchanged. `gc routing outcomes --json` uses this v3 projection when routing status advertises `execution_enabled`; otherwise it remains v2. Thus City's existing `forward-v3` command need not relabel or change flags. Only durable launch receipts provide actual target/config/session/execution identity; terminal disposition remains unknown. Decisions with neither a launch nor authoritative non-admission are omitted with `partial=true`, because the producer v3 schema cannot honestly encode null actual tuple with unknown disposition.
+
+This section records the convergence contract; completion/proofs are reported below after execution. No live activation is authorized.
+
 ## Status: foundation only; no live activation
 
 This branch adds a versioned signed execution tuple, a default-deny local adapter

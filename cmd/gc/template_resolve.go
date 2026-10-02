@@ -55,7 +55,8 @@ func resolvedProviderName(r *config.ResolvedProvider) string {
 type TemplateParams struct {
 	// RoutingLaunchCheck consumes the fully resolved invocation immediately before
 	// launch or warm reuse. The controller supplies it; it is never persisted.
-	RoutingLaunchCheck func(session.Info, runtime.Config) error
+	RoutingLaunchCheck         func(session.Info, runtime.Config) error
+	RoutingLaunchAuthorization session.LaunchAuthorization
 	// Command is the resolved provider command string.
 	Command string
 	// Prompt is the fully rendered prompt (with beacon).

@@ -114,12 +114,15 @@ func TestJSONResultSchemasRequireSuccessDiscriminator(t *testing.T) {
 			path == "schemas/coordination/request/result.schema.json" ||
 			path == "schemas/coordination/list/result.schema.json" ||
 			path == "schemas/coordination/show/result.schema.json" ||
+			path == "schemas/routing/outcomes/result.schema.json" ||
 			path == "schemas/ready/result.schema.json" {
 			// metrics example --json is deliberately the byte-exact product-
 			// metrics network fixture. Registry requests is the versioned
 			// product-metrics request envelope. External coordination request,
-			// show, and list are deliberately the API's raw payloads,
-			// rather than the generic CLI result envelope. gc ready is the
+			// show, and list are deliberately the API's raw payloads.
+			// Routing outcomes preserves the producer v3 page byte shape;
+			// its v2 branch retains the historical CLI success discriminator.
+			// gc ready is the
 			// in-process drop-in for `bd ready --json`, so its payload is bd's
 			// bare row array — the shape the hook work-query path already decodes
 			// into []beads.Bead, and one an envelope would break. None is a

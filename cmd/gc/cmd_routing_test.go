@@ -17,6 +17,24 @@ import (
 	"github.com/gastownhall/gascity/internal/routingdecision"
 )
 
+func TestRoutingCLISelectsProducerV3OnlyForExplicitExecutionLane(t *testing.T) {
+	withRoutingCLIClient(t, roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/v0/city/acme/routing/status":
+			return routingCLIResponse(t, http.StatusOK, routingdecision.LiveStatus{Schema: 1, ExecutionEnabled: true}), nil
+		case "/v0/city/acme/routing/outcomes-v3":
+			return routingCLIResponse(t, http.StatusOK, routingdecision.ProducerExecutionOutcomePage{SchemaVersion: "routing/outcome/v3", Items: []routingdecision.ProducerExecutionOutcome{}}), nil
+		default:
+			t.Fatalf("v3 lane called wrong generation: %s", r.URL.Path)
+			return nil, nil
+		}
+	}))
+	out, stderr, err := executeRoutingCommand(t, "outcomes", "--json")
+	if err != nil || !strings.Contains(out, "routing/outcome/v3") {
+		t.Fatalf("v3 CLI output: %s %s %v", out, stderr, err)
+	}
+}
+
 func TestRoutingCLICommandGroupIsPublicAndComplete(t *testing.T) {
 	root := newRootCmd(&bytes.Buffer{}, &bytes.Buffer{})
 	group, _, err := root.Find([]string{"routing"})
@@ -108,10 +126,13 @@ func TestRoutingCLIReadCommandsAreLiveAPIOnly(t *testing.T) {
 		{args: []string{"outcomes", "--limit", "7", "--cursor", "next", "--json"}, wantKeys: []string{"schema_version", "items", "partial"}},
 	}
 	for _, test := range tests {
-		stdout, stderr, err := executeRoutingCommand(t, test.args...)
-		if err != nil {
-			t.Fatalf("routing %v: %v stderr=%s", test.args, err, stderr)
+		var outputBuffer, errorBuffer bytes.Buffer
+		code := run(append([]string{"routing"}, test.args...), &outputBuffer, &errorBuffer)
+		stdout, stderr := outputBuffer.String(), errorBuffer.String()
+		if code != 0 {
+			t.Fatalf("routing %v: exit %d stderr=%s stdout=%s", test.args, code, stderr, stdout)
 		}
+		validateJSONAgainstResultSchema(t, []string{"routing", test.args[0]}, outputBuffer.Bytes())
 		var output map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &output); err != nil {
 			t.Fatalf("routing %v output is not JSON: %q: %v", test.args, stdout, err)

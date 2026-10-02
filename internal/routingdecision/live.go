@@ -30,6 +30,7 @@ const (
 
 // LiveStatus is the boot-latched routing capability and exact ledger summary.
 type LiveStatus struct {
+	ExecutionEnabled   bool        `json:"execution_enabled"`
 	Schema             int         `json:"schema"`
 	Status             string      `json:"status"`
 	Reason             string      `json:"reason"`

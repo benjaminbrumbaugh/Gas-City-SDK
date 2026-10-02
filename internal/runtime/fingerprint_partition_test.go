@@ -112,6 +112,7 @@ var coreFieldHalf = map[string]string{
 }
 
 var excludedFromCore = map[string]string{
+	"IsolatedLocalExecution": "authority-derived subprocess launch mechanism, enforced afresh after fingerprint resolution by durable v3 launch authorization; not user configuration",
 	"WorkDir":                "run location, not config identity",
 	"StartupEnvelope":        "T3 startup metadata, explicitly excluded from Core",
 	"ReadyPromptPrefix":      "startup readiness hint",

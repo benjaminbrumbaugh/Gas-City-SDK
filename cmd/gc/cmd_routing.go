@@ -237,6 +237,28 @@ func newRoutingOutcomesCmd(stdout, stderr io.Writer) *cobra.Command {
 		if err != nil {
 			return err
 		}
+		status, err := client.RoutingStatus()
+		if err != nil {
+			fmt.Fprintf(stderr, "gc routing outcomes: %v\n", err) //nolint:errcheck
+			return errExit
+		}
+		if status.ExecutionEnabled {
+			page, err := client.RoutingExecutionOutcomes(gcapi.RoutingOutcomeListRequest{Limit: limit, Cursor: cursor})
+			if err != nil {
+				fmt.Fprintf(stderr, "gc routing outcomes: %v\n", err) //nolint:errcheck
+				return errExit
+			}
+			if jsonOutput {
+				// The producer v3 page is the typed API contract verbatim. A CLI
+				// success envelope would change the City's durable outbox bytes.
+				return json.NewEncoder(stdout).Encode(page)
+			}
+			for _, item := range page.Items {
+				fmt.Fprintf(stdout, "%s	%s	%s	%s\n", item.RecommendationID, item.WorkID, item.Status, item.Disposition) //nolint:errcheck
+			}
+			fmt.Fprintf(stdout, "Partial: %t\n", page.Partial) //nolint:errcheck
+			return nil
+		}
 		page, err := client.RoutingOutcomes(gcapi.RoutingOutcomeListRequest{Limit: limit, Cursor: cursor})
 		if err != nil {
 			fmt.Fprintf(stderr, "gc routing outcomes: %v\n", err) //nolint:errcheck

@@ -32,6 +32,8 @@ type FactoryConfig struct {
 	// a keyed start is probed for stale resume-key failure. Nil preserves the
 	// session package production timer.
 	StaleKeyDetectionWaiter sessionpkg.StaleKeyDetectionWaiter
+	// LaunchAuthorization is caller-owned authority for signed execution lanes.
+	LaunchAuthorization sessionpkg.LaunchAuthorization
 	// Pricing estimates per-invocation cost for telemetry. Nil falls back
 	// to the registry built from shipped defaults.
 	Pricing *pricing.Registry
@@ -62,6 +64,9 @@ func NewFactory(cfg FactoryConfig) (*Factory, error) {
 	}
 	if cfg.StaleKeyDetectionWaiter != nil {
 		opts = append(opts, sessionpkg.WithStaleKeyDetectionWaiter(cfg.StaleKeyDetectionWaiter))
+	}
+	if cfg.LaunchAuthorization != nil {
+		opts = append(opts, sessionpkg.WithLaunchAuthorization(cfg.LaunchAuthorization))
 	}
 	manager := sessionpkg.NewManagerWithOptions(cfg.Store, cfg.Provider, opts...)
 	return newFactory(manager, cfg.Store, cfg.Provider, cfg.SearchPaths, cfg.Recorder, cfg.UsageSink, cfg.ResolveSessionRuntime, cfg.Pricing)

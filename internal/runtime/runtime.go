@@ -596,6 +596,10 @@ const (
 
 // Config holds the parameters for starting a new session.
 type Config struct {
+	// IsolatedLocalExecution selects the supported subprocess outer shell without
+	// ambient PATH or shell-init environment. Only caller-owned v3 authorization
+	// sets this; false preserves legacy subprocess behavior.
+	IsolatedLocalExecution bool
 	// WorkDir is the working directory for the session process.
 	WorkDir string
 

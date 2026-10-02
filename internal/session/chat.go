@@ -367,11 +367,21 @@ func (m *Manager) retryFreshStartAfterStaleKey(
 		}
 		return false, fmt.Errorf("pre-start orphan cleanup: %w", orphanErr)
 	}
+	commitLaunch, authorizationErr := m.authorizeRuntimeStart(ctx, id, &cfg)
+	if authorizationErr != nil {
+		return false, authorizationErr
+	}
 	if err := m.sp.Start(ctx, sessName, cfg); err != nil {
 		if unroute != nil {
 			unroute()
 		}
 		return false, fmt.Errorf("fresh start after stale key: %w", err)
+	}
+	if commitLaunch != nil {
+		if err := commitLaunch(); err != nil {
+			_ = m.sp.Stop(sessName)
+			return false, err
+		}
 	}
 	return true, nil
 }
@@ -584,6 +594,10 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 		}
 		return fmt.Errorf("pre-start orphan cleanup: %w", orphanErr)
 	}
+	commitLaunch, authorizationErr := m.authorizeRuntimeStart(ctx, id, &cfg)
+	if authorizationErr != nil {
+		return authorizationErr
+	}
 	if err := m.sp.Start(ctx, sessName, cfg); err != nil {
 		if errors.Is(err, runtime.ErrSessionDiedDuringStartup) {
 			retried, retryErr := m.retryFreshStartAfterStaleKey(ctx, id, &b, sessName, resumeCommand, cfg, unroute)
@@ -611,6 +625,12 @@ func (m *Manager) ensureRunning(ctx context.Context, id string, b beads.Bead, se
 			return fmt.Errorf("resuming session: %w", err)
 		}
 	} else {
+		if commitLaunch != nil {
+			if err := commitLaunch(); err != nil {
+				_ = m.sp.Stop(sessName)
+				return err
+			}
+		}
 		started = true
 	}
 
@@ -710,6 +730,10 @@ func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b bea
 		}
 		return fmt.Errorf("pre-start orphan cleanup: %w", orphanErr)
 	}
+	commitLaunch, authorizationErr := m.authorizeRuntimeStart(ctx, id, &cfg)
+	if authorizationErr != nil {
+		return authorizationErr
+	}
 	if err := m.sp.Start(ctx, sessName, cfg); err != nil {
 		switch {
 		case errors.Is(err, runtime.ErrSessionDiedDuringStartup):
@@ -735,6 +759,12 @@ func (m *Manager) ensureRunningRuntimeOnly(ctx context.Context, id string, b bea
 			return fmt.Errorf("resuming session: %w", err)
 		}
 	} else {
+		if commitLaunch != nil {
+			if err := commitLaunch(); err != nil {
+				_ = m.sp.Stop(sessName)
+				return err
+			}
+		}
 		started = true
 	}
 	if started && b.Metadata["session_key"] != "" {

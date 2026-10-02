@@ -1,0 +1,387 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gc routing ingest --json result",
+  "type": "object",
+  "properties": {
+    "receipt": {
+      "$ref": "#/$defs/TransitionReceipt"
+    },
+    "record": {
+      "$ref": "#/$defs/RoutingDecisionRecord"
+    },
+    "ok": {
+      "const": true
+    }
+  },
+  "required": [
+    "record",
+    "receipt",
+    "ok"
+  ],
+  "$defs": {
+    "RoutingDecisionRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ApprovalPayload"
+        },
+        "payload": {
+          "$ref": "#/$defs/DecisionPayload"
+        },
+        "record_revision": {
+          "format": "int64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "signature": {
+          "$ref": "#/$defs/Signature"
+        },
+        "state": {
+          "type": "string"
+        },
+        "store_revision": {
+          "format": "int64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "payload",
+        "state",
+        "record_revision",
+        "store_revision"
+      ],
+      "type": "object"
+    },
+    "Signature": {
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "type": "string"
+        },
+        "authority_id": {
+          "type": "string"
+        },
+        "value": {
+          "contentEncoding": "base64",
+          "type": "string"
+        }
+      },
+      "required": [
+        "algorithm",
+        "authority_id",
+        "value"
+      ],
+      "type": "object"
+    },
+    "DecisionPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "type": "string"
+        },
+        "alternatives": {
+          "items": {
+            "$ref": "#/$defs/Alternative"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "binding_id": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "claim_fence": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "decision_id": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionBinding"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "no_migration": {
+          "type": "boolean"
+        },
+        "observation_digest": {
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/AuditOption"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "policy_digest": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "recommendation_id": {
+          "type": "string"
+        },
+        "rig": {
+          "type": "string"
+        },
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "serve_as": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "target_config_digest": {
+          "type": "string"
+        },
+        "work_bead_id": {
+          "type": "string"
+        },
+        "work_revision": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "work_state_digest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "decision_id",
+        "binding_id",
+        "work_bead_id",
+        "work_revision",
+        "claim_fence",
+        "work_state_digest",
+        "city",
+        "rig",
+        "target",
+        "target_config_digest",
+        "policy_digest",
+        "observation_digest",
+        "model",
+        "source",
+        "account",
+        "serve_as",
+        "provider",
+        "endpoint",
+        "reason",
+        "evidence",
+        "alternatives",
+        "options",
+        "created_at",
+        "expires_at",
+        "no_migration"
+      ],
+      "type": "object"
+    },
+    "AuditOption": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "type": "object"
+    },
+    "ExecutionBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "type": "string"
+        },
+        "adapter_digest": {
+          "type": "string"
+        },
+        "adapter_id": {
+          "type": "string"
+        },
+        "canonical_model": {
+          "type": "string"
+        },
+        "config_digest": {
+          "type": "string"
+        },
+        "invocation_digest": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "type": "string"
+        },
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "serve_as": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "canonical_model",
+        "serve_as",
+        "reasoning_effort",
+        "account",
+        "provider",
+        "target",
+        "config_digest",
+        "adapter_id",
+        "adapter_digest",
+        "invocation_digest"
+      ],
+      "type": "object"
+    },
+    "Alternative": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "serve_as": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "model",
+        "source",
+        "account",
+        "serve_as",
+        "provider",
+        "endpoint",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ApprovalPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "approved_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "authority_id": {
+          "type": "string"
+        },
+        "binding_id": {
+          "type": "string"
+        },
+        "decision_id": {
+          "type": "string"
+        },
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema",
+        "decision_id",
+        "binding_id",
+        "authority_id",
+        "approved_at"
+      ],
+      "type": "object"
+    },
+    "TransitionReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "decision_id": {
+          "type": "string"
+        },
+        "record_revision": {
+          "format": "int64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "type": "string"
+        },
+        "store_revision": {
+          "format": "int64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "decision_id",
+        "state",
+        "record_revision",
+        "store_revision"
+      ],
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

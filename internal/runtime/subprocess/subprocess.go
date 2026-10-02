@@ -150,7 +150,11 @@ func (p *Provider) Start(_ context.Context, name string, cfg runtime.Config) err
 		command = "sh"
 	}
 
-	cmd := exec.Command("sh", "-c", command)
+	shell := "sh"
+	if cfg.IsolatedLocalExecution {
+		shell = "/bin/sh"
+	}
+	cmd := exec.Command(shell, "-c", command)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if cfg.WorkDir != "" {
 		cmd.Dir = cfg.WorkDir
@@ -185,6 +189,9 @@ func (p *Provider) Start(_ context.Context, name string, cfg runtime.Config) err
 			}
 			env = append(env, k+"="+cfg.Env[k])
 		}
+	}
+	if cfg.IsolatedLocalExecution {
+		env = []string{"PATH=/usr/bin:/bin"}
 	}
 	cmd.Env = env
 

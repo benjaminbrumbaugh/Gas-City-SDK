@@ -40,6 +40,7 @@ type infoKeySpec struct {
 // so review provenance survives.
 var infoKeyCodec = []infoKeySpec{
 	// core / identity cluster
+	{RoutingExecutionDecisionMetadataKey, func(i *Info, v string) { i.RoutingExecutionDecisionID = v }},
 	{"template", func(i *Info, v string) { i.Template = v }},
 	{"alias", func(i *Info, v string) { i.Alias = v }},
 	{"agent_name", func(i *Info, v string) { i.AgentName = v }},

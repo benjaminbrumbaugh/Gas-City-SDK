@@ -3691,6 +3691,7 @@ func (cr *CityRuntime) withRoutingExecutionLaunchFence(result DesiredStateResult
 	for _, state := range []map[string]TemplateParams{result.State, result.BaseState} {
 		for name, tp := range state {
 			target, rig := tp.TemplateName, tp.RigName
+			tp.RoutingLaunchAuthorization = cr.authorizeRoutingExecutionLaunch
 			tp.RoutingLaunchCheck = func(info sessionpkg.Info, final runtime.Config) error {
 				return cr.checkRoutingExecutionLaunch(target, rig, info, final)
 			}
