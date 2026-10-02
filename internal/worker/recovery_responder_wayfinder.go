@@ -44,10 +44,11 @@ const (
 // endpoint for advisory routing. Its typed template is the outbound trust
 // boundary: only routing/v3's closed records and opaque safe identifiers cross.
 type WayfinderRecoveryAdvisor struct {
-	endpoint string
-	template wayfinderEvaluateRequest
-	client   *http.Client
-	now      func() time.Time
+	endpoint           string
+	template           wayfinderEvaluateRequest
+	allowedAccountRefs map[string]struct{}
+	client             *http.Client
+	now                func() time.Time
 }
 
 type wayfinderEvaluateRequest struct {
@@ -388,8 +389,15 @@ type wayfinderReevaluation struct {
 
 // NewWayfinderRecoveryAdvisor validates a loopback base URL and a complete,
 // strictly typed routing/v3 request template before any HTTP request is possible.
-func NewWayfinderRecoveryAdvisor(baseURL string, template []byte) (*WayfinderRecoveryAdvisor, error) {
+// allowedAccountRefs is the trusted caller's executable-admission snapshot, not
+// proof of credentials or backend authentication. The worker enforces exact
+// membership and never invents or normalizes account identities.
+func NewWayfinderRecoveryAdvisor(baseURL string, template []byte, allowedAccountRefs []string) (*WayfinderRecoveryAdvisor, error) {
 	endpoint, err := recoveryWayfinderEvaluateEndpoint(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	allowed, err := copyWayfinderAccountRefs(allowedAccountRefs)
 	if err != nil {
 		return nil, err
 	}
@@ -397,13 +405,16 @@ func NewWayfinderRecoveryAdvisor(baseURL string, template []byte) (*WayfinderRec
 	if err != nil {
 		return nil, fmt.Errorf("decode wayfinder routing/v3 request template: %w", err)
 	}
+	if err := validateWayfinderAccountRefs(packet, allowed); err != nil {
+		return nil, fmt.Errorf("validate Wayfinder account identity: %w", err)
+	}
 	client := &http.Client{
 		Transport: http.DefaultTransport,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return fmt.Errorf("wayfinder redirects are not allowed")
 		},
 	}
-	return &WayfinderRecoveryAdvisor{endpoint: endpoint, template: packet, client: client, now: time.Now}, nil
+	return &WayfinderRecoveryAdvisor{endpoint: endpoint, template: packet, allowedAccountRefs: allowed, client: client, now: time.Now}, nil
 }
 
 // Recommend submits the canonical operator packet after narrowing it to
@@ -452,6 +463,9 @@ func (a *WayfinderRecoveryAdvisor) Recommend(ctx context.Context, request Recove
 	narrowWayfinderRequest(&packet, remaining)
 	if err := validateWayfinderRequest(&packet); err != nil {
 		return "", fmt.Errorf("build wayfinder routing/v3 request: %w", err)
+	}
+	if err := validateWayfinderAccountRefs(packet, a.allowedAccountRefs); err != nil {
+		return "", fmt.Errorf("build Wayfinder account identity: %w", err)
 	}
 	canonicalizeWayfinderRequest(&packet)
 	body, err := json.Marshal(packet)
@@ -504,6 +518,9 @@ func (a *WayfinderRecoveryAdvisor) Recommend(ctx context.Context, request Recove
 	}
 	if contextErr := ctx.Err(); contextErr != nil {
 		return "", contextErr
+	}
+	if err := validateWayfinderResponseAccountRefs(result, a.allowedAccountRefs); err != nil {
+		return "", err
 	}
 	validationErr := validateWayfinderResult(result, packet, remainingSet)
 	if contextErr := ctx.Err(); contextErr != nil {
@@ -822,6 +839,43 @@ func validateWayfinderRequest(request *wayfinderEvaluateRequest) error {
 			(observation.Queue != nil) != (candidate.ExecutionTarget.AdmissionModel == "queued") || (observation.Startup != nil) != (candidate.ExecutionTarget.ActivationModel == "on_demand") ||
 			(observation.LivePrice != nil) != (candidate.Economics.Volatility == "variable") || (observation.LivePrice != nil && candidate.Economics.Currency != nil && observation.LivePrice.Currency != *candidate.Economics.Currency) {
 			return fmt.Errorf("routing/v3 candidate evidence binding is invalid")
+		}
+	}
+	return nil
+}
+
+func copyWayfinderAccountRefs(values []string) (map[string]struct{}, error) {
+	if len(values) == 0 {
+		return nil, errors.New("no installed account refs were resolved for the Wayfinder adapter")
+	}
+	refs := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if !wayfinderAccountRef(value) {
+			return nil, fmt.Errorf("account_ref %q is not a safe installed account name", value)
+		}
+		refs[value] = struct{}{}
+	}
+	return refs, nil
+}
+
+func validateWayfinderAccountRefs(request wayfinderEvaluateRequest, allowed map[string]struct{}) error {
+	for _, candidate := range request.Candidates {
+		if _, ok := allowed[candidate.ExecutionTarget.AccountRef]; !ok {
+			return fmt.Errorf("account_ref %q is not an installed configured account", candidate.ExecutionTarget.AccountRef)
+		}
+	}
+	for _, entitlement := range request.Entitlements {
+		if _, ok := allowed[entitlement.AccountRef]; !ok {
+			return fmt.Errorf("account_ref %q is not an installed configured account", entitlement.AccountRef)
+		}
+	}
+	return nil
+}
+
+func validateWayfinderResponseAccountRefs(result wayfinderEvaluateResult, allowed map[string]struct{}) error {
+	for _, candidate := range result.Candidates {
+		if _, ok := allowed[candidate.ExecutionTarget.AccountRef]; !ok {
+			return fmt.Errorf("wayfinder response account_ref %q is not an installed configured account", candidate.ExecutionTarget.AccountRef)
 		}
 	}
 	return nil

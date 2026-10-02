@@ -7,20 +7,42 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestConfigureProcessEnvIsolatesTmuxSocketRoot(t *testing.T) {
-	socketRoot := t.TempDir()
-	t.Setenv(tmuxEnv, "/tmp/tmux-parent/default,1,0")
-	t.Setenv(tmuxPaneEnv, "%42")
-	t.Setenv(tmuxTmpEnv, "/tmp/parent-tmux")
-
-	if err := ConfigureProcessEnv(socketRoot); err != nil {
-		t.Fatalf("ConfigureProcessEnv(): %v", err)
+	ownedRoot := t.TempDir()
+	socketRoot := filepath.Join(ownedRoot, "s")
+	fixtureBin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fixtureBin, "tmux"), []byte("#!/bin/sh\nexit 99\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Keep all helper-owned environment changes local to this test.
+	for key, value := range map[string]string{
+		tmuxEnv: "/tmp/tmux-parent/default,1,0", tmuxPaneEnv: "%42",
+		tmuxTmpEnv: "/tmp/parent-tmux", "TMPDIR": os.Getenv("TMPDIR"),
+		"HOME": os.Getenv("HOME"), "XDG_CONFIG_HOME": os.Getenv("XDG_CONFIG_HOME"),
+		"SHELL": os.Getenv("SHELL"), "PATH": fixtureBin,
+	} {
+		t.Setenv(key, value)
 	}
 
+	if err := ConfigureOwnedProcessEnv(ownedRoot); err != nil {
+		t.Fatalf("ConfigureOwnedProcessEnv(): %v", err)
+	}
+	if os.Getenv("HOME") != ownedRoot || os.Getenv("TMPDIR") != ownedRoot {
+		t.Fatal("owned environment must confine home and temporary state")
+	}
+
+	wrapper, err := os.ReadFile(filepath.Join(ownedRoot, "bin", "tmux"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wrapper), fixtureBin) || !strings.Contains(string(wrapper), " -f ") {
+		t.Fatalf("tmux wrapper must exec the resolved binary with owned configuration: %s", wrapper)
+	}
 	if value, ok := os.LookupEnv(tmuxEnv); ok {
 		t.Fatalf("%s survived with value %q", tmuxEnv, value)
 	}
@@ -78,6 +100,18 @@ func TestListTestSocketPathsSkipsLiveSiblingRoots(t *testing.T) {
 	}
 	if slices.Contains(got, otherSocket) {
 		t.Fatalf("listTestSocketPaths() included unrelated socket %s in %v", otherSocket, got)
+	}
+
+	// Task-owned cleanup must not discover even stale sibling servers.
+	owned, err := ownedSocketPaths(currentRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(owned, []string{currentSocket}) {
+		t.Fatalf("ownedSocketPaths = %v, want only %s", owned, currentSocket)
+	}
+	if _, err := ownedSocketPaths(""); err == nil {
+		t.Fatal("empty owned root must fail closed")
 	}
 }
 

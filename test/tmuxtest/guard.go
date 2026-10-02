@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/shellquote"
 )
 
 const tmuxGuardCommandTimeout = 2 * time.Second
@@ -283,4 +285,66 @@ func runtimeTmuxSocketRootPatterns(namespace, runName string) []string {
 	default:
 		return nil
 	}
+}
+
+// ConfigureOwnedProcessEnv isolates sockets and staged command files beneath a
+// freshly created, caller-owned root. Unlike the legacy harness, cleanup never
+// searches siblings. Callers on macOS must supply a short TMPDIR before creating
+// root; no shared-path or symlink fallback is attempted.
+func ConfigureOwnedProcessEnv(root string) error {
+	if !filepath.IsAbs(root) {
+		return fmt.Errorf("owned tmux root must be absolute")
+	}
+	if err := ConfigureProcessEnv(filepath.Join(root, "s")); err != nil {
+		return err
+	}
+	for key, value := range map[string]string{
+		"TMPDIR": root, "HOME": root, "XDG_CONFIG_HOME": root, "SHELL": "/bin/sh",
+	} {
+		if err := os.Setenv(key, value); err != nil {
+			return err
+		}
+	}
+	// Keep the production realExecutor and argv, but forbid ambient tmux
+	// configuration (including system config hooks) from spawning foreign work.
+	// An absent executable remains absent: the mandatory suite fails, not skips.
+	binary, err := exec.LookPath("tmux")
+	if err != nil {
+		return nil
+	}
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		return err
+	}
+	configPath := filepath.Join(root, "tmux.conf")
+	if err := os.WriteFile(configPath, nil, 0o600); err != nil {
+		return err
+	}
+	wrapper := "#!/bin/sh\nexec " + shellquote.Quote(binary) + " -f " + shellquote.Quote(configPath) + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "tmux"), []byte(wrapper), 0o700); err != nil {
+		return err
+	}
+	return os.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// CleanupOwnedSocketRoot stops only servers inside socketRoot. The caller must
+// own this fresh root exclusively. No ambient server or sibling is discovered.
+func CleanupOwnedSocketRoot(socketRoot string) error {
+	paths, err := ownedSocketPaths(socketRoot)
+	if err != nil {
+		return err
+	}
+	for _, path := range paths {
+		if err := killTestSocketPath(path); err != nil {
+			return fmt.Errorf("stopping owned tmux socket %q: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func ownedSocketPaths(root string) ([]string, error) {
+	if !filepath.IsAbs(root) {
+		return nil, fmt.Errorf("owned tmux socket root must be absolute")
+	}
+	return filepath.Glob(filepath.Join(root, "tmux-"+strconv.Itoa(os.Getuid()), "*"))
 }
