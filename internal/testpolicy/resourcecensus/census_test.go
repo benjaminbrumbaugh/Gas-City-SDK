@@ -131,6 +131,8 @@ func TestTmuxResources(t *testing.T) {
 	tmuxtest.RequireTmux(t)
 	tmuxtest.KillAllTestSessions(t)
 	_ = tmuxtest.ConfigureProcessEnv(t.TempDir())
+	_ = tmuxtest.ConfigureOwnedProcessEnv(t.TempDir())
+	_ = tmuxtest.CleanupOwnedSocketRoot(t.TempDir())
 	_ = ((shell.Command))(("tmux"), "-V")
 	_ = shell.CommandContext(context.Background(), "tmux", "-V")
 	_, _ = shell.LookPath("tmux")
@@ -179,8 +181,8 @@ func TestTaggedTmux(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScanFS: %v", err)
 	}
-	assertCount(t, got, ScopeAll, ResourceTmux, 15, 2)
-	assertCount(t, got, ScopeUntagged, ResourceTmux, 14, 1)
+	assertCount(t, got, ScopeAll, ResourceTmux, 17, 2)
+	assertCount(t, got, ScopeUntagged, ResourceTmux, 16, 1)
 	assertOccurrenceOwner(t, got, "sample/resources_test.go", ResourceTmux, "TestTmuxResources", true, false)
 	assertOccurrenceOwner(t, got, "sample/resources_test.go", ResourceTmux, "helper", false, false)
 	assertOccurrenceOwner(t, got, "sample/tagged_test.go", ResourceTmux, "TestTaggedTmux", true, true)
@@ -2071,8 +2073,8 @@ func TestBootstrapPolicyOwnsTmuxDebtAndExactMediumSetup(t *testing.T) {
 	t.Parallel()
 
 	debt := findRow(t, bootstrapPolicy.Debt, ScopeUntagged, ResourceTmux)
-	if debt.BaselineCalls != 7 || debt.BaselineFiles != 3 {
-		t.Fatalf("tmux source baseline = %d/%d, want 7/3", debt.BaselineCalls, debt.BaselineFiles)
+	if debt.BaselineCalls != 4 || debt.BaselineFiles != 3 {
+		t.Fatalf("tmux source baseline = %d/%d, want 4/3", debt.BaselineCalls, debt.BaselineFiles)
 	}
 	smallDebt := findRow(t, bootstrapPolicy.SmallDebt, ScopeUntagged, ResourceTmux)
 	if smallDebt.BaselineCalls != 1 || smallDebt.BaselineFiles != 1 {
