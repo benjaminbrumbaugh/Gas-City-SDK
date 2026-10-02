@@ -282,7 +282,7 @@ exit 0 (22.397s), zero failed events and 25 top-level pass events each. JSON
 logs are `temp/scratch-{baseline,branch}.jsonl`; child exit results are
 `temp/scratch-exits.json`. Final hook gates use this TMPDIR as well.
 
-## Push gate remains blocked; no bypass
+## Historical push gate failure; no bypass
 
 The normal pre-commit passed lint, generated docs/clients/dashboard, vet, docsync,
 and dashboard checks/smoke. `make build` and `make dashboard-ci` passed.
@@ -301,6 +301,35 @@ same respective failed assertions. Evidence is preserved in
 provider ledger, or unrelated source was changed to evade the gate. Push/PR
 publication is blocked until the owning gate defects are resolved normally.
 
-Parent independently reviews and integrates final bytes. Keep this PR draft
-until production adapter, universal launch fencing, durable actual-execution
-receipt, city transport, and recording-child end-to-end proof converge.
+## Current parent-owned convergence state (October 2, 2026)
+
+Plugin PR #11 is merged, with independent exact-byte approval of
+`c2e1020dd8b6b4c8d67c566d5c95c8270b2b947d`. City PR #41 remains draft at
+`c4abade1ac00bd91a66006b7b45fdea1575ce5ab`. SDK consumer source was committed
+at `45cc591ec9b0f492837b3726151670b011f58301`, not published.
+
+Independent adversarial review reproduced three P1 defects despite positive
+convergence: an installed-but-unavailable authority hook permitted legacy
+downgrade, outer-shell creation falsely attested actual executable launch, and
+the real controller wake incarnation change prevented original-work recovery.
+Commit `67ea05800e0296f1fa9b752c6bb2fda14901cd62` contains tracked regressions
+and fixes: independent durable classification, direct bound-executable exec,
+and append-only authorized successor incarnations. Normal pre-commit passed.
+The implementer was interrupted during a broad test run; that run is not a
+passing gate. Parent has independently inspected the committed fixes; renewed
+exact-byte adversarial approval remains outstanding.
+
+Remote main `0d823e02cfb868eef9662c3cac858495ea845f16` (PR #59) independently
+landed the approved tmux conformance and real alias-fixture changes. Parent
+merged it into this branch without changing foreign work. This supersedes the
+two historical baseline defects above, but not all test-harness safety gaps:
+normal full-gate paths still contain foreign sibling/process cleanup. The
+separate `fix/sdk-gate-delivery` lane owns narrow ownership fixes; no full push
+gate is authorized until its owned-only cleanup is proved and reviewed.
+
+Final proof uses the clean producer worktree at `a3eda7e521019e675ba23d7a23dfb0e9c15bb3ab`,
+not installed runtime state. Required next actions remain agent-owned: close
+test cleanup safety, independently approve final consumer bytes, run actual
+City/signer/SDK/recording-child/producer convergence and normal final gates,
+publish and merge, and remove owned residue. Live activation, provider calls,
+key installation and existing-session migration remain outside authorization.
