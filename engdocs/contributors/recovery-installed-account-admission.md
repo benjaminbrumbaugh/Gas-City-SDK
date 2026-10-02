@@ -19,6 +19,12 @@ final resolved command. A provider named `opencode-go` whose command is merely
 named account is installed. Such aliases are excluded, not silently translated.
 A same-named executable wrapper is supported as an operator-declared identity.
 
+Provider discovery checks the complete literal command before the legacy
+first-space executable-token fallback. Explicit `path_check` still takes
+exclusive precedence during discovery; the recovery adapter's final literal
+identity and executable checks are never replaced by that override. Spaces in
+an executable's parent directory do not invalidate its admission identity.
+
 The worker copies and validates the nonempty admission snapshot, rejects unknown
 candidate and entitlement accounts at construction, and rechecks the narrowed
 outbound packet immediately before HTTP. Incoming candidate accounts must be in
@@ -42,6 +48,11 @@ fail-open recovery path.
 - Admission is a controller reconciliation snapshot, not a launch-time guarantee
   against executable removal or PATH replacement. It describes the controller's
   host, not necessarily a remote runtime host.
+- A discovered literal path containing spaces is not proof of shell launch
+  correctness. Existing launch builders preserve `Command` as shell text and
+  quote `Args`, not `Command`. The city bindings use same-named commands and
+  independently verified scoped PATH resolution; admission does not supply
+  shell quoting or turn a raw command string into an execution binding.
 - Recovery advice selects an already configured target; it does not change that
   target's launch provider, model, credentials, or session. Catalog membership is
   not a target-to-launch-account binding. That stronger consumer/runtime contract
