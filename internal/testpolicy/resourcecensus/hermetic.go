@@ -644,7 +644,7 @@ func matchedResourcesForCall(call *ast.CallExpr, key packageKey, bindings bindin
 	}{
 		{
 			importPath: "github.com/gastownhall/gascity/test/tmuxtest",
-			names:      []string{"ConfigureProcessEnv", "KillAllTestSessions", "NewGuard", "NewGuardWithSocket", "RequireTmux"},
+			names:      []string{"ConfigureProcessEnv", "ConfigureOwnedProcessEnv", "CleanupOwnedSocketRoot", "KillAllTestSessions", "NewGuard", "NewGuardWithSocket", "RequireTmux"},
 		},
 		{
 			importPath: "github.com/gastownhall/gascity/internal/runtime/tmux",

@@ -21,38 +21,26 @@ import (
 // Compile-time check.
 var _ runtime.Provider = (*Provider)(nil)
 
+// This mandatory integration proof fails closed if tmux is absent or degraded.
+// Each factory returns the production seam-backed composition with its real
+// executor; cases share only this process's exclusively owned server.
 func TestTmuxConformance(t *testing.T) {
-	if !hasTmux() {
-		t.Skip("tmux not installed")
-	}
-
-	cfg := DefaultConfig()
-	cfg.SocketName = testSocketName
-	// The conformance fixture is a generic long-running command, not an agent
-	// TUI with an observable idle prompt. Keep a short real timeout so the
-	// Provider.Nudge wait/fallback branch stays covered without consuming the
-	// production 30-second budget.
-	cfg.NudgeIdleTimeout = 250 * time.Millisecond
-	// Exercise the production construction path so one real tmux suite covers
-	// both the Provider contract and the seam-backed cut-over.
-	p := NewSeamBackedWithConfig(cfg)
 	var counter int64
-
-	runtimetest.RunProviderTestsWithOptions(t, func(t *testing.T) (runtime.Provider, runtime.Config, string) {
-		id := atomic.AddInt64(&counter, 1)
-		name := fmt.Sprintf("gc-test-conform-%d", id)
-		return p, runtime.Config{
+	runtimetest.RunProviderTests(t, func(t *testing.T) (runtime.Provider, runtime.Config, string) {
+		return NewSeamBackedWithConfig(tmuxConformanceConfig()), runtime.Config{
 			Command: "sleep 300",
 			WorkDir: t.TempDir(),
-		}, name
-	}, runtimetest.Options{
-		SkipStartError: func(err error) (string, bool) {
-			if errors.Is(err, ErrServerDegraded) {
-				return fmt.Sprintf("tmux test socket degraded before Start could run: %v", err), true
-			}
-			return "", false
-		},
+		}, fmt.Sprintf("gc-test-conform-%d", atomic.AddInt64(&counter, 1))
 	})
+}
+
+func tmuxConformanceConfig() Config {
+	cfg := DefaultConfig()
+	// Unique process root, short socket: fit macOS sun_path without symlinks.
+	cfg.SocketName = "gctest-proof"
+	// Retain the real Nudge wait/fallback branch's existing short budget.
+	cfg.NudgeIdleTimeout = 250 * time.Millisecond
+	return cfg
 }
 
 func TestProvider_StartStopIsRunning(t *testing.T) {

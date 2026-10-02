@@ -2170,10 +2170,26 @@ func TestFindCodexSessionFileMatchesEquivalentResolvedWorkDir(t *testing.T) {
 		t.Skip("macOS /private/tmp path aliases only apply on darwin")
 	}
 	sessDir := t.TempDir()
-	workDir := filepath.Join(os.TempDir(), "gascity-codex-live")
-	aliasedWorkDir := strings.TrimPrefix(workDir, "/private")
-	if aliasedWorkDir == workDir {
-		aliasedWorkDir = "/private" + workDir
+	// TMPDIR may live anywhere; prefixing an arbitrary path with /private
+	// does not create a macOS alias. Use two genuinely equivalent owned paths.
+	workDir := filepath.Join(sessDir, "work-dir")
+	if err := os.Mkdir(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	aliasedWorkDir := filepath.Join(sessDir, "work-dir-alias")
+	if err := os.Symlink(workDir, aliasedWorkDir); err != nil {
+		t.Fatal(err)
+	}
+	realInfo, err := os.Stat(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasInfo, err := os.Stat(aliasedWorkDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workDir == aliasedWorkDir || !os.SameFile(realInfo, aliasInfo) {
+		t.Fatal("fixture paths must be distinct names for the same directory")
 	}
 	dayDir := filepath.Join(sessDir, "2026", "06", "21")
 	if err := os.MkdirAll(dayDir, 0o755); err != nil {

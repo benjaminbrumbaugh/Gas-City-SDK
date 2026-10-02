@@ -171,7 +171,7 @@ func lookupProvider(name string, cityProviders map[string]ProviderSpec, lookPath
 	if cityProviders != nil {
 		if spec, ok := cityProviders[name]; ok {
 			if spec.Command != "" {
-				if _, err := lookPath(spec.pathCheckBinary()); err != nil {
+				if err := checkProviderAvailability(&spec, lookPath); err != nil {
 					return nil, fmt.Errorf("%w: provider %q command %q", ErrProviderNotInPATH, name, spec.pathCheckBinary())
 				}
 			}
@@ -192,7 +192,7 @@ func lookupProvider(name string, cityProviders map[string]ProviderSpec, lookPath
 				}
 				merged := resolvedChainToSpec(resolved, spec)
 				if merged.Command != "" {
-					if _, err := lookPath(merged.pathCheckBinary()); err != nil {
+					if err := checkProviderAvailability(&merged, lookPath); err != nil {
 						return nil, fmt.Errorf("%w: provider %q command %q", ErrProviderNotInPATH, name, merged.pathCheckBinary())
 					}
 				}
@@ -221,7 +221,7 @@ func lookupProvider(name string, cityProviders map[string]ProviderSpec, lookPath
 	// Fall back to built-in presets.
 	builtins := BuiltinProviders()
 	if spec, ok := builtins[name]; ok {
-		if _, err := lookPath(spec.pathCheckBinary()); err != nil {
+		if err := checkProviderAvailability(&spec, lookPath); err != nil {
 			return nil, fmt.Errorf("%w: provider %q command %q", ErrProviderNotInPATH, name, spec.pathCheckBinary())
 		}
 		return &spec, nil
@@ -613,11 +613,30 @@ func detectProviderName(lookPath LookPathFunc) (string, error) {
 	order := BuiltinProviderOrder()
 	for _, name := range order {
 		spec := builtins[name]
-		if _, err := lookPath(spec.pathCheckBinary()); err == nil {
+		if err := checkProviderAvailability(&spec, lookPath); err == nil {
 			return name, nil
 		}
 	}
 	return "", fmt.Errorf("no supported agent CLI found in PATH (looked for: %s)", strings.Join(order, ", "))
+}
+
+// checkProviderAvailability gives an explicit PathCheck exclusive precedence.
+// Otherwise try Command literally first, so executable paths containing spaces
+// are not truncated. Only a failed exact lookup uses the legacy executable-token
+// fallback. Discovery never parses shell syntax or rewrites the launch command.
+func checkProviderAvailability(spec *ProviderSpec, lookPath LookPathFunc) error {
+	if spec.PathCheck != "" {
+		_, err := lookPath(spec.PathCheck)
+		return err
+	}
+	_, err := lookPath(spec.Command)
+	if err == nil {
+		return nil
+	}
+	if binary := BinaryName(spec.Command); binary != spec.Command {
+		_, err = lookPath(binary)
+	}
+	return err
 }
 
 // specToResolved converts a ProviderSpec to a ResolvedProvider.
