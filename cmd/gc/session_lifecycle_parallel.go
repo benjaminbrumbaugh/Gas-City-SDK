@@ -1899,6 +1899,11 @@ func startPreparedStartCandidate(
 	warmClaim warmClaimTriggerProbe,
 ) (bool, error) {
 	name := item.candidate.name()
+	if check := item.candidate.tp.RoutingLaunchCheck; check != nil {
+		if err := check(item.candidate.info, item.cfg); err != nil {
+			return false, errors.New("routing execution launch refused")
+		}
+	}
 	if sp != nil {
 		running, alive := observeRuntimeProviderLiveness(sp, name, item.cfg.ProcessNames)
 		if running {

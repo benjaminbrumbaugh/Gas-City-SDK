@@ -132,6 +132,7 @@ type CityRuntime struct {
 	orderRescanEnabled      bool
 	orderRescanLast         time.Time
 	trace                   *sessionReconcilerTraceManager
+	routingExecutionAdapter func(config.Agent, *config.City, *runtime.Config) (routingdecision.ExecutionBinding, error)
 	routingDecisionStore    *routingdecision.Store
 	routingDecisionVerifier *routingdecision.Verifier // nil is intentional default-deny
 	routingDecisionNowFn    func() time.Time
@@ -3675,10 +3676,28 @@ func (cr *CityRuntime) buildDesiredState(sessionBeads *sessionBeadSnapshot, trac
 	// single city store into the class accessors so a future per-class backend
 	// routes each role independently; both collapse to the same store today.
 	sessionsStore := cr.sessionsBeadStore()
+	var result DesiredStateResult
 	if cr.buildFnWithSessionBeads != nil {
-		return cr.buildFnWithSessionBeads(cr.cfg, cr.sp, sessionsStore.Store, unwrapWorkStores(cr.workBeadStores()), sessionBeads, trace)
+		result = cr.buildFnWithSessionBeads(cr.cfg, cr.sp, sessionsStore.Store, unwrapWorkStores(cr.workBeadStores()), sessionBeads, trace)
+	} else {
+		result = cr.buildFn(cr.cfg, cr.sp, sessionsStore.Store)
 	}
-	return cr.buildFn(cr.cfg, cr.sp, sessionsStore.Store)
+	return cr.withRoutingExecutionLaunchFence(result)
+}
+
+// withRoutingExecutionLaunchFence covers both the ordinary build and refreshed
+// overlay; overlays reconstruct TemplateParams rather than retaining callbacks.
+func (cr *CityRuntime) withRoutingExecutionLaunchFence(result DesiredStateResult) DesiredStateResult {
+	for _, state := range []map[string]TemplateParams{result.State, result.BaseState} {
+		for name, tp := range state {
+			target, rig := tp.TemplateName, tp.RigName
+			tp.RoutingLaunchCheck = func(info sessionpkg.Info, final runtime.Config) error {
+				return cr.checkRoutingExecutionLaunch(target, rig, info, final)
+			}
+			state[name] = tp
+		}
+	}
+	return result
 }
 
 // refreshDesiredState re-applies the session-bead overlay to an already-built
@@ -3692,7 +3711,7 @@ func (cr *CityRuntime) buildDesiredState(sessionBeads *sessionBeadSnapshot, trac
 // work store would take a session-class create the class binding never sees and
 // the boot containment re-check names.
 func (cr *CityRuntime) refreshDesiredState(result DesiredStateResult, sessionBeads *sessionBeadSnapshot) DesiredStateResult {
-	return refreshDesiredStateWithSessionBeads(
+	return cr.withRoutingExecutionLaunchFence(refreshDesiredStateWithSessionBeads(
 		result,
 		cr.cityName,
 		cr.cityPath,
@@ -3701,7 +3720,7 @@ func (cr *CityRuntime) refreshDesiredState(result DesiredStateResult, sessionBea
 		cr.sessionsBeadStore().Store,
 		sessionBeads,
 		cr.stderr,
-	)
+	))
 }
 
 func (cr *CityRuntime) loadDemandSnapshot(

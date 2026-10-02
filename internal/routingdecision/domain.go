@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	// SchemaVersion is the only routing-decision schema understood by this build.
+	// SchemaVersion is the legacy signed routing-decision generation.
 	SchemaVersion = 1
 
 	// SignatureAlgorithmEd25519 is the only approval signature algorithm.
@@ -69,9 +69,12 @@ type Alternative struct {
 // work revision/fence/state and target configuration independently of the
 // caller-chosen DecisionID.
 type DecisionPayload struct {
-	Schema             int           `json:"schema"`
-	DecisionID         string        `json:"decision_id"`
-	RecommendationID   string        `json:"recommendation_id,omitempty"`
+	Schema           int    `json:"schema"`
+	DecisionID       string `json:"decision_id"`
+	RecommendationID string `json:"recommendation_id,omitempty"`
+
+	Execution *ExecutionBinding `json:"execution,omitempty"`
+
 	BindingID          string        `json:"binding_id"`
 	WorkBeadID         string        `json:"work_bead_id"`
 	WorkRevision       int64         `json:"work_revision"`
@@ -115,9 +118,12 @@ type Signature struct {
 }
 
 type canonicalDecision struct {
-	Schema             int           `json:"schema"`
-	DecisionID         string        `json:"decision_id"`
-	RecommendationID   string        `json:"recommendation_id,omitempty"`
+	Schema           int    `json:"schema"`
+	DecisionID       string `json:"decision_id"`
+	RecommendationID string `json:"recommendation_id,omitempty"`
+
+	Execution *ExecutionBinding `json:"execution,omitempty"`
+
 	BindingID          string        `json:"binding_id"`
 	WorkBeadID         string        `json:"work_bead_id"`
 	WorkRevision       int64         `json:"work_revision"`
@@ -153,7 +159,11 @@ type canonicalApproval struct {
 }
 
 type canonicalBinding struct {
-	Schema             int    `json:"schema"`
+	Schema int `json:"schema"`
+
+	Execution *ExecutionBinding `json:"execution,omitempty"`
+
+	RecommendationID   string `json:"recommendation_id,omitempty"`
 	WorkBeadID         string `json:"work_bead_id"`
 	WorkRevision       int64  `json:"work_revision"`
 	ClaimFence         int64  `json:"claim_fence"`
@@ -163,6 +173,15 @@ type canonicalBinding struct {
 	Target             string `json:"target"`
 	TargetConfigDigest string `json:"target_config_digest"`
 	NoMigration        bool   `json:"no_migration"`
+}
+
+// domainForSchema keeps legacy signed records byte-compatible while separating
+// the complete execution generation at all four signing/binding preimages.
+func domainForSchema(schema int, legacy string) string {
+	if schema == ExecutionSchemaVersion {
+		return strings.TrimSuffix(legacy, "v1\x00") + "v2\x00"
+	}
+	return legacy
 }
 
 func normalizedDecision(payload DecisionPayload, includeBinding bool) canonicalDecision {
@@ -184,7 +203,7 @@ func normalizedDecision(payload DecisionPayload, includeBinding bool) canonicalD
 		bindingID = ""
 	}
 	return canonicalDecision{
-		Schema: payload.Schema, DecisionID: payload.DecisionID, RecommendationID: payload.RecommendationID, BindingID: bindingID,
+		Schema: payload.Schema, DecisionID: payload.DecisionID, RecommendationID: payload.RecommendationID, Execution: payload.Execution, BindingID: bindingID,
 		WorkBeadID: payload.WorkBeadID, WorkRevision: payload.WorkRevision, ClaimFence: payload.ClaimFence,
 		WorkStateDigest: payload.WorkStateDigest, City: payload.City, Rig: payload.Rig, Target: payload.Target,
 		TargetConfigDigest: payload.TargetConfigDigest, PolicyDigest: payload.PolicyDigest,
@@ -204,7 +223,7 @@ func CanonicalDecisionBytes(payload DecisionPayload) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode decision", ErrInvalidDecision)
 	}
-	return append([]byte(decisionDomain), encoded...), nil
+	return append([]byte(domainForSchema(payload.Schema, decisionDomain)), encoded...), nil
 }
 
 // CanonicalApprovalBytes returns the schema-fixed approval representation.
@@ -219,7 +238,7 @@ func CanonicalApprovalBytes(approval ApprovalPayload) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode approval", ErrInvalidDecision)
 	}
-	return append([]byte(approvalDomain), encoded...), nil
+	return append([]byte(domainForSchema(approval.Schema, approvalDomain)), encoded...), nil
 }
 
 // SigningBytes domain-separates and concatenates the immutable decision and approval.
@@ -228,7 +247,7 @@ func SigningBytes(payload DecisionPayload, approval ApprovalPayload) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
-	if approval.DecisionID != payload.DecisionID || approval.BindingID != payload.BindingID {
+	if approval.Schema != payload.Schema || approval.DecisionID != payload.DecisionID || approval.BindingID != payload.BindingID {
 		return nil, fmt.Errorf("%w: approval binding mismatch", ErrInvalidDecision)
 	}
 	approved, err := CanonicalApprovalBytes(approval)
@@ -236,7 +255,7 @@ func SigningBytes(payload DecisionPayload, approval ApprovalPayload) ([]byte, er
 		return nil, err
 	}
 	result := make([]byte, 0, len(signingDomain)+len(decision)+len(approved)+16)
-	result = append(result, signingDomain...)
+	result = append(result, domainForSchema(payload.Schema, signingDomain)...)
 	result = binary.BigEndian.AppendUint64(result, uint64(len(decision)))
 	result = append(result, decision...)
 	result = binary.BigEndian.AppendUint64(result, uint64(len(approved)))
@@ -246,8 +265,14 @@ func SigningBytes(payload DecisionPayload, approval ApprovalPayload) ([]byte, er
 
 // BindingID computes the lowercase SHA-256 commitment for the exact route binding.
 func BindingID(payload DecisionPayload) string {
+	var execution *ExecutionBinding
+	var recommendation string
+	if payload.Schema == ExecutionSchemaVersion {
+		execution = payload.Execution
+		recommendation = payload.RecommendationID
+	}
 	encoded, err := json.Marshal(canonicalBinding{
-		Schema: payload.Schema, WorkBeadID: payload.WorkBeadID, WorkRevision: payload.WorkRevision,
+		Schema: payload.Schema, Execution: execution, RecommendationID: recommendation, WorkBeadID: payload.WorkBeadID, WorkRevision: payload.WorkRevision,
 		ClaimFence: payload.ClaimFence, WorkStateDigest: payload.WorkStateDigest, City: payload.City,
 		Rig: payload.Rig, Target: payload.Target, TargetConfigDigest: payload.TargetConfigDigest,
 		NoMigration: payload.NoMigration,
@@ -255,13 +280,13 @@ func BindingID(payload DecisionPayload) string {
 	if err != nil {
 		return ""
 	}
-	sum := sha256.Sum256(append([]byte("gascity.routing-decision-binding.v1\x00"), encoded...))
+	sum := sha256.Sum256(append([]byte(domainForSchema(payload.Schema, "gascity.routing-decision-binding.v1\x00")), encoded...))
 	return hex.EncodeToString(sum[:])
 }
 
 // Validate checks stable decision shape, bounds, canonical timestamps, and binding.
 func (payload DecisionPayload) Validate() error {
-	if payload.Schema != SchemaVersion {
+	if payload.Schema != SchemaVersion && payload.Schema != ExecutionSchemaVersion {
 		return invalidf("schema %d is unsupported", payload.Schema)
 	}
 	for name, value := range map[string]string{
@@ -280,7 +305,25 @@ func (payload DecisionPayload) Validate() error {
 			return err
 		}
 	}
-	if payload.RecommendationID != "" && !validRecommendationID(payload.RecommendationID) {
+	if payload.Schema == SchemaVersion && payload.Execution != nil {
+		return invalidf("legacy schema cannot carry execution")
+	}
+	if payload.Schema == ExecutionSchemaVersion {
+		if payload.Execution == nil {
+			return invalidf("v3 execution selection required")
+		}
+		if err := payload.Execution.Validate(); err != nil {
+			return err
+		}
+		e := payload.Execution
+		if e.CanonicalModel != payload.Model || e.ServeAs != payload.ServeAs || e.Account != payload.Account || e.Provider != payload.Provider || e.Target != payload.Target || e.ConfigDigest != payload.TargetConfigDigest {
+			return invalidf("execution tuple differs from decision")
+		}
+		if !validV3RecommendationID(payload.RecommendationID) {
+			return invalidf("v3 recommendation identity required")
+		}
+	}
+	if payload.Schema == SchemaVersion && payload.RecommendationID != "" && !validRecommendationID(payload.RecommendationID) {
 		return invalidf("recommendation_id must be a routing/v2 decision identity")
 	}
 	for name, digest := range map[string]string{
@@ -349,7 +392,7 @@ func unixNanoRepresentable(value time.Time) bool {
 
 // Validate checks approval shape independently of a decision.
 func (approval ApprovalPayload) Validate() error {
-	if approval.Schema != SchemaVersion {
+	if approval.Schema != SchemaVersion && approval.Schema != ExecutionSchemaVersion {
 		return invalidf("approval schema %d is unsupported", approval.Schema)
 	}
 	for name, value := range map[string]string{"decision_id": approval.DecisionID, "authority_id": approval.AuthorityID} {

@@ -1778,33 +1778,34 @@ type Cycle struct {
 
 // DecisionPayload defines model for DecisionPayload.
 type DecisionPayload struct {
-	Account            string         `json:"account"`
-	Alternatives       *[]Alternative `json:"alternatives"`
-	BindingId          string         `json:"binding_id"`
-	City               string         `json:"city"`
-	ClaimFence         int64          `json:"claim_fence"`
-	CreatedAt          time.Time      `json:"created_at"`
-	DecisionId         string         `json:"decision_id"`
-	Endpoint           string         `json:"endpoint"`
-	Evidence           *[]string      `json:"evidence"`
-	ExpiresAt          time.Time      `json:"expires_at"`
-	Model              string         `json:"model"`
-	NoMigration        bool           `json:"no_migration"`
-	ObservationDigest  string         `json:"observation_digest"`
-	Options            *[]AuditOption `json:"options"`
-	PolicyDigest       string         `json:"policy_digest"`
-	Provider           string         `json:"provider"`
-	Reason             string         `json:"reason"`
-	RecommendationId   *string        `json:"recommendation_id,omitempty"`
-	Rig                string         `json:"rig"`
-	Schema             int64          `json:"schema"`
-	ServeAs            string         `json:"serve_as"`
-	Source             string         `json:"source"`
-	Target             string         `json:"target"`
-	TargetConfigDigest string         `json:"target_config_digest"`
-	WorkBeadId         string         `json:"work_bead_id"`
-	WorkRevision       int64          `json:"work_revision"`
-	WorkStateDigest    string         `json:"work_state_digest"`
+	Account            string            `json:"account"`
+	Alternatives       *[]Alternative    `json:"alternatives"`
+	BindingId          string            `json:"binding_id"`
+	City               string            `json:"city"`
+	ClaimFence         int64             `json:"claim_fence"`
+	CreatedAt          time.Time         `json:"created_at"`
+	DecisionId         string            `json:"decision_id"`
+	Endpoint           string            `json:"endpoint"`
+	Evidence           *[]string         `json:"evidence"`
+	Execution          *ExecutionBinding `json:"execution,omitempty"`
+	ExpiresAt          time.Time         `json:"expires_at"`
+	Model              string            `json:"model"`
+	NoMigration        bool              `json:"no_migration"`
+	ObservationDigest  string            `json:"observation_digest"`
+	Options            *[]AuditOption    `json:"options"`
+	PolicyDigest       string            `json:"policy_digest"`
+	Provider           string            `json:"provider"`
+	Reason             string            `json:"reason"`
+	RecommendationId   *string           `json:"recommendation_id,omitempty"`
+	Rig                string            `json:"rig"`
+	Schema             int64             `json:"schema"`
+	ServeAs            string            `json:"serve_as"`
+	Source             string            `json:"source"`
+	Target             string            `json:"target"`
+	TargetConfigDigest string            `json:"target_config_digest"`
+	WorkBeadId         string            `json:"work_bead_id"`
+	WorkRevision       int64             `json:"work_revision"`
+	WorkStateDigest    string            `json:"work_state_digest"`
 }
 
 // DeliveryContextRecord defines model for DeliveryContextRecord.
@@ -1955,6 +1956,21 @@ type EventStreamEnvelope struct {
 	Ts               time.Time                `json:"ts"`
 	Type             string                   `json:"type"`
 	Workflow         *WorkflowEventProjection `json:"workflow,omitempty"`
+}
+
+// ExecutionBinding defines model for ExecutionBinding.
+type ExecutionBinding struct {
+	Account          string `json:"account"`
+	AdapterDigest    string `json:"adapter_digest"`
+	AdapterId        string `json:"adapter_id"`
+	CanonicalModel   string `json:"canonical_model"`
+	ConfigDigest     string `json:"config_digest"`
+	InvocationDigest string `json:"invocation_digest"`
+	Provider         string `json:"provider"`
+	ReasoningEffort  string `json:"reasoning_effort"`
+	Schema           int64  `json:"schema"`
+	ServeAs          string `json:"serve_as"`
+	Target           string `json:"target"`
 }
 
 // ExecutionClaimWindowExpiredPayload defines model for ExecutionClaimWindowExpiredPayload.

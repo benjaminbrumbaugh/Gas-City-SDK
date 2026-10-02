@@ -903,6 +903,7 @@ export type DecisionPayload = {
     decision_id: string;
     endpoint: string;
     evidence: Array<string> | null;
+    execution?: ExecutionBinding;
     expires_at: string;
     model: string;
     no_migration: boolean;
@@ -1092,6 +1093,20 @@ export type EventStreamEnvelope = {
     ts: string;
     type: string;
     workflow?: WorkflowEventProjection;
+};
+
+export type ExecutionBinding = {
+    account: string;
+    adapter_digest: string;
+    adapter_id: string;
+    canonical_model: string;
+    config_digest: string;
+    invocation_digest: string;
+    provider: string;
+    reasoning_effort: string;
+    schema: number;
+    serve_as: string;
+    target: string;
 };
 
 export type ExecutionClaimWindowExpiredPayload = {

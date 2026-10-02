@@ -53,6 +53,9 @@ func resolvedProviderName(r *config.ResolvedProvider) string {
 // TemplateParams holds all resolved values needed to start a session.
 // This is a pure data type — no side effects, no provider references.
 type TemplateParams struct {
+	// RoutingLaunchCheck consumes the fully resolved invocation immediately before
+	// launch or warm reuse. The controller supplies it; it is never persisted.
+	RoutingLaunchCheck func(session.Info, runtime.Config) error
 	// Command is the resolved provider command string.
 	Command string
 	// Prompt is the fully rendered prompt (with beacon).

@@ -42,7 +42,7 @@ func approveRoutingDecision(t *testing.T, store *routingdecision.Store, payload 
 	if err != nil {
 		t.Fatal(err)
 	}
-	approval := routingdecision.ApprovalPayload{Schema: routingdecision.SchemaVersion, DecisionID: payload.DecisionID, BindingID: payload.BindingID, AuthorityID: "board", ApprovedAt: now}
+	approval := routingdecision.ApprovalPayload{Schema: payload.Schema, DecisionID: payload.DecisionID, BindingID: payload.BindingID, AuthorityID: "board", ApprovedAt: now}
 	signing, err := routingdecision.SigningBytes(payload, approval)
 	if err != nil {
 		t.Fatal(err)

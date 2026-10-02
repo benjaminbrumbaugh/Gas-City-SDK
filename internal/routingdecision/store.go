@@ -435,6 +435,16 @@ func (store *Store) ListDecisions(options ListOptions) (DecisionPage, error) {
 // items and examines at most 100 ledger rows; a sparse/truncated scan advances
 // by the last examined decision ID so repeated calls make bounded progress.
 func (store *Store) ListOutcomeDecisions(options OutcomeListOptions) (DecisionPage, error) {
+	return store.listOutcomeDecisionsForSchema(options, SchemaVersion)
+}
+
+// ListExecutionOutcomeDecisions returns the distinct signed-v3 authority seam
+// with the same bounded keyset scan as legacy outcome reads.
+func (store *Store) ListExecutionOutcomeDecisions(options OutcomeListOptions) (DecisionPage, error) {
+	return store.listOutcomeDecisionsForSchema(options, ExecutionSchemaVersion)
+}
+
+func (store *Store) listOutcomeDecisionsForSchema(options OutcomeListOptions, schema int) (DecisionPage, error) {
 	if options.Limit <= 0 || options.Limit > maxOutcomeQuery {
 		return DecisionPage{}, invalidf("outcome list limit must be between 1 and %d", maxOutcomeQuery)
 	}
@@ -461,7 +471,7 @@ func (store *Store) ListOutcomeDecisions(options OutcomeListOptions) (DecisionPa
 			}
 			scanned++
 			lastScanned = string(key)
-			validRecommendation := validateText("recommendation_id", record.Payload.RecommendationID, true) == nil
+			validRecommendation := record.Payload.Schema == schema && validateText("recommendation_id", record.Payload.RecommendationID, true) == nil
 			if validRecommendation && (record.State == StateClaimed || IsTerminalState(record.State)) {
 				audits, err := auditsForDecision(tx, record.Payload.DecisionID)
 				if err != nil {
@@ -1269,7 +1279,7 @@ func decodeRecord(data []byte, record *Record) error {
 		return ErrStoreCorrupt
 	}
 	if err := record.Payload.Validate(); err != nil {
-		return fmt.Errorf("%w: %w: decision %q payload: %v", ErrInvalidDecision, ErrStoredDecisionInvalid, record.Payload.DecisionID, err)
+		return fmt.Errorf("%w: %w: decision %q payload: %w", ErrInvalidDecision, ErrStoredDecisionInvalid, record.Payload.DecisionID, err)
 	}
 	if record.RecordRevision == 0 || record.StoreRevision == 0 || !knownState(record.State) {
 		return ErrStoreCorrupt

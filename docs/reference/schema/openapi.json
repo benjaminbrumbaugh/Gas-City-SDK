@@ -2529,6 +2529,9 @@
               "null"
             ]
           },
+          "execution": {
+            "$ref": "#/components/schemas/ExecutionBinding"
+          },
           "expires_at": {
             "format": "date-time",
             "type": "string"
@@ -3253,6 +3256,59 @@
           "type",
           "ts",
           "actor"
+        ],
+        "type": "object"
+      },
+      "ExecutionBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "adapter_digest": {
+            "type": "string"
+          },
+          "adapter_id": {
+            "type": "string"
+          },
+          "canonical_model": {
+            "type": "string"
+          },
+          "config_digest": {
+            "type": "string"
+          },
+          "invocation_digest": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "type": "string"
+          },
+          "schema": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "serve_as": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "canonical_model",
+          "serve_as",
+          "reasoning_effort",
+          "account",
+          "provider",
+          "target",
+          "config_digest",
+          "adapter_id",
+          "adapter_digest",
+          "invocation_digest"
         ],
         "type": "object"
       },
