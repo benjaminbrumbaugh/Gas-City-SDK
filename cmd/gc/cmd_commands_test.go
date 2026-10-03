@@ -322,7 +322,7 @@ const testTmuxSocketParentRootEnv = "GC_TEST_TMUX_SOCKET_PARENT_ROOT"
 func createAgedFreeTmuxSocketParent(t *testing.T) (string, string) {
 	t.Helper()
 	const fakePID = 2147483647 // Above the Linux and Darwin process-ID ranges.
-	root, err := os.MkdirTemp("/tmp", "gctroot-*")
+	root, err := os.MkdirTemp(testSocketAllocationParent, "a-*")
 	if err != nil {
 		t.Fatalf("create isolated tmux socket-parent root: %v", err)
 	}
@@ -2625,8 +2625,8 @@ func TestPackCommandExitReturnsThroughRun(t *testing.T) {
 			result := runPackCommandProcessWithEnv(t, cityPath, scenario, []string{
 				testTmuxSocketParentRootEnv + "=" + root,
 			}, "backstage", "hello")
-			if _, err := os.Stat(orphan); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("child TestMain did not remove eligible tmux socket parent %q: %v", orphan, err)
+			if _, err := os.Stat(orphan); err != nil {
+				t.Fatalf("child TestMain removed foreign tmux socket parent %q: %v", orphan, err)
 			}
 			if result.exitCode != 42 {
 				t.Fatalf("helper exit code = %d, want 42; stdout=%q stderr=%q", result.exitCode, result.stdout, result.stderr)

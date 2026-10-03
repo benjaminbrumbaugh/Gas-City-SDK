@@ -277,7 +277,7 @@ func TestGoTestShardWatchdogKillsARunThatDefeatsGoTimeout(t *testing.T) {
 // table. `kill` is a bash builtin and cannot be shadowed on PATH, so the sweep
 // routes every kill through gc_harness_kill_pid and the test overrides that
 // one function to record decisions instead of destroying real processes.
-func sweepHarness(t *testing.T, lsofOutput, psOutput, minAge string) string {
+func sweepHarness(t *testing.T, lsofOutput, psOutput, minAge string, ownedRoot string) string {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -317,8 +317,8 @@ cat %q
 set -euo pipefail
 source %q
 gc_harness_kill_pid() { printf 'KILLED %%s\n' "$1" >> %q ; }
-gc_harness_sweep_stale_orphans %s
-`, filepath.Join(repoRoot(t), "scripts", "lib", "harness-reap.sh"), killLog, minAge)
+gc_harness_sweep_stale_orphans %s %q
+`, filepath.Join(repoRoot(t), "scripts", "lib", "harness-reap.sh"), killLog, minAge, ownedRoot)
 
 	cmd := exec.Command("bash", "-c", script)
 	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -333,11 +333,8 @@ gc_harness_sweep_stale_orphans %s
 	return string(kills) + string(out)
 }
 
-// TestHarnessSweepReapsStrandedRunsButSparesLiveOnes pins the sweep's whole
-// safety contract in one table: it must reap what earlier runs stranded, and
-// must not touch a live sibling run or anything outside the test-socket
-// namespace — above all a developer's own tmux server, per the tmux-safety
-// rule in AGENTS.md.
+// TestHarnessSweepReapsStrandedRunsButSparesLiveOnes proves that cleanup
+// requires explicit caller-owned containment, even for dead test-shaped roots.
 func TestHarnessSweepReapsStrandedRunsButSparesLiveOnes(t *testing.T) {
 	liveRun := t.TempDir()
 	// A live run: the socket-parent dir exists and its creator (this test
@@ -355,15 +352,17 @@ func TestHarnessSweepReapsStrandedRunsButSparesLiveOnes(t *testing.T) {
 		"p4002", "n" + liveSocket, // creator alive -> spare
 		"p4003", "n/private/tmp/tmux-501/default", // the developer's own server
 		"p4004", "n/var/run/some.sock", // unrelated socket
+		"p4005", "n" + filepath.Join(t.TempDir(), "gct-2147480000-99", "tmux", "tmux-501", "test-city"), // dead foreign test run
+		"p4006", "n" + liveRun + "-sibling/gct-2147480000-99/tmux/tmux-501/test-city", // prefix is not containment
 		"",
 	}, "\n")
 
-	got := sweepHarness(t, lsof, "", "60")
+	got := sweepHarness(t, lsof, "", "60", liveRun)
 
 	if !strings.Contains(got, "KILLED 4001") {
 		t.Errorf("sweep spared a stranded socket holder whose run dir is gone; log:\n%s", got)
 	}
-	for _, spared := range []string{"KILLED 4002", "KILLED 4003", "KILLED 4004"} {
+	for _, spared := range []string{"KILLED 4002", "KILLED 4003", "KILLED 4004", "KILLED 4005", "KILLED 4006"} {
 		if strings.Contains(got, spared) {
 			t.Errorf("sweep killed a process it must never touch (%s); log:\n%s", spared, got)
 		}
@@ -374,20 +373,27 @@ func TestHarnessSweepReapsStrandedRunsButSparesLiveOnes(t *testing.T) {
 // population: a .test binary reparented to init. Age is the guard that keeps a
 // concurrently starting sibling run out of scope.
 func TestHarnessSweepReapsOrphanedTestBinariesByAge(t *testing.T) {
+	ownedRoot := t.TempDir()
 	psTable := strings.Join([]string{
-		"5001 1 05:34:12 gc.test",       // orphaned and old: the measured shape
-		"5002 1 00:00:30 gc.test",       // orphaned but young: a run just starting
-		"5003 9182 06:00:00 gc.test",    // old but still parented: a live run
-		"5004 1 06:00:00 Google Chrome", // old orphan, not a test binary
+		"5001 1 05:34:12 " + filepath.Join(ownedRoot, "gc.test"), // orphaned and old: the measured shape
+		"5002 1 00:00:30 gc.test",                                // orphaned but young: a run just starting
+		"5003 9182 06:00:00 gc.test",                             // old but still parented: a live run
+		"5004 1 06:00:00 Google Chrome",                          // old orphan, not a test binary
+		"5005 1 06:00:00 /foreign/gc.test",                       // old foreign test binary
 		"",
 	}, "\n")
 
-	got := sweepHarness(t, "", psTable, "3600")
+	for _, root := range []string{"", "/", "relative", filepath.Join(ownedRoot, "missing")} {
+		if got := sweepHarness(t, "", psTable, "3600", root); strings.Contains(got, "KILLED") {
+			t.Fatalf("unowned root %q authorized cleanup: %s", root, got)
+		}
+	}
+	got := sweepHarness(t, "", psTable, "3600", ownedRoot)
 
 	if !strings.Contains(got, "KILLED 5001") {
 		t.Errorf("sweep spared the orphaned test binary; log:\n%s", got)
 	}
-	for _, spared := range []string{"KILLED 5002", "KILLED 5003", "KILLED 5004"} {
+	for _, spared := range []string{"KILLED 5002", "KILLED 5003", "KILLED 5004", "KILLED 5005"} {
 		if strings.Contains(got, spared) {
 			t.Errorf("sweep killed a process it must never touch (%s); log:\n%s", spared, got)
 		}

@@ -192,6 +192,9 @@ var testTempRootAliveSentinel *os.File
 // lifetime, for the same reason as testTempRootAliveSentinel above.
 var tmuxSocketAliveSentinel *os.File
 
+// Capture the allocation namespace before TestMain redirects TMPDIR.
+var testSocketAllocationParent = os.TempDir()
+
 type cleanupTestingM struct {
 	m     testscript.TestingM
 	paths []string
@@ -233,13 +236,9 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv(managedDoltTestParentPIDEnv, fmt.Sprintf("%d", os.Getpid())); err != nil {
 		panic(err)
 	}
-	// Sweep stale testTempRoot dirs under the inherited temp dir (honoring
-	// TMPDIR) before creating a new one there. Sharded cmd/gc runs use a
-	// separate prefix so concurrent worktrees with older test harnesses
-	// cannot remove this package's active root. The root's alive sentinel
-	// flock must stay held for the binary's lifetime: sweepers in other
-	// processes — including other PID namespaces — probe it instead of
-	// trusting PID visibility (ga-djbcqt).
+	// Allocate, never sweep, the inherited namespace. The fresh root is the
+	// only authority for fixture and process cleanup. Keep HOME semantics.
+	tmuxSocketParentRoot := testSocketAllocationParent
 	testTempRoot, sentinel, err := createActiveTestTempRoot(cmdGCTestTempRootPrefix())
 	if err != nil {
 		panic(err)
@@ -248,22 +247,15 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("TMPDIR", testTempRoot); err != nil {
 		panic(err)
 	}
-	tmuxSocketParentRoot := os.Getenv(testTmuxSocketParentRootEnv)
-	if tmuxSocketParentRoot == "" {
-		tmuxSocketParentRoot = "/tmp"
-	}
-	tmuxSocketRoot, tmuxSocketCleanupRoot, tmuxSentinel, err := cmdGCTmuxSocketRoot(testTempRoot, tmuxSocketParentRoot)
+	tmuxSocketRoot, tmuxSocketCleanupRoot, tmuxSentinel, err := cmdGCTmuxSocketRoot(tmuxSocketParentRoot)
 	if err != nil {
 		panic(err)
 	}
 	tmuxSocketAliveSentinel = tmuxSentinel
 	// testscript.Main below exits via os.Exit, which skips defers, so the
 	// normal path removes the tmux socket parent through cleanupTestingM. A
-	// setup panic before testscript.Main is reached still unwinds through
-	// defers, so cover that window here or it leaks /tmp/gct-<pid>-* until a
-	// later aged sweep. cmdGCTmuxSocketRoot returns an empty cleanup root when
-	// it fell back to a dir under TMPDIR (swept separately), so only the real
-	// /tmp parent is removed here.
+	// setup panic before testscript.Main still unwinds through defers. Only
+	// the parent we just allocated is removed; there is no shared fallback.
 	defer func() {
 		if tmuxSocketCleanupRoot != "" {
 			_ = os.RemoveAll(tmuxSocketCleanupRoot)
