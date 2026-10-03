@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gc routing targets --json result",
+  "type": "object",
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/$defs/TargetSnapshot"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "ok": {
+      "const": true
+    }
+  },
+  "required": [
+    "items",
+    "ok"
+  ],
+  "$defs": {
+    "TargetSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "config_digest": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "resolved_provider": {
+          "type": "string"
+        },
+        "rig": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "rig",
+        "description",
+        "resolved_provider",
+        "config_digest"
+      ],
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

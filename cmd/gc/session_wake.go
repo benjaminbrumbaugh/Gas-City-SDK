@@ -37,6 +37,7 @@ func preWakeCommit(
 	info sessions.Info,
 	sessFront *sessions.Store,
 	clk clock.Clock,
+	authorize ...func(sessions.Info, string, string) error,
 ) (newGen int, token string, fold sessions.MetadataPatch, err error) {
 	name := info.SessionNameMetadata
 	if !sessions.IsSessionNameSyntaxValid(name) {
@@ -70,6 +71,13 @@ func preWakeCommit(
 		SleepReason:       sleepReason,
 		FreshWake:         freshWake,
 	})
+	for _, check := range authorize {
+		if check != nil {
+			if err := check(info, strconv.Itoa(newGen), token); err != nil {
+				return 0, "", nil, err
+			}
+		}
+	}
 	if writeErr := sessFront.ApplyPatch(info.ID, batch); writeErr != nil {
 		return 0, "", nil, fmt.Errorf("pre-wake metadata commit: %w", writeErr)
 	}

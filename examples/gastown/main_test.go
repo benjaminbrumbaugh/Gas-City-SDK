@@ -21,14 +21,13 @@ const gastownTestRootPrefix = "gc-examples-gastown-"
 // defenses over it so a crash, SIGKILL, or `go test -timeout` cannot leak
 // that process or its data directory (ga-ntbpyb.2):
 //
-//  1. dolttest.SweepStale reaps sql-servers left by a PRIOR run of this
-//     binary that was SIGKILLed before its own Guard could react (SIGKILL
-//     is uncatchable in-process, so only a next-run sweep catches that).
+//  1. dolttest.SweepStale may reap stale nested fixtures only inside the
+//     exact fresh runRoot. Prior runs are never this binary's authority.
 //  2. dolttest.SweepOrphanStoreDirsWithPrefix is the symptom-based fallback
-//     for this binary's run-root namespace: age > 60m, a .dolt marker
+//     inside this binary's own run root: age > 60m, a .dolt marker
 //     present, not held open by any live process. The explicit namespace
 //     keeps startup cleanup from recursively inspecting unrelated temporary
-//     trees while still catching stale directories from prior runs.
+//     trees while retaining cleanup of stale owned fixtures.
 //  3. dolttest.Guard reaps any sql-server still alive under this run's own
 //     root on SIGINT/SIGTERM/SIGQUIT (go test -timeout) or normal exit.
 //
@@ -46,8 +45,8 @@ func TestMain(m *testing.M) {
 		panic("examples/gastown TestMain: setting TMPDIR: " + err.Error())
 	}
 
-	dolttest.SweepStale(parent, gastownTestRootPrefix)
-	dolttest.SweepOrphanStoreDirsWithPrefix(parent, gastownTestRootPrefix)
+	dolttest.SweepStale(runRoot, gastownTestRootPrefix)
+	dolttest.SweepOrphanStoreDirsWithPrefix(runRoot, gastownTestRootPrefix)
 	stopGuard := dolttest.Guard(runRoot)
 
 	code := m.Run()

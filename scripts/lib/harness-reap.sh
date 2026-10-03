@@ -219,15 +219,22 @@ gc_harness_etime_seconds() {
 # again. Measured on gas-px0: 8 of 9 stranded servers were already in that
 # state, which is why they accumulate across runs.
 #
-# Safety: only sockets under a "gct-<PID>-<random>" path are ever considered,
-# so a developer's own tmux server (socket ".../tmux-<uid>/default") is
-# structurally unreachable from here — see the tmux-safety rule in AGENTS.md.
-# Only the invoking user's processes are examined, and nothing younger than
-# min_age_seconds is touched, which keeps a concurrently starting sibling run
-# out of scope. Set GC_TEST_NO_ORPHAN_SWEEP=1 to skip the sweep entirely.
+# Safety: a caller must explicitly supply an exclusive owned scratch root as
+# argument 2. Both process populations must be contained in that root; test-like
+# names, age, and a dead creator never authorize cleanup of a foreign run.
+# Without an owned root no stale process is touched. Supervised process-group
+# teardown remains independent and continues to clean this invocation's tree.
+# Only the invoking user's processes are examined, and the age floor remains.
+# Set GC_TEST_NO_ORPHAN_SWEEP=1 to skip explicitly authorized stale cleanup.
 gc_harness_sweep_stale_orphans() {
   local min_age_seconds="${1:-3600}"
   [[ "${GC_TEST_NO_ORPHAN_SWEEP:-0}" != "1" ]] || return 0
+  # Age and test-shaped names do not confer ownership of another run.
+  # The caller must supply its exclusive scratch root; absent authority is
+  # fail-closed. Never infer an owned namespace from ambient TMPDIR.
+  local owned_root="${2:-}"
+  [[ "$owned_root" == /* && "$owned_root" != "/" && -d "$owned_root" ]] || return 0
+  owned_root="${owned_root%/}"
 
   local reaped=0
   local pid ppid etime command age
@@ -237,6 +244,7 @@ gc_harness_sweep_stale_orphans() {
     [[ -n "${pid:-}" && -n "${command:-}" ]] || continue
     [[ "$ppid" == "1" ]] || continue
     [[ "$command" == *.test ]] || continue
+    [[ "$command" == "$owned_root/"* ]] || continue
     age="$(gc_harness_etime_seconds "$etime")" || continue
     (( age >= min_age_seconds )) || continue
     printf 'harness sweep: killing orphaned test binary pid %s (%s, age %ss, reparented to init)\n' \
@@ -250,6 +258,7 @@ gc_harness_sweep_stale_orphans() {
     local socket_pid socket_path owner_dir owner_pid
     while read -r socket_pid socket_path; do
       [[ -n "${socket_pid:-}" && -n "${socket_path:-}" ]] || continue
+      [[ "$socket_path" == "$owned_root/"* ]] || continue
       # Trim the path back to the "<root>/gct-<PID>-<random>" component.
       owner_dir="${socket_path%%/tmux/*}"
       [[ "$owner_dir" != "$socket_path" ]] || continue

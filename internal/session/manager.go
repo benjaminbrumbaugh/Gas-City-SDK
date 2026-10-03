@@ -218,10 +218,11 @@ type Info struct {
 	// poolNewDemandRequests stamps these onto the new-tier SessionRequest it
 	// emits for a pool-managed creating session. Raw mirrors of the gc.* keys.
 	// Additive, internal-only (absent from the HTTP wire).
-	TriggerBeadID       string // gc.trigger_bead_id (raw)
-	TriggerBeadStoreRef string // gc.trigger_bead_store_ref (raw)
-	BrainParentSID      string // gc.brain_parent_sid (raw)
-	Pack                string // gc.pack (raw); resolveTemplateForSessionBead threads it into GC_PACKER_PACK
+	RoutingExecutionDecisionID string // immutable original routing decision
+	TriggerBeadID              string // gc.trigger_bead_id (raw)
+	TriggerBeadStoreRef        string // gc.trigger_bead_store_ref (raw)
+	BrainParentSID             string // gc.brain_parent_sid (raw)
+	Pack                       string // gc.pack (raw); resolveTemplateForSessionBead threads it into GC_PACKER_PACK
 	// PackWorkspace is the RAW gc.pack_workspace metadata (beadmeta.PackWorkspaceMetadataKey),
 	// the pack workspace slug bindPoolSessionTriggerBead stamps alongside gc.pack.
 	// The pool-trigger binding diff compares it (trimmed) against the request's
@@ -581,6 +582,7 @@ type ProviderResume struct {
 // Manager orchestrates chat session lifecycle using beads for persistence
 // and runtime.Provider for runtime.
 type Manager struct {
+	launchAuthorization     LaunchAuthorization
 	store                   beads.Store
 	sp                      runtime.Provider
 	cityPath                string
@@ -1018,6 +1020,10 @@ func (m *Manager) createStarted(ctx context.Context, spec CreateOptions) (Info, 
 			}
 			return fmt.Errorf("pre-start orphan cleanup: %w", orphanErr)
 		}
+		commitLaunch, authorizationErr := m.authorizeRuntimeStart(ctx, b.ID, &cfg)
+		if authorizationErr != nil {
+			return authorizationErr
+		}
 		if err := m.sp.Start(ctx, sessName, cfg); err != nil {
 			if runtimeSessionMatchesBead(m.sp, sessName, b.ID, meta["instance_token"]) {
 				if metaErr := m.confirmStartedRuntimeMetadata(b.ID, &b); metaErr != nil {
@@ -1036,6 +1042,12 @@ func (m *Manager) createStarted(ctx context.Context, spec CreateOptions) (Info, 
 				return errors.Join(fmt.Errorf("starting session: %w", err), rbErr)
 			}
 			return fmt.Errorf("starting session: %w", err)
+		}
+		if commitLaunch != nil {
+			if err := commitLaunch(); err != nil {
+				_ = m.sp.Stop(sessName)
+				return err
+			}
 		}
 		if metaErr := m.confirmStartedRuntimeMetadata(b.ID, &b); metaErr != nil {
 			if stopErr := m.sp.Stop(sessName); stopErr != nil {

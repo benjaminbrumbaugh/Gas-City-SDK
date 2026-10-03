@@ -29,6 +29,7 @@ City is the top-level configuration for a Gas City instance.
 | `beads` | BeadsConfig |  |  | Beads configures the bead store backend. |
 | `session` | SessionConfig |  |  | Session configures the session provider backend. |
 | `recovery_responder` | RecoveryResponderConfig |  |  | RecoveryResponder optionally routes bounded recovery work for durable, high-confidence provider/session impairments. |
+| `routing_execution` | RoutingExecutionConfig |  |  | RoutingExecution is root-owned, explicitly disabled by default execution authorization. |
 | `mail` | MailConfig |  |  | Mail configures the mail provider backend. |
 | `events` | EventsConfig |  |  | Events configures the events provider backend. |
 | `usage` | UsageConfig |  |  | Usage configures the usage-fact sink backend. |
@@ -803,6 +804,36 @@ RigPatch modifies an existing rig identified by Name.
 | `suspended` | boolean |  |  | Suspended is the deprecated, pre-runtime-state suspension override. Parsed for backwards compatibility; `gc doctor` surfaces it as a warning and recommends the rename to SuspendedOnStart. No behavioral code path reads it. |
 | `suspended_on_start` | boolean |  |  | SuspendedOnStart overrides the rig's desired suspension state at city start. Mirrors Rig.SuspendedOnStart. |
 | `formula_vars` | map[string]string |  |  | FormulaVars adds or overrides rig-scoped formula var defaults. Additive merge: patch keys win over existing rig keys, unspecified keys are preserved. |
+
+## RoutingExecutionBinding
+
+RoutingExecutionBinding authorizes one exact local wrapper invocation.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `canonical_model` | string | **yes** |  |  |
+| `serve_as` | string | **yes** |  |  |
+| `reasoning_effort` | string | **yes** |  |  |
+| `account` | string | **yes** |  |  |
+| `provider` | string | **yes** |  |  |
+| `adapter_id` | string | **yes** |  |  |
+| `executable` | string | **yes** |  |  |
+| `executable_digest` | string | **yes** |  |  |
+| `args` | []string | **yes** |  |  |
+| `model_arg_index` | integer | **yes** |  |  |
+| `effort_arg_index` | integer | **yes** |  |  |
+| `work_dir` | string | **yes** |  |  |
+| `environment` | map[string]string | **yes** |  |  |
+| `transport` | string | **yes** |  |  |
+
+## RoutingExecutionConfig
+
+RoutingExecutionConfig activates a caller-owned closed-world local execution registry.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `enabled` | boolean |  |  |  |
+| `bindings` | map[string]RoutingExecutionBinding |  |  |  |
 
 ## Service
 

@@ -424,36 +424,6 @@ export const zCycle = z.object({
     trigger_detail: z.string().optional()
 });
 
-export const zDecisionPayload = z.object({
-    account: z.string(),
-    alternatives: z.array(zAlternative).nullable(),
-    binding_id: z.string(),
-    city: z.string(),
-    claim_fence: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
-    created_at: z.iso.datetime(),
-    decision_id: z.string(),
-    endpoint: z.string(),
-    evidence: z.array(z.string()).nullable(),
-    expires_at: z.iso.datetime(),
-    model: z.string(),
-    no_migration: z.boolean(),
-    observation_digest: z.string(),
-    options: z.array(zAuditOption).nullable(),
-    policy_digest: z.string(),
-    provider: z.string(),
-    reason: z.string(),
-    recommendation_id: z.string().optional(),
-    rig: z.string(),
-    schema: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
-    serve_as: z.string(),
-    source: z.string(),
-    target: z.string(),
-    target_config_digest: z.string(),
-    work_bead_id: z.string(),
-    work_revision: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
-    work_state_digest: z.string()
-});
-
 export const zDeliveryContextRecord = z.object({
     BindingGeneration: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
     Conversation: zConversationRef,
@@ -563,6 +533,51 @@ export const zEventRotateResponse = z.object({
     archive: zEventRotateArchive.optional(),
     reason: z.string().optional(),
     rotated: z.boolean()
+});
+
+export const zExecutionBinding = z.object({
+    account: z.string(),
+    adapter_digest: z.string(),
+    adapter_id: z.string(),
+    canonical_model: z.string(),
+    config_digest: z.string(),
+    invocation_digest: z.string(),
+    provider: z.string(),
+    reasoning_effort: z.string(),
+    schema: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    serve_as: z.string(),
+    target: z.string()
+});
+
+export const zDecisionPayload = z.object({
+    account: z.string(),
+    alternatives: z.array(zAlternative).nullable(),
+    binding_id: z.string(),
+    city: z.string(),
+    claim_fence: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    created_at: z.iso.datetime(),
+    decision_id: z.string(),
+    endpoint: z.string(),
+    evidence: z.array(z.string()).nullable(),
+    execution: zExecutionBinding.optional(),
+    expires_at: z.iso.datetime(),
+    model: z.string(),
+    no_migration: z.boolean(),
+    observation_digest: z.string(),
+    options: z.array(zAuditOption).nullable(),
+    policy_digest: z.string(),
+    provider: z.string(),
+    reason: z.string(),
+    recommendation_id: z.string().optional(),
+    rig: z.string(),
+    schema: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    serve_as: z.string(),
+    source: z.string(),
+    target: z.string(),
+    target_config_digest: z.string(),
+    work_bead_id: z.string(),
+    work_revision: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    work_state_digest: z.string()
 });
 
 export const zExecutionClaimWindowExpiredPayload = z.object({
@@ -1879,6 +1894,35 @@ export const zListBodyAgentPatch = z.object({
     next_cursor: z.string().optional(),
     partial: z.boolean().optional(),
     partial_errors: z.array(z.string()).nullish(),
+    total: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' })
+});
+
+export const zProducerExecutionOutcome = z.object({
+    actual_config_digest: z.string().nullable(),
+    actual_target_id: z.string().nullable(),
+    admission_receipt_id: z.string().nullable(),
+    correlation_id: z.string(),
+    disposition: z.string(),
+    execution_id: z.string().nullable(),
+    failure_class: z.string(),
+    observed_at_unix: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    outcome_id: z.string(),
+    provenance: z.string(),
+    recommendation_id: z.string(),
+    requested_config_digest: z.string(),
+    requested_target_id: z.string(),
+    routing_decision_id: z.string().nullable(),
+    schema_version: z.string(),
+    session_id: z.string().nullable(),
+    status: z.string(),
+    work_id: z.string()
+});
+
+export const zProducerExecutionOutcomePage = z.object({
+    items: z.array(zProducerExecutionOutcome).nullable(),
+    next_cursor: z.string().optional(),
+    partial: z.boolean(),
+    schema_version: z.string(),
     total: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' })
 });
 
@@ -3760,6 +3804,7 @@ export const zStoreStatus = z.object({
 
 export const zLiveStatus = z.object({
     authority_ready: z.boolean(),
+    execution_enabled: z.boolean(),
     reason: z.string(),
     retention_months: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
     schema: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
@@ -10015,6 +10060,20 @@ export const zListRoutingOutcomesQuery = z.object({
  * OK
  */
 export const zListRoutingOutcomesResponse = zOutcomePage;
+
+export const zListRoutingExecutionOutcomesPath = z.object({
+    cityName: z.string().min(1).regex(/\S/)
+});
+
+export const zListRoutingExecutionOutcomesQuery = z.object({
+    limit: z.coerce.bigint().gte(BigInt(1)).lte(BigInt(100)).optional().default(BigInt(100)),
+    cursor: z.string().optional()
+});
+
+/**
+ * OK
+ */
+export const zListRoutingExecutionOutcomesResponse = zProducerExecutionOutcomePage;
 
 export const zGetRoutingStatusPath = z.object({
     cityName: z.string().min(1).regex(/\S/)

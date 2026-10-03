@@ -873,7 +873,7 @@ func prepareStartCandidateForCity(
 			// byte-coherent with the persisted state without a second Get. It shares
 			// preWakeCommit's error contract: a failed re-read already returned above,
 			// so the twin is never folded from a stale/rejected bead.
-			_, _, fold, err := preWakeCommit(current, sessFront, clk)
+			_, _, fold, err := preWakeCommit(current, sessFront, clk, candidate.tp.RoutingWakeAuthorization)
 			if err != nil {
 				return err
 			}
@@ -882,7 +882,7 @@ func prepareStartCandidateForCity(
 		}); err != nil {
 			return nil, err
 		}
-	} else if _, _, fold, err := preWakeCommit(candidate.info, sessionFrontDoor(store), clk); err != nil {
+	} else if _, _, fold, err := preWakeCommit(candidate.info, sessionFrontDoor(store), clk, candidate.tp.RoutingWakeAuthorization); err != nil {
 		return nil, err
 	} else {
 		candidate.info = candidate.info.ApplyPatch(fold)
@@ -1899,6 +1899,11 @@ func startPreparedStartCandidate(
 	warmClaim warmClaimTriggerProbe,
 ) (bool, error) {
 	name := item.candidate.name()
+	if check := item.candidate.tp.RoutingLaunchCheck; check != nil {
+		if err := check(item.candidate.info, item.cfg); err != nil {
+			return false, errors.New("routing execution launch refused")
+		}
+	}
 	if sp != nil {
 		running, alive := observeRuntimeProviderLiveness(sp, name, item.cfg.ProcessNames)
 		if running {
@@ -1955,7 +1960,11 @@ func startPreparedStartCandidate(
 		}
 		return true, handle.StartResolved(ctx, item.cfg.Command, item.cfg)
 	}
-	handle, err := workerHandleForSessionWithStaleKeyDetectionWaiter(cityPath, store, sp, cfg, item.candidate.info.ID, staleKeyDetectionWaiter)
+	factory, err := workerFactoryWithLaunchAuthorization(cityPath, store, sp, cfg, staleKeyDetectionWaiter, item.candidate.tp.RoutingLaunchAuthorization)
+	if err != nil {
+		return true, err
+	}
+	handle, err := factory.SessionByID(item.candidate.info.ID)
 	if err != nil {
 		return true, err
 	}

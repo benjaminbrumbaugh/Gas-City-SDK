@@ -139,9 +139,18 @@ func (cr *CityRuntime) applyApprovedRoutingDecisions() (int, error) {
 
 func (cr *CityRuntime) routeDecisionAtAdmissionBoundary(scope routingDecisionScope, record routingdecision.Record, attempt *routingDecisionAdmissionAttempt) (routingdecision.AdmissionCallbackResult, error) {
 	payload := record.Payload
-	_, targetDigest, ok := cr.resolveRoutingDecisionTarget(payload.Target, payload.Rig)
+	targetAgent, targetDigest, ok := cr.resolveRoutingDecisionTarget(payload.Target, payload.Rig)
 	if !ok || targetDigest != payload.TargetConfigDigest || payload.City != cr.cityName || payload.Rig != scope.rig {
 		return routingdecision.AdmissionCallbackResult{State: routingdecision.StateRefusedAfterRace, Reason: "live target binding changed"}, nil
+	}
+	if payload.Schema == routingdecision.ExecutionSchemaVersion {
+		if cr.routingExecutionAdapter == nil {
+			return routingdecision.AdmissionCallbackResult{State: routingdecision.StateRefusedAfterRace, Reason: "execution adapter unavailable"}, nil
+		}
+		actual, err := cr.routingExecutionAdapter(targetAgent, cr.cfg, nil)
+		if err != nil || payload.MatchesExecution(actual) != nil {
+			return routingdecision.AdmissionCallbackResult{State: routingdecision.StateRefusedAfterRace, Reason: "execution tuple refused"}, nil
+		}
 	}
 	live, err := beads.HandlesFor(scope.store).Live.Get(payload.WorkBeadID)
 	if err != nil {

@@ -2,6 +2,7 @@ package api
 
 import (
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/worker"
 )
 
@@ -13,7 +14,14 @@ func (s *Server) workerFactory(store beads.Store) (*worker.Factory, error) {
 			return configuredSessionTransport(cfg, template, provider)
 		}
 	}
+	var authorize session.LaunchAuthorization
+	if provider, ok := s.state.(interface {
+		RoutingExecutionLaunchAuthorization() session.LaunchAuthorization
+	}); ok {
+		authorize = provider.RoutingExecutionLaunchAuthorization()
+	}
 	return worker.NewFactory(worker.FactoryConfig{
+		LaunchAuthorization:   authorize,
 		Store:                 store,
 		Provider:              s.state.SessionProvider(),
 		CityPath:              s.state.CityPath(),

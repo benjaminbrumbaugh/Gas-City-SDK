@@ -903,6 +903,7 @@ export type DecisionPayload = {
     decision_id: string;
     endpoint: string;
     evidence: Array<string> | null;
+    execution?: ExecutionBinding;
     expires_at: string;
     model: string;
     no_migration: boolean;
@@ -1092,6 +1093,20 @@ export type EventStreamEnvelope = {
     ts: string;
     type: string;
     workflow?: WorkflowEventProjection;
+};
+
+export type ExecutionBinding = {
+    account: string;
+    adapter_digest: string;
+    adapter_id: string;
+    canonical_model: string;
+    config_digest: string;
+    invocation_digest: string;
+    provider: string;
+    reasoning_effort: string;
+    schema: number;
+    serve_as: string;
+    target: string;
 };
 
 export type ExecutionClaimWindowExpiredPayload = {
@@ -1987,6 +2002,7 @@ export type ListBodyWireEvent = {
 
 export type LiveStatus = {
     authority_ready: boolean;
+    execution_enabled: boolean;
     reason: string;
     retention_months: number;
     schema: number;
@@ -2606,6 +2622,35 @@ export type PoolOverride = {
     Min: number | null;
     OnBoot: string | null;
     OnDeath: string | null;
+};
+
+export type ProducerExecutionOutcome = {
+    actual_config_digest: string | null;
+    actual_target_id: string | null;
+    admission_receipt_id: string | null;
+    correlation_id: string;
+    disposition: string;
+    execution_id: string | null;
+    failure_class: string;
+    observed_at_unix: number;
+    outcome_id: string;
+    provenance: string;
+    recommendation_id: string;
+    requested_config_digest: string;
+    requested_target_id: string;
+    routing_decision_id: string | null;
+    schema_version: string;
+    session_id: string | null;
+    status: string;
+    work_id: string;
+};
+
+export type ProducerExecutionOutcomePage = {
+    items: Array<ProducerExecutionOutcome> | null;
+    next_cursor?: string;
+    partial: boolean;
+    schema_version: string;
+    total: number;
 };
 
 export type ProjectIdentityStampedPayload = {
@@ -17569,6 +17614,61 @@ export type ListRoutingOutcomesResponses = {
 };
 
 export type ListRoutingOutcomesResponse = ListRoutingOutcomesResponses[keyof ListRoutingOutcomesResponses];
+
+export type ListRoutingExecutionOutcomesData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: {
+        /**
+         * Maximum claimed or terminal outcome records to return.
+         */
+        limit?: number;
+        /**
+         * Opaque stable decision-ID keyset cursor.
+         */
+        cursor?: string;
+    };
+    url: '/v0/city/{cityName}/routing/outcomes-v3';
+};
+
+export type ListRoutingExecutionOutcomesErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type ListRoutingExecutionOutcomesError = ListRoutingExecutionOutcomesErrors[keyof ListRoutingExecutionOutcomesErrors];
+
+export type ListRoutingExecutionOutcomesResponses = {
+    /**
+     * OK
+     */
+    200: ProducerExecutionOutcomePage;
+};
+
+export type ListRoutingExecutionOutcomesResponse = ListRoutingExecutionOutcomesResponses[keyof ListRoutingExecutionOutcomesResponses];
 
 export type GetRoutingStatusData = {
     body?: never;

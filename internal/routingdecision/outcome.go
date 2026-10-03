@@ -302,7 +302,7 @@ func (record OutcomeRecord) Validate() error {
 	return nil
 }
 
-func latestOutcomeObservedAt(item DecisionWithAudits, fallback time.Time) time.Time {
+func latestOutcomeObservedAt(item DecisionWithAudits, _ time.Time) time.Time {
 	latest := time.Time{}
 	for _, audit := range item.Audits {
 		if audit.At.After(latest) {
@@ -310,7 +310,7 @@ func latestOutcomeObservedAt(item DecisionWithAudits, fallback time.Time) time.T
 		}
 	}
 	if latest.IsZero() {
-		return fallback.UTC()
+		return item.Record.Payload.CreatedAt.UTC()
 	}
 	return latest.UTC()
 }

@@ -17,30 +17,44 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/routingdecision"
+	"github.com/gastownhall/gascity/internal/runtime/subprocess"
+	sessionpkg "github.com/gastownhall/gascity/internal/session"
 )
 
 type cityRoutingDecisionService struct {
-	mu               sync.RWMutex
-	ingestWG         sync.WaitGroup
-	store            *routingdecision.Store
-	verifier         *routingdecision.Verifier
-	status           string
-	reason           string
-	authorityReady   bool
-	closed           bool
-	purgeCursor      string
-	lifecycleCursor  string
-	targets          func() ([]routingdecision.TargetSnapshot, error)
-	eligible         func() (routingdecision.SelectionSnapshot, error)
-	now              func() time.Time
-	outcomeWork      func(context.Context, routingdecision.DecisionPayload) (routingdecision.OutcomeWorkSnapshot, error)
-	outcomeAuthority func(context.Context, routingdecision.DecisionPayload) routingdecision.OutcomeAuthoritySnapshot
-	reconcile        func()
+	mu                  sync.RWMutex
+	ingestWG            sync.WaitGroup
+	store               *routingdecision.Store
+	verifier            *routingdecision.Verifier
+	status              string
+	reason              string
+	authorityReady      bool
+	executionEnabled    bool
+	launchAuthorization sessionpkg.LaunchAuthorization
+	closed              bool
+	purgeCursor         string
+	lifecycleCursor     string
+	targets             func() ([]routingdecision.TargetSnapshot, error)
+	eligible            func() (routingdecision.SelectionSnapshot, error)
+	now                 func() time.Time
+	outcomeWork         func(context.Context, routingdecision.DecisionPayload) (routingdecision.OutcomeWorkSnapshot, error)
+	outcomeAuthority    func(context.Context, routingdecision.DecisionPayload) routingdecision.OutcomeAuthoritySnapshot
+	reconcile           func()
+}
+
+func (cr *CityRuntime) configureRoutingExecutionAdapter() {
+	cr.routingExecutionAdapter = nil
+	if cr.cfg != nil && cr.cfg.RoutingExecution != nil && cr.cfg.RoutingExecution.Enabled && subprocess.SupportsLocalBoundExecution(cr.sp) {
+		cr.routingExecutionAdapter = resolveLocalRoutingExecution
+	}
 }
 
 func initializeRoutingDecisionService(cr *CityRuntime) {
+	cr.configureRoutingExecutionAdapter()
 	service := &cityRoutingDecisionService{
-		status: routingdecision.AvailabilityDenied, reason: routingdecision.ReasonAuthorityUnavailable,
+		executionEnabled:    cr.cfg != nil && cr.cfg.RoutingExecution != nil && cr.cfg.RoutingExecution.Enabled,
+		launchAuthorization: cr.authorizeRoutingExecutionLaunch,
+		status:              routingdecision.AvailabilityDenied, reason: routingdecision.ReasonAuthorityUnavailable,
 		targets: cr.routingDecisionTargetSnapshots, eligible: cr.routingDecisionEligibleSnapshot,
 		now: cr.routingDecisionNow, outcomeWork: cr.routingDecisionOutcomeWork,
 		outcomeAuthority: cr.routingDecisionOutcomeAuthority,
@@ -81,7 +95,8 @@ func (service *cityRoutingDecisionService) Status() routingdecision.LiveStatus {
 	service.mu.RLock()
 	defer service.mu.RUnlock()
 	status := routingdecision.LiveStatus{
-		Schema: routingdecision.SchemaVersion, Status: service.status, Reason: service.reason,
+		ExecutionEnabled: service.executionEnabled,
+		Schema:           routingdecision.SchemaVersion, Status: service.status, Reason: service.reason,
 		AuthorityReady: service.authorityReady, RetentionMonths: routingdecision.TerminalRetentionMonths,
 		TerminalStateBasis: "latest_terminal_transition_at",
 	}

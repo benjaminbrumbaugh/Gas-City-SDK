@@ -110,6 +110,12 @@ unless the row names how they map to the canonical projection.
 | SESSION-ID-011 | API target classification ladder | API session target resolution classifies through a fixed ladder: template-form rejection, exact bead ID, configured named session (lookup errors and matched outcomes are terminal — no fallthrough to live matching; conflicts and ambiguity surface as the carried step error), live session_name then alias (named-session matches whose configured identity is absent are rejected by config, on live-only and allow-closed surfaces alike), live path alias by title, then on allow-closed surfaces only: named-spec rejection ahead of closed session_name then closed alias. Lookups run one vector at a time and stop at the first terminal outcome. | `internal/session/target_classifier.go` (`DecideSessionTarget`); `internal/session/target_classifier_test.go`; `internal/api/session_resolution_precedence_test.go`; `internal/api/session_resolution_path_alias_test.go`; `internal/api/session_materialization_guard_test.go` |
 | SESSION-ID-012 | Pool alias versus durable owner | An unnamed pool session may retain its public alias for targeting and display, but work ownership uses persisted `session_name` (or bead ID when missing) because pool aliases rebind. Configured named sessions retain stable configured/public ownership identity. | `internal/session/assignee_identities_test.go`; `internal/session/lifecycle_actor_test.go`; `cmd/gc/pool_slot_unaliased_test.go` |
 
+### Routing execution authorization
+
+| ID | Scenario | Required behavior | Evidence |
+|---|---|---|---|
+| SESSION-ROUTING-001 | Signed execution session reconstruction | A persisted v3 classification cannot become a legacy launch when trigger/work metadata is lost. Every actual session Start (create, wake, worker bridge, stale-key fallback) re-reads the session and requires caller-owned authorization. The receipt commit runs only on successful runtime Start, never on liveness or name collision. | `routing_authorization_test.go`; `routing_authorization.go`; `chat.go`; `manager.go` |
+
 ### Start, Wake, Suspend, Close
 
 | ID | Scenario | Required behavior | Evidence |

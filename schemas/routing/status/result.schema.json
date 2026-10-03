@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gc routing status --json result",
+  "type": "object",
+  "properties": {
+    "authority_ready": {
+      "type": "boolean"
+    },
+    "execution_enabled": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "retention_months": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "schema": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "status": {
+      "type": "string"
+    },
+    "store": {
+      "$ref": "#/$defs/StoreStatus"
+    },
+    "terminal_state_basis": {
+      "type": "string"
+    },
+    "ok": {
+      "const": true
+    }
+  },
+  "required": [
+    "execution_enabled",
+    "schema",
+    "status",
+    "reason",
+    "authority_ready",
+    "retention_months",
+    "terminal_state_basis",
+    "store",
+    "ok"
+  ],
+  "$defs": {
+    "StoreStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "format": "int64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state_counts": {
+          "items": {
+            "$ref": "#/$defs/StateCount"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "store_revision": {
+          "format": "int64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "store_revision",
+        "state_counts"
+      ],
+      "type": "object"
+    },
+    "StateCount": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "format": "int64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "count"
+      ],
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

@@ -36,6 +36,10 @@ func workerFactoryWithStaleKeyDetectionWaiter(
 	cfg *config.City,
 	waiter session.StaleKeyDetectionWaiter,
 ) (*worker.Factory, error) {
+	return workerFactoryWithLaunchAuthorization(cityPath, store, sp, cfg, waiter, nil)
+}
+
+func workerFactoryWithLaunchAuthorization(cityPath string, store beads.Store, sp runtime.Provider, cfg *config.City, waiter session.StaleKeyDetectionWaiter, authorize session.LaunchAuthorization) (*worker.Factory, error) {
 	var (
 		resolveTransport func(template, provider string) string
 		searchPaths      []string
@@ -85,6 +89,7 @@ func workerFactoryWithStaleKeyDetectionWaiter(
 		ResolveTransport:        resolveTransport,
 		ResolveSessionRuntime:   workerSessionRuntimeResolverWithConfig(cityPath, cfg),
 		StaleKeyDetectionWaiter: waiter,
+		LaunchAuthorization:     authorize,
 		Pricing:                 cfg.PricingRegistry(),
 	})
 }

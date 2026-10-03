@@ -828,7 +828,7 @@ func TestSnapshotDoltProcessesForConfigRootsCatchesSourceTreeLeak(t *testing.T) 
 	}
 }
 
-func TestDoltLeakGuardedTestingMLeakRootsIncludeCheckoutRoot(t *testing.T) {
+func TestDoltLeakGuardedTestingMLeakRootsExcludeCheckoutRoot(t *testing.T) {
 	tempRoot := filepath.Join("/tmp", "gct12345-678")
 	checkoutRoot := filepath.Join(t.TempDir(), "gascity")
 	sourceRoot := filepath.Join(checkoutRoot, "cmd", "gc")
@@ -844,8 +844,8 @@ func TestDoltLeakGuardedTestingMLeakRootsIncludeCheckoutRoot(t *testing.T) {
 		checkoutRoot: checkoutRootForTestSource(sourceRoot),
 	}
 
-	if roots := g.leakRoots(); len(roots) != 3 || roots[2] != checkoutRoot {
-		t.Fatalf("leakRoots() = %q, want checkout root %q", roots, checkoutRoot)
+	if roots := g.leakRoots(); len(roots) != 1 || roots[0] != tempRoot {
+		t.Fatalf("leakRoots() = %q, want exact owned root %q only", roots, tempRoot)
 	}
 }
 

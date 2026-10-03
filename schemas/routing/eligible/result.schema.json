@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gc routing eligible --json result",
+  "type": "object",
+  "properties": {
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "targets": {
+      "items": {
+        "$ref": "#/$defs/TargetSnapshot"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "work": {
+      "items": {
+        "$ref": "#/$defs/EligibleWorkSnapshot"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "ok": {
+      "const": true
+    }
+  },
+  "required": [
+    "observed_at",
+    "work",
+    "targets",
+    "ok"
+  ],
+  "$defs": {
+    "EligibleWorkSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_fence": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "rig": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "work_bead_id": {
+          "type": "string"
+        },
+        "work_revision": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "work_state_digest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rig",
+        "scope",
+        "work_bead_id",
+        "work_revision",
+        "claim_fence",
+        "work_state_digest"
+      ],
+      "type": "object"
+    },
+    "TargetSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "config_digest": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "resolved_provider": {
+          "type": "string"
+        },
+        "rig": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "rig",
+        "description",
+        "resolved_provider",
+        "config_digest"
+      ],
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

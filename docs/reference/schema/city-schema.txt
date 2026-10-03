@@ -1171,6 +1171,10 @@
           "$ref": "#/$defs/RecoveryResponderConfig",
           "description": "RecoveryResponder optionally routes bounded recovery work for durable,\nhigh-confidence provider/session impairments."
         },
+        "routing_execution": {
+          "$ref": "#/$defs/RoutingExecutionConfig",
+          "description": "RoutingExecution is root-owned, explicitly disabled by default execution authorization."
+        },
         "mail": {
           "$ref": "#/$defs/MailConfig",
           "description": "Mail configures the mail provider backend."
@@ -2783,6 +2787,93 @@
         "name"
       ],
       "description": "RigPatch modifies an existing rig identified by Name."
+    },
+    "RoutingExecutionBinding": {
+      "properties": {
+        "canonical_model": {
+          "type": "string"
+        },
+        "serve_as": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "type": "string"
+        },
+        "account": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "adapter_id": {
+          "type": "string"
+        },
+        "executable": {
+          "type": "string"
+        },
+        "executable_digest": {
+          "type": "string"
+        },
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "model_arg_index": {
+          "type": "integer"
+        },
+        "effort_arg_index": {
+          "type": "integer"
+        },
+        "work_dir": {
+          "type": "string"
+        },
+        "environment": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "transport": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "canonical_model",
+        "serve_as",
+        "reasoning_effort",
+        "account",
+        "provider",
+        "adapter_id",
+        "executable",
+        "executable_digest",
+        "args",
+        "model_arg_index",
+        "effort_arg_index",
+        "work_dir",
+        "environment",
+        "transport"
+      ],
+      "description": "RoutingExecutionBinding authorizes one exact local wrapper invocation."
+    },
+    "RoutingExecutionConfig": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "bindings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RoutingExecutionBinding"
+          },
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "RoutingExecutionConfig activates a caller-owned closed-world local execution registry."
     },
     "Service": {
       "properties": {

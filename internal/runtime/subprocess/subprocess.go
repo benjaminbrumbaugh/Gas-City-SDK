@@ -150,7 +150,17 @@ func (p *Provider) Start(_ context.Context, name string, cfg runtime.Config) err
 		command = "sh"
 	}
 
-	cmd := exec.Command("sh", "-c", command)
+	executable, args := "sh", []string{"-c", command}
+	if cfg.IsolatedLocalExecution {
+		if !filepath.IsAbs(cfg.BoundExecutable) {
+			clearWorkDir()
+			return errors.New("bound executable required for isolated execution")
+		}
+		executable, args = cfg.BoundExecutable, cfg.BoundArgs
+	}
+	// Go Start waits for the child exec-error pipe. A fast successful exit is
+	// distinct from an exec failure (including a missing shebang interpreter).
+	cmd := exec.Command(executable, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if cfg.WorkDir != "" {
 		cmd.Dir = cfg.WorkDir
@@ -184,6 +194,17 @@ func (p *Provider) Start(_ context.Context, name string, cfg runtime.Config) err
 				continue
 			}
 			env = append(env, k+"="+cfg.Env[k])
+		}
+	}
+	if cfg.IsolatedLocalExecution {
+		env = []string{}
+		keys := make([]string, 0, len(cfg.BoundEnvironment))
+		for key := range cfg.BoundEnvironment {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			env = append(env, key+"="+cfg.BoundEnvironment[key])
 		}
 	}
 	cmd.Env = env
