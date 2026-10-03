@@ -237,11 +237,9 @@ func TestDiscoverTmuxProcessesWithSocketRootEnv_FindsDeletedSocketZombie(t *test
 	waitForPIDGone(t, pid)
 }
 
-// TestSweepStaleTmuxTestServers_ReapsRootGoneKeepsRootPresent proves the
-// startup sweep's decision boundary: a gct-* socket root that no longer
-// exists marks its server as dead-run residue (reap); a root still on disk
-// protects its server (skip), including this run's own.
-func TestSweepStaleTmuxTestServers_ReapsRootGoneKeepsRootPresent(t *testing.T) {
+// The guard reaps a missing socket only when it belongs to its explicit
+// owned root. An adjacent foreign server survives regardless of liveness.
+func TestOwnedTmuxLeakGuardReapsMissingOwnedRootKeepsForeignRoot(t *testing.T) {
 	if _, err := os.ReadDir("/proc"); err != nil {
 		t.Skip("host has no /proc; startup sweep degrades to no-op")
 	}
@@ -260,7 +258,11 @@ func TestSweepStaleTmuxTestServers_ReapsRootGoneKeepsRootPresent(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	sweepStaleTmuxTestServers("test", &out)
+	g := newTmuxLeakGuardedTestingM(staticTestingM{}, goneRoot)
+	if code := g.runWith(func() int { return 0 }, killTmuxServersUnderSocketRoot,
+		g.discoverOwnedTmuxProcesses, reapTmuxLeakProcesses, &out); code != 1 {
+		t.Fatalf("owned missing-root leak did not fail the guard: %d", code)
+	}
 
 	waitForPIDGone(t, gonePID)
 	if !pidAlive(keptPID) {

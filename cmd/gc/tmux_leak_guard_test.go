@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/pathutil"
-	"github.com/gastownhall/gascity/test/tmuxtest"
 	"github.com/rogpeppe/go-internal/testscript"
 )
 
@@ -158,36 +157,6 @@ func reapTmuxLeakProcesses(procs []tmuxProcInfo) {
 	_ = reapDoltLeakPIDsWithKiller(pids, killProcess)
 }
 
-// sweepStaleTmuxTestServers reaps tmux servers left behind by prior or
-// sibling test runs that are already gone: a tmux process whose TMUX_TMPDIR
-// names a "<gct-…>/tmux" socket root that no longer exists on disk. A live
-// run's root exists for its whole lifetime (its alive-sentinel flock is held
-// inside it and the dir is only removed at that run's own teardown), so a
-// missing root is definitive proof the owning run ended — the server is
-// residue of the exact leak class this guard exists for (a crashed or
-// pre-guard run whose teardown removed the dir but never killed the server).
-// Roots that still exist — including this run's own — are never touched.
-func sweepStaleTmuxTestServers(label string, out io.Writer) {
-	stale := discoverTmuxProcessesWithSocketRootEnv(func(root string) bool {
-		root = strings.TrimSpace(root)
-		if root == "" || filepath.Base(root) != "tmux" {
-			return false
-		}
-		parent := filepath.Dir(root)
-		if _, ok := pidFromPrefixedDirName(filepath.Base(parent), tmuxtest.SocketParentDirPrefix); !ok {
-			return false
-		}
-		_, err := os.Stat(root)
-		return os.IsNotExist(err)
-	})
-	if len(stale) == 0 {
-		return
-	}
-	fmt.Fprintf(out, "cmd/gc tmux leak guard: %s sweep reaping %d stale test tmux server(s) whose socket root is gone\n", label, len(stale)) //nolint:errcheck
-	writeTmuxLeakReport(out, stale)
-	reapTmuxLeakProcesses(stale)
-}
-
 func writeTmuxLeakReport(w io.Writer, leaked []tmuxProcInfo) {
 	for _, proc := range leaked {
 		fmt.Fprintf(w, "  pid=%d argv=%q\n", proc.PID, strings.Join(proc.Argv, " ")) //nolint:errcheck
@@ -195,7 +164,7 @@ func writeTmuxLeakReport(w io.Writer, leaked []tmuxProcInfo) {
 }
 
 // tmuxLeakGuardedTestingM wraps the suite runner with the tmux server leak
-// guard: a startup sweep for residue of dead runs, and a fail-the-build
+// guard: a fail-the-build
 // teardown assertion that zero tmux servers created under this run's socket
 // root survive the suite. It composes inside cleanupTestingM (the guard must
 // run BEFORE the socket root directory is removed) and outside the dolt leak
@@ -228,8 +197,7 @@ func (g *tmuxLeakGuardedTestingM) runWith(
 	reap func([]tmuxProcInfo),
 	out io.Writer,
 ) int {
-	sweepStaleTmuxTestServers("startup", out)
-
+	// Fresh allocation is the ownership boundary; never reap prior runs.
 	code := runTests()
 
 	// Phase 1: kill by explicit socket path under the per-run root. Exit 0

@@ -68,9 +68,7 @@ func TestCmdGCTestTempRootPrefixUsesShardPrefix(t *testing.T) {
 }
 
 func TestCmdGCTmuxSocketRootUsesShortPath(t *testing.T) {
-	longMacRoot := filepath.Join("/private/var/folders/pm/cmklcsfj60nd7nfc79g8xmbc0000gn/T", "gcx12345-1234567890")
-
-	root, cleanupRoot, sentinel, err := cmdGCTmuxSocketRoot(longMacRoot, "/tmp")
+	root, cleanupRoot, sentinel, err := cmdGCTmuxSocketRoot(testSocketAllocationParent)
 	if err != nil {
 		t.Fatalf("cmdGCTmuxSocketRoot: %v", err)
 	}
@@ -84,8 +82,8 @@ func TestCmdGCTmuxSocketRootUsesShortPath(t *testing.T) {
 	if sentinel == nil {
 		t.Fatal("cmdGCTmuxSocketRoot: sentinel = nil, want held alive sentinel")
 	}
-	if !strings.HasPrefix(root, "/tmp/gct-") {
-		t.Fatalf("tmux socket root = %q, want short /tmp/gct-* root", root)
+	if filepath.Dir(cleanupRoot) != testSocketAllocationParent || !strings.HasPrefix(filepath.Base(cleanupRoot), "s-") {
+		t.Fatalf("tmux root = %q, want fresh short parent in %q", root, testSocketAllocationParent)
 	}
 	socketPath := filepath.Join(root, "tmux-"+strconv.Itoa(os.Getuid()), "gctest-12345678")
 	if len(socketPath) > 104 {
@@ -570,17 +568,17 @@ func TestSweepOrphanLogsRemovalReason(t *testing.T) {
 }
 
 func TestSweepOrphanRemovesStaleCmdGCTempRootInSystemTmp(t *testing.T) {
+	parent := t.TempDir()
 	prefix := fmt.Sprintf("%s%d-test-", testCmdGCTempRootPrefix, os.Getpid())
 	pid := nonLivePID(t)
-	root := filepath.Join("/tmp", fmt.Sprintf("%s%d-stale-backstop", prefix, pid))
-	_ = os.RemoveAll(root)
+	root := filepath.Join(parent, fmt.Sprintf("%s%d-stale-backstop", prefix, pid))
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	backdatePastSweepAge(t, root)
 
-	sweepOrphanPIDPrefixedDirs("/tmp", prefix)
+	sweepOrphanPIDPrefixedDirs(parent, prefix)
 
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Fatalf("stale cmd/gc temp root still exists after sweep: %v", err)

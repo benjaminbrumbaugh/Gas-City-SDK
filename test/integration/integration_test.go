@@ -90,7 +90,13 @@ const (
 // tmux socket parent dir for the binary's lifetime; see TestMain.
 var tmuxSocketAliveSentinel *os.File
 
-// TestMain builds the gc binary and runs pre/post sweeps of orphan sessions.
+// Explicit fresh allocation authority, independent of mutable environment.
+var (
+	integrationRunRoot        string
+	integrationTmuxSocketRoot string
+)
+
+// TestMain builds gc and confines all cleanup to this binary's fresh roots.
 func TestMain(m *testing.M) {
 	if os.Getenv("GC_INTEGRATION_SUPERVISOR_STOP_HELPER") == "1" {
 		select {}
@@ -106,42 +112,27 @@ func TestMain(m *testing.M) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Create the tmux socket root under /tmp rather than $TMPDIR.
-	// On macOS, $TMPDIR is ~80 chars (/private/var/folders/…/T/); nesting
-	// tmux sockets inside it pushes socket paths past macOS's 104-byte limit.
-	// /tmp is world-writable on macOS, Linux, and CI runners.
-	//
-	// NewSocketParentDir sweeps orphaned siblings left by a prior SIGKILL'd
-	// run before creating this run's own dir. tmuxSocketAliveSentinel must
-	// stay referenced for the process lifetime: the runtime finalizes
-	// unreachable os.Files, which would close the descriptor and release
-	// the lock, letting a concurrent sibling's sweep reclaim this still-
-	// active directory (ga-djbcqt). Normal and skip exits call os.Exit, which
-	// skips defers, so those paths remove the parent explicitly below; the
-	// deferred removal here additionally covers a setup panic (which unwinds
-	// through defers) so it cannot leak the parent until a later aged sweep.
-	tmuxSocketParent, tmuxSentinel, tmuxParentErr := tmuxtest.NewSocketParentDir("/tmp", io.Discard)
-	tmuxSocketAliveSentinel = tmuxSentinel
-	defer func() {
-		// Re-read tmuxSocketParent so the MkdirAll-failure path that clears it
-		// below is honored and this never double-removes on a normal exit.
-		if tmuxSocketParent != "" {
-			_ = os.RemoveAll(tmuxSocketParent)
-		}
-	}()
-	tmuxSocketRoot := filepath.Join(tmpDir, "tmux")
-	if tmuxParentErr == nil {
-		tmuxSocketRoot = filepath.Join(tmuxSocketParent, "tmux")
-		if err := os.MkdirAll(tmuxSocketRoot, 0o700); err != nil {
-			_ = tmuxSocketAliveSentinel.Close()
-			tmuxSocketAliveSentinel = nil
-			os.RemoveAll(tmuxSocketParent)
-			tmuxSocketParent = ""
-			tmuxSocketRoot = filepath.Join(tmpDir, "tmux")
-		}
+	integrationRunRoot = tmpDir
+	// Allocate only: the inherited namespace grants no cleanup authority.
+	tmuxSocketParent, err := os.MkdirTemp("", "s-")
+	if err != nil {
+		panic(err)
 	}
+	tmuxSentinel, err := tmuxtest.HoldAliveSentinel(tmuxSocketParent)
+	if err != nil {
+		_ = os.RemoveAll(tmuxSocketParent)
+		panic(err)
+	}
+	tmuxSocketAliveSentinel = tmuxSentinel
+	defer func() { _ = os.RemoveAll(tmuxSocketParent) }()
+	tmuxSocketRoot := filepath.Join(tmuxSocketParent, "tmux")
+	integrationTmuxSocketRoot = tmuxSocketRoot
 	if err := tmuxtest.ConfigureProcessEnv(tmuxSocketRoot); err != nil {
-		panic("integration: configuring tmux test env: " + err.Error())
+		panic(err)
+	}
+	// Every test and child temp file must live under this binary's fresh root.
+	if err := os.Setenv("TMPDIR", tmpDir); err != nil {
+		panic(err)
 	}
 
 	// Tmux check: skip all tests if tmux not available AND not using subprocess.
@@ -153,19 +144,16 @@ func TestMain(m *testing.M) {
 			}
 			os.Exit(0)
 		}
-		// Pre-sweep: kill this run's root plus stale sibling orphans.
-		tmuxtest.KillAllTestSessions(&mainTB{})
+		if err := tmuxtest.CleanupOwnedSocketRoot(tmuxSocketRoot); err != nil {
+			panic(err)
+		}
 	}
-	// Best-effort pre-sweep of stale "gc supervisor run" / control-dispatcher
-	// processes left by a prior interrupted or timed-out run. This is not
-	// gated to the subprocess provider: both providers boot the same shared
-	// TestMain supervisor via gcBinary/testGCHome, and a `go test -timeout`
-	// panic bypasses per-test t.Cleanup for either one.
+	// Cleanup is ungated by provider but rooted in this exact fresh run.
+	// Prior interrupted runs are never ours to signal.
 	sweepSubprocessTestProcesses()
-	// Reap dolt sql-server orphans left by prior crashed runs (SIGKILL /
-	// timeout bypasses in-process cleanup); scoped by owner-pid liveness so
-	// concurrent runs are spared (issue #3640).
-	dolttest.SweepStale(filepath.Dir(tmpDir), "gc-integration-")
+	// Preserve normal/signal Dolt cleanup inside the exact fresh run root.
+	stopDoltGuard := dolttest.Guard(tmpDir)
+	defer stopDoltGuard()
 	stopSignalSweeper := installIntegrationSignalSweeper(subprocess)
 	defer stopSignalSweeper()
 
@@ -256,11 +244,15 @@ func TestMain(m *testing.M) {
 	// cleanup below.
 	stopIntegrationSupervisorWithTimeout(integrationSupervisorStopTimeout)
 
-	// Post-sweep: clean up any sessions that survived individual test cleanup.
+	// Only our socket root and run-root processes may be reclaimed.
 	if !subprocess {
-		tmuxtest.KillAllTestSessions(&mainTB{})
+		if err := tmuxtest.CleanupOwnedSocketRoot(tmuxSocketRoot); err != nil {
+			fmt.Fprintln(os.Stderr, err) //nolint:errcheck
+			code = 1
+		}
 	}
 	sweepSubprocessTestProcesses()
+	stopDoltGuard()
 
 	_ = os.RemoveAll(tmpDir)
 	if tmuxSocketParent != "" {
@@ -308,7 +300,9 @@ func sweepIntegrationProcesses(subprocess bool) {
 		cleanupIntegrationDoltSQLServersUnderRoot(testGCHome)
 	}
 	if !subprocess {
-		tmuxtest.KillAllTestSessions(&mainTB{})
+		if err := tmuxtest.CleanupOwnedSocketRoot(integrationTmuxSocketRoot); err != nil {
+			fmt.Fprintln(os.Stderr, err) //nolint:errcheck
+		}
 	}
 	sweepSubprocessTestProcesses()
 }
@@ -483,8 +477,7 @@ func sweepSubprocessTestProcesses() {
 		return
 	}
 
-	agentScript := filepath.Join(findModuleRoot(), "test", "agents", "graph-dispatch.sh")
-	killSet := subprocessTestKillSet(procs, agentScript, integrationPIDAlive)
+	killSet := subprocessTestKillSet(procs, integrationRunRoot)
 	if len(killSet) == 0 {
 		return
 	}
@@ -739,84 +732,17 @@ func parsePPid(status string) int {
 	return 0
 }
 
-func isSubprocessTestRoot(cmd, agentScript string) bool {
-	switch {
-	case strings.Contains(cmd, agentScript):
-		return true
-	case strings.Contains(cmd, "gc convoy control --serve --follow control-dispatcher") && strings.Contains(cmd, "gc-integration-"):
-		return true
-	case strings.Contains(cmd, "gc supervisor run") && strings.Contains(cmd, "gc-integration-"):
-		return true
-	default:
-		return false
-	}
-}
-
-func isSubprocessTestLeaf(cmd, agentScript string) bool {
-	switch {
-	case strings.Contains(cmd, "bd ready --label=pool:polecat --unassigned --json --limit=1"):
-		return true
-	case strings.Contains(cmd, "bd ready --assignee=worker --json --limit=1"):
-		return true
-	case strings.Contains(cmd, agentScript):
-		return true
-	default:
-		return false
-	}
-}
-
-// integrationOwnerPIDFromCmd parses the owning test-run pid out of a cmdline
-// that references a "gc-integration-<pid>-<rand>" run root, mirroring
-// dolttest's ownerPIDFromRunDir so both sweeps scope stale state the same way.
-func integrationOwnerPIDFromCmd(cmd string) (int, bool) {
-	const marker = "gc-integration-"
-	i := strings.Index(cmd, marker)
-	if i < 0 {
-		return 0, false
-	}
-	tok := cmd[i+len(marker):]
-	end := 0
-	for end < len(tok) && tok[end] >= '0' && tok[end] <= '9' {
-		end++
-	}
-	pid, err := strconv.Atoi(tok[:end])
-	if err != nil || pid <= 0 {
-		return 0, false
-	}
-	return pid, true
-}
-
-// integrationPIDAlive reports whether pid still exists. Signal 0 probes
-// existence without delivering a signal; EPERM means the process exists but
-// is not ours to signal — treat as alive (don't reap).
-func integrationPIDAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || err == syscall.EPERM
-}
-
-// subprocessTestRootIsReapable reports whether a matched root belongs to a
-// dead run or to this one. Roots matched by their run root in argv carry an
-// owner pid ("gc-integration-<pid>-<rand>"): reap only when that owner is gone
-// (a stale orphan) or is us (our own leftovers during the post-sweep), so a
-// live concurrent run's supervisor — and its descendant subtree — is spared
-// (issue #3640). Roots matched via agentScript carry no run root in argv, so
-// they keep the prior unscoped behavior.
-func subprocessTestRootIsReapable(cmd string, alive func(int) bool) bool {
-	owner, ok := integrationOwnerPIDFromCmd(cmd)
-	if !ok {
-		return true
-	}
-	return !alive(owner) || owner == os.Getpid()
-}
-
-func subprocessTestKillSet(procs map[int]procSnapshot, agentScript string, alive func(int) bool) map[int]bool {
+// subprocessTestKillSet returns rooted gc supervisors/control dispatchers and
+// their descendants only. Shared script/leaf names never establish ownership.
+func subprocessTestKillSet(procs map[int]procSnapshot, ownedRoot string) map[int]bool {
 	roots := make(map[int]bool)
 	children := make(map[int][]int, len(procs))
 	for pid, info := range procs {
-		if isSubprocessTestRoot(info.cmd, agentScript) && subprocessTestRootIsReapable(info.cmd, alive) {
+		fields := strings.Fields(info.cmd)
+		// A dead PID, missing root or shared script grants no authority.
+		if len(fields) >= 3 && filepath.Base(fields[0]) == "gc" &&
+			pathWithinIntegrationRoot(ownedRoot, fields[0]) &&
+			(fields[1] == "supervisor" && fields[2] == "run" || fields[1] == "convoy" && fields[2] == "control") {
 			roots[pid] = true
 		}
 		children[info.ppid] = append(children[info.ppid], pid)
@@ -837,11 +763,6 @@ func subprocessTestKillSet(procs map[int]procSnapshot, agentScript string, alive
 		queue = append(queue, children[pid]...)
 	}
 
-	for pid, info := range procs {
-		if isSubprocessTestLeaf(info.cmd, agentScript) {
-			killSet[pid] = true
-		}
-	}
 	return killSet
 }
 
@@ -2284,7 +2205,8 @@ func TestNewIsolatedToolEnvSkipIdentityModeSkipsConfigWrite(t *testing.T) {
 	}
 }
 
-func TestSubprocessTestKillSetIncludesRootsDescendantsAndLeaves(t *testing.T) {
+func TestSubprocessTestKillSetIncludesOwnedRootsDescendantsNotForeignLeaves(t *testing.T) {
+	ownedRoot := "/tmp/gc-integration-123"
 	agentScript := "/tmp/test/agents/graph-dispatch.sh"
 	procs := map[int]procSnapshot{
 		10: {pid: 10, ppid: 1, cmd: "/tmp/gc-integration-123/gc supervisor run"},
@@ -2296,29 +2218,27 @@ func TestSubprocessTestKillSetIncludesRootsDescendantsAndLeaves(t *testing.T) {
 		40: {pid: 40, ppid: 1, cmd: "ordinary unrelated process"},
 	}
 
-	// Owner pid 123 is reported dead so the stale root is reapable; injecting
-	// the predicate keeps the fixture deterministic instead of depending on
-	// whether pid 123 happens to exist on the host.
-	got := subprocessTestKillSet(procs, agentScript, func(int) bool { return false })
+	// The exact root is explicit; neither naming PID nor liveness is authority.
+	got := subprocessTestKillSet(procs, ownedRoot)
 
-	for _, pid := range []int{10, 11, 12, 20, 21, 30} {
+	for _, pid := range []int{10, 11, 12} {
 		if !got[pid] {
 			t.Fatalf("kill set missing pid %d: %#v", pid, got)
 		}
 	}
-	if got[40] {
-		t.Fatalf("kill set unexpectedly included unrelated pid 40: %#v", got)
+	for _, pid := range []int{20, 21, 30, 40} {
+		if got[pid] {
+			t.Fatalf("kill set includes foreign pid %d: %#v", pid, got)
+		}
 	}
 }
 
 // TestSubprocessTestKillSetSparesLiveForeignIntegrationRun pins the ownership
-// scoping that makes the ungated sweep safe: the sweep now runs for both
-// providers, so a starting run's pre-sweep must not SIGTERM/SIGKILL the
-// supervisor of a live concurrent run. A root is reapable only when its owner
-// pid is dead (a stale orphan) or is this process (our own leftovers).
+// scoping of the ungated sweep: only the explicitly supplied root may be
+// reaped. Live and missing-root foreign runs are both protected.
 func TestSubprocessTestKillSetSparesLiveForeignIntegrationRun(t *testing.T) {
-	agentScript := "/tmp/test/agents/graph-dispatch.sh"
 	self := os.Getpid()
+	ownedRoot := fmt.Sprintf("/tmp/gc-integration-%d-xyz", self)
 	procs := map[int]procSnapshot{
 		10: {pid: 10, ppid: 1, cmd: "/tmp/gc-integration-123-abc/bin/gc supervisor run"},
 		11: {pid: 11, ppid: 10, cmd: "child of stale supervisor"},
@@ -2326,16 +2246,14 @@ func TestSubprocessTestKillSetSparesLiveForeignIntegrationRun(t *testing.T) {
 		30: {pid: 30, ppid: 1, cmd: "/tmp/gc-integration-999-def/bin/gc supervisor run"},
 		31: {pid: 31, ppid: 30, cmd: "child of live foreign supervisor"},
 	}
-	alive := func(pid int) bool { return pid == 999 || pid == self }
+	got := subprocessTestKillSet(procs, ownedRoot)
 
-	got := subprocessTestKillSet(procs, agentScript, alive)
-
-	for _, pid := range []int{10, 11, 20} {
+	for _, pid := range []int{20} {
 		if !got[pid] {
 			t.Fatalf("kill set missing pid %d (stale orphan or own run): %#v", pid, got)
 		}
 	}
-	for _, pid := range []int{30, 31} {
+	for _, pid := range []int{10, 11, 30, 31} {
 		if got[pid] {
 			t.Fatalf("kill set included pid %d from a live concurrent run: %#v", pid, got)
 		}

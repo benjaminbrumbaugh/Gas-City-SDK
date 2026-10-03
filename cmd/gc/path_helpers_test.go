@@ -64,22 +64,18 @@ func shortSocketTempDir(t *testing.T, prefix string) string {
 	return testutil.ShortTempDir(t, prefix)
 }
 
-// cmdGCTmuxSocketRoot returns a tmux socket root under socketParentRoot.
-// TestMain normally supplies /tmp rather than testTempRoot, which can be an
-// arbitrarily long macOS $TMPDIR path that blows Unix socket path limits. It
-// also returns the parent dir to remove at teardown and the *os.File holding
-// its alive sentinel. The sentinel must stay referenced by the caller for the
-// process lifetime so a concurrent sibling run's orphan sweep
-// (tmuxtest.SweepOrphanPIDPrefixedDirs, invoked inside NewSocketParentDir)
-// does not reclaim this still-active directory.
-func cmdGCTmuxSocketRoot(testTempRoot, socketParentRoot string) (string, string, *os.File, error) {
-	parent, sentinel, err := tmuxtest.NewSocketParentDir(socketParentRoot, io.Discard)
+// cmdGCTmuxSocketRoot allocates a fresh short parent without sweeping siblings.
+// socketParentRoot is an allocation namespace, not cleanup authority. Callers
+// must provide a short TMPDIR on macOS; no shared-root fallback is attempted.
+func cmdGCTmuxSocketRoot(socketParentRoot string) (string, string, *os.File, error) {
+	parent, err := os.MkdirTemp(socketParentRoot, "s-")
 	if err != nil {
-		root := filepath.Join(testTempRoot, "tmux")
-		if err := os.MkdirAll(root, 0o700); err != nil {
-			return "", "", nil, fmt.Errorf("creating fallback cmd/gc tmux socket root: %w", err)
-		}
-		return root, "", nil, nil
+		return "", "", nil, fmt.Errorf("allocating cmd/gc tmux socket parent: %w", err)
+	}
+	sentinel, err := tmuxtest.HoldAliveSentinel(parent)
+	if err != nil {
+		_ = os.RemoveAll(parent)
+		return "", "", nil, err
 	}
 	root := filepath.Join(parent, "tmux")
 	if err := os.MkdirAll(root, 0o700); err != nil {
@@ -134,19 +130,8 @@ func requireNoLeakedDoltAfterForPaths(t *testing.T, paths ...string) {
 type doltLeakGuardedTestingM struct {
 	m        *testing.M
 	tempRoot string
-	// sourceRoot is the package directory the test binary runs in. A managed
-	// dolt provider handed a city root of "" or "." resolves it to this
-	// directory, so the server and its data_dir land in the source checkout
-	// at cmd/gc/.gc and cmd/gc/.beads instead of under tempRoot. Those
-	// escaped the guard entirely while it watched tempRoot alone, and
-	// .gitignore hides the on-disk half, so they accumulated unnoticed.
-	//
-	// Watching this root is safe for the reaping paths as well as detection:
-	// no real city lives inside the checkout, so a dolt sql-server rooted
-	// here is a test leak by construction. That is why the fix names a
-	// second root rather than watching every dolt process on the machine —
-	// an unscoped guard would reap the developer's own city servers, which
-	// legitimately start and stop during a long test run.
+	// Source paths are retained for diagnostics/classifier tests only. A
+	// checkout (or its ancestors) never grants this guard cleanup authority.
 	sourceRoot   string
 	checkoutRoot string
 	cleanupPaths []string
@@ -193,7 +178,7 @@ func checkoutRootForTestSource(sourceRoot string) string {
 // sql-server whose --config lies under any of them is this run's to detect and
 // reap.
 func (g *doltLeakGuardedTestingM) leakRoots() []string {
-	return []string{g.tempRoot, g.sourceRoot, g.checkoutRoot}
+	return []string{g.tempRoot}
 }
 
 // nonEmptyLeakRoots is leakRoots minus unresolved entries, for diagnostics that
@@ -369,7 +354,9 @@ func (g *doltLeakGuardedTestingM) sweepStaleCmdGCTestDoltProcesses(label string)
 		return true
 	}
 	activeRoots := cmdGCTestActiveRoots(g.tempRoot)
-	tempParent := filepath.Dir(filepath.Clean(g.tempRoot))
+	// A missing config or dead naming PID does not grant authority over a
+	// sibling run. Restrict any stale fixtures to this freshly allocated root.
+	tempParent := filepath.Clean(g.tempRoot)
 	var leaked []DoltProcInfo
 	for _, proc := range procs {
 		if !isStaleCmdGCTestConfigPath(extractConfigPath(proc.Argv), activeRoots, tempParent) {

@@ -72,15 +72,12 @@ func aliveSentinelHeld(dir string) (exists, held bool) {
 	return true, false
 }
 
-// createActiveTestTempRoot sweeps stale prefix-matching roots under the
-// inherited temp dir (honoring TMPDIR rather than hardcoding /tmp, so gate
-// runners can isolate concurrent runs), creates this process's test temp
-// root there, writes the active-root marker, and acquires the alive sentinel
-// lock. The caller must keep the returned file referenced for the lifetime
-// of the process so the flock is not released by a finalizer.
+// createActiveTestTempRoot allocates a fresh root without inspecting or
+// sweeping the inherited allocation namespace. The marker and alive sentinel
+// remain useful to explicit cleanup inside an exclusively owned root.
+// Keep the returned sentinel referenced for the process lifetime.
 func createActiveTestTempRoot(prefix string) (string, *os.File, error) {
 	parent := os.TempDir()
-	sweepOrphanPIDPrefixedDirs(parent, prefix)
 	root, err := os.MkdirTemp(parent, pidPrefixedTempPattern(prefix))
 	if err != nil {
 		return "", nil, fmt.Errorf("creating test temp root under %q: %w", parent, err)
