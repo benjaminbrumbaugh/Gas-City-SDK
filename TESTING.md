@@ -223,6 +223,31 @@ budget, diagnostics, and owner in the checked E2E/provider manifest owned by
 description. On-demand coverage does not count as a release proof without a
 freshness gate for the exact release SHA.
 
+## Wayfinder v3 retained resource-boundary owners
+
+`scripts/test-wayfinder-v3-convergence.sh <absolute producer source>` is the
+mandatory provider-free SDK convergence lane. It requires the real recording
+child owner and the integration-tagged built-root owner to execute; a skipped
+built-root owner fails the lane. City-owned actual producer/SDK/forwarder
+convergence additionally runs `TestCityV3CrossRepositoryConvergence` in the City
+repository with explicit `CITY_V3_SDK_ROOT` and `CITY_V3_PRODUCER_ROOT` paths.
+Configured prerequisites must fail rather than silently substitute fixtures.
+
+| Retained assertion / unique risk | Owning proof and resource boundary |
+| --- | --- |
+| Literal argv/environment, denied mutation, original-attempt recovery, nonmigration, typed producer projection | `cmd/gc/TestRoutingExecutionRecordingChildRecoveryAndNonmigration`; real production subprocess adapter, owned filesystem, package Medium setup; filesystem watcher subscribed before launch wakes complete durable witness reads without wall-clock sleeps |
+| Unavailable authority, real pre-wake successor, failed exec versus successful fast exit | Existing adversarial and routing-execution matrix owners in `cmd/gc/routing_execution_adversarial_test.go`; unchanged cases/receipts/refusal assertions, same causal watcher and owned recorder |
+| All six routing root JSON/schema registrations, unchanged v3 page bytes, result-schema validity | `test/integration/TestRoutingJSONBuiltRootCapability`; `integration` tag, real built executable and loopback HTTP; reuses the suite's freshly built owned binary and bounded command helpers instead of four redundant process-construction sites |
+| Canonical City signing, SDK ingest/replay/admission, actual recorder, exact durable forwarding bytes/ack and real producer replay | City-owned `TestCityV3CrossRepositoryConvergence`; actual sibling sources and freshly built binaries, not a recording CLI |
+
+The root owner moved from `cmd/gc` to `test/integration`, without removing its
+assertions or exempting tagged files from the all-source census. Its schema
+assertion now compiles the result schema emitted by that exact executable.
+Recording-child tests remain in the focused SDK lane; no new Small claim or
+Medium waiver is introduced. Raw all-source process/sleep totals return to the
+existing 652/191 and 470/173 call/file ceilings, respectively; untagged HTTP
+returns to 324/68. Policy ceilings, waiver owners, and expiry dates are unchanged.
+
 ## Flakes are defects
 
 A deterministic product-test failure may not be retried into green on the same

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	gcapi "github.com/gastownhall/gascity/internal/api"
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
@@ -60,18 +61,27 @@ func TestRoutingExecutionProductionCutoverInstallsOnlySupportedAdapter(t *testin
 	}
 }
 
-func awaitRoutingExecutionWitness(t *testing.T, output, expected string, count int) {
+// The watcher is subscribed before StartResolved. Filesystem notifications are
+// causal wakeups, not evidence themselves: reread the complete literal record.
+func awaitRoutingExecutionWitness(t *testing.T, watcher *fsnotify.Watcher, output, expected string, count int) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	for {
-		data, _ := os.ReadFile(output)
-		if strings.Count(string(data), expected) >= count {
+		data, err := os.ReadFile(output)
+		if err == nil && strings.Count(string(data), expected) == count {
 			return
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("recording child did not execute")
+		select {
+		case _, ok := <-watcher.Events:
+			if !ok {
+				t.Fatal("recording child watcher closed")
+			}
+		case err := <-watcher.Errors:
+			t.Fatalf("recording child watcher: %v", err)
+		case <-ctx.Done():
+			t.Fatalf("recording child did not execute: last record %q, read error %v", data, err)
 		}
-		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -83,6 +93,14 @@ func TestRoutingExecutionRecordingChildRecoveryAndNonmigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := filepath.Join(root, "observed")
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = watcher.Close() })
+	if err := watcher.Add(root); err != nil {
+		t.Fatal(err)
+	}
 	poison := filepath.Join(root, "forbidden-shell")
 	if err := os.WriteFile(filepath.Join(wrapperDir, "sh"), []byte("#!/bin/sh\nprintf poison > '"+poison+"'\nexit 99\n"), 0o700); err != nil {
 		t.Fatal(err)
@@ -154,10 +172,10 @@ func TestRoutingExecutionRecordingChildRecoveryAndNonmigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sp.Stop(info.SessionName) })
-	awaitRecord := func(count int) { awaitRoutingExecutionWitness(t, output, "Literal/Model", count) }
+	want := executable + "\n--model\nLiteral/Model\n--effort\nhigh\nHOME=" + root + "\nACCOUNT=account-a\nANTHROPIC_MODEL=unset\nOPENAI_API_KEY=unset\n"
+	awaitRecord := func(count int) { awaitRoutingExecutionWitness(t, watcher, output, want, count) }
 	awaitRecord(1)
 	data, _ := os.ReadFile(output)
-	want := executable + "\n--model\nLiteral/Model\n--effort\nhigh\nHOME=" + root + "\nACCOUNT=account-a\nANTHROPIC_MODEL=unset\nOPENAI_API_KEY=unset\n"
 	if string(data) != want {
 		t.Fatalf("literal tuple/environment changed: %q", data)
 	}

@@ -12,6 +12,17 @@ if command -v brew >/dev/null 2>&1; then
   export CGO_LDFLAGS="-L$(brew --prefix icu4c)/lib"
 fi
 GC_FAST_UNIT=1 go test ./cmd/gc -run '^TestRoutingExecution(RecordingChildRecoveryAndNonmigration|ProductionCutoverInstallsOnlySupportedAdapter)$' -count=1 -v | tee temp/wayfinder-v3-proof/convergence.log
+# Built-root capability is a real-process integration owner. Reuse the suite's
+# freshly built, owned SDK binary; never accept an ambient binary override.
+env -u GC_INTEGRATION_GC_BINARY GC_SESSION=subprocess go test -tags=integration ./test/integration -run '^TestRoutingJSONBuiltRootCapability$' -count=1 -json | tee temp/wayfinder-v3-proof/built-root.json
+python3.13 - <<'PY'
+import json, pathlib
+rows = [json.loads(line) for line in pathlib.Path('temp/wayfinder-v3-proof/built-root.json').read_text().splitlines()]
+owner = 'TestRoutingJSONBuiltRootCapability'
+assert any(row.get('Test') == owner and row['Action'] == 'pass' for row in rows), 'mandatory built-root owner did not execute'
+assert not any(row['Action'] in ('skip', 'fail') for row in rows), 'built-root lane skipped or failed'
+print('Verified mandatory real built-root capability, six routing JSON seams, exact v3 bytes and emitted result schema.')
+PY
 PYTHONPATH="$producer/tools" python3.13 - "$producer" <<'PY'
 import json, pathlib, sys
 from wayfinder_routing_contracts import validate_against_schema_file

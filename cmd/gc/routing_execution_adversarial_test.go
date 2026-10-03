@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/clock"
@@ -22,7 +23,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-func adversarialExecutionFixture(t *testing.T, script string, mutate ...func(*config.RoutingExecutionBinding)) (routingDecisionFixture, runtime.Provider, sessionpkg.Info, routingdecision.DecisionPayload, string, runtime.Config, string, func() error) {
+func adversarialExecutionFixture(t *testing.T, script string, mutate ...func(*config.RoutingExecutionBinding)) (routingDecisionFixture, runtime.Provider, sessionpkg.Info, routingdecision.DecisionPayload, string, runtime.Config, string, *fsnotify.Watcher, func() error) {
 	t.Helper()
 	fixture := newApprovedRoutingDecisionFixture(t, "legacy-child")
 	root := t.TempDir()
@@ -31,6 +32,14 @@ func adversarialExecutionFixture(t *testing.T, script string, mutate ...func(*co
 		t.Fatal(err)
 	}
 	output := filepath.Join(root, "observed")
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = watcher.Close() })
+	if err := watcher.Add(root); err != nil {
+		t.Fatal(err)
+	}
 	poison := filepath.Join(root, "forbidden-shell")
 	if err := os.WriteFile(filepath.Join(wrapperDir, "sh"), []byte("#!/bin/sh\nprintf poison > '"+poison+"'\nexit 99\n"), 0o700); err != nil {
 		t.Fatal(err)
@@ -102,20 +111,20 @@ func adversarialExecutionFixture(t *testing.T, script string, mutate ...func(*co
 	}
 	final := runtime.Config{Command: command, WorkDir: binding.WorkDir, Env: map[string]string{"HOME": "hostile-home", "ANTHROPIC_MODEL": "hostile-model", "OPENAI_API_KEY": "hostile-not-a-key"}}
 	t.Cleanup(func() { _ = sp.Stop(info.SessionName) })
-	return fixture, sp, info, p, command, final, output, func() error { return handle.StartResolved(context.Background(), command, final) }
+	return fixture, sp, info, p, command, final, output, watcher, func() error { return handle.StartResolved(context.Background(), command, final) }
 }
 
 func TestAdversarialUnavailableAuthorityDoesNotDowngrade(t *testing.T) {
-	fixture, sp, info, p, _, _, output, start := adversarialExecutionFixture(t, "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\" \"HOME=$HOME\" \"ACCOUNT=$ACCOUNT\" \"ANTHROPIC_MODEL=${ANTHROPIC_MODEL-unset}\" \"OPENAI_API_KEY=${OPENAI_API_KEY-unset}\" >> \"$RECORD\"\nexec /bin/sleep 30\n")
+	fixture, sp, info, p, _, _, output, watcher, start := adversarialExecutionFixture(t, "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\" \"HOME=$HOME\" \"ACCOUNT=$ACCOUNT\" \"ANTHROPIC_MODEL=${ANTHROPIC_MODEL-unset}\" \"OPENAI_API_KEY=${OPENAI_API_KEY-unset}\" >> \"$RECORD\"\nexec /bin/sleep 30\n")
 	if err := start(); err != nil {
 		t.Fatal(err)
 	}
-	awaitRecord := func(count int) { awaitRoutingExecutionWitness(t, output, "Literal/Model", count) }
-	awaitRecord(1)
-	data, _ := os.ReadFile(output)
 	binding := fixture.cr.cfg.RoutingExecution.Bindings[p.Target]
 	executable, root := binding.Executable, binding.WorkDir
 	want := executable + "\n--model\nLiteral/Model\n--effort\nhigh\nHOME=" + root + "\nACCOUNT=account-a\nANTHROPIC_MODEL=unset\nOPENAI_API_KEY=unset\n"
+	awaitRecord := func(count int) { awaitRoutingExecutionWitness(t, watcher, output, want, count) }
+	awaitRecord(1)
+	data, _ := os.ReadFile(output)
 	if string(data) != want {
 		t.Fatalf("literal tuple/environment changed: %q", data)
 	}
@@ -161,7 +170,7 @@ func TestAdversarialUnavailableAuthorityDoesNotDowngrade(t *testing.T) {
 }
 
 func TestAdversarialMissingInterpreterDoesNotMintActualExecution(t *testing.T) {
-	fixture, sp, info, p, _, _, output, start := adversarialExecutionFixture(t, "#!/nonexistent-owned-fixture-interpreter\nprintf executed > \"$RECORD\"\n")
+	fixture, sp, info, p, _, _, output, _, start := adversarialExecutionFixture(t, "#!/nonexistent-owned-fixture-interpreter\nprintf executed > \"$RECORD\"\n")
 	if err := start(); err == nil {
 		t.Fatal("failed executable exec accepted as successful Start")
 	}
@@ -187,16 +196,16 @@ func TestAdversarialMissingInterpreterDoesNotMintActualExecution(t *testing.T) {
 }
 
 func TestAdversarialRealPreWakePreservesOriginalWorkRecovery(t *testing.T) {
-	fixture, sp, info, p, _, _, output, start := adversarialExecutionFixture(t, "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\" \"HOME=$HOME\" \"ACCOUNT=$ACCOUNT\" \"ANTHROPIC_MODEL=${ANTHROPIC_MODEL-unset}\" \"OPENAI_API_KEY=${OPENAI_API_KEY-unset}\" >> \"$RECORD\"\nexec /bin/sleep 30\n")
+	fixture, sp, info, p, _, _, output, watcher, start := adversarialExecutionFixture(t, "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$@\" \"HOME=$HOME\" \"ACCOUNT=$ACCOUNT\" \"ANTHROPIC_MODEL=${ANTHROPIC_MODEL-unset}\" \"OPENAI_API_KEY=${OPENAI_API_KEY-unset}\" >> \"$RECORD\"\nexec /bin/sleep 30\n")
 	if err := start(); err != nil {
 		t.Fatal(err)
 	}
-	awaitRecord := func(count int) { awaitRoutingExecutionWitness(t, output, "Literal/Model", count) }
-	awaitRecord(1)
-	data, _ := os.ReadFile(output)
 	binding := fixture.cr.cfg.RoutingExecution.Bindings[p.Target]
 	executable, root := binding.Executable, binding.WorkDir
 	want := executable + "\n--model\nLiteral/Model\n--effort\nhigh\nHOME=" + root + "\nACCOUNT=account-a\nANTHROPIC_MODEL=unset\nOPENAI_API_KEY=unset\n"
+	awaitRecord := func(count int) { awaitRoutingExecutionWitness(t, watcher, output, want, count) }
+	awaitRecord(1)
+	data, _ := os.ReadFile(output)
 	if string(data) != want {
 		t.Fatalf("literal tuple/environment changed: %q", data)
 	}
@@ -320,11 +329,11 @@ func TestAdversarialRealPreWakePreservesOriginalWorkRecovery(t *testing.T) {
 func TestRoutingExecutionUnavailableAuthorityMatrix(t *testing.T) {
 	for _, state := range []string{"locked", "bound", "corrupt", "unknown", "absent"} {
 		t.Run(state, func(t *testing.T) {
-			fixture, sp, info, payload, command, final, output, start := adversarialExecutionFixture(t, "#!/bin/sh\nprintf executed >> \"$RECORD\"\nexec /bin/sleep 30\n")
+			fixture, sp, info, payload, command, final, output, watcher, start := adversarialExecutionFixture(t, "#!/bin/sh\nprintf executed >> \"$RECORD\"\nexec /bin/sleep 30\n")
 			if err := start(); err != nil {
 				t.Fatal(err)
 			}
-			awaitRoutingExecutionWitness(t, output, "executed", 1)
+			awaitRoutingExecutionWitness(t, watcher, output, "executed", 1)
 			if err := sp.Stop(info.SessionName); err != nil {
 				t.Fatal(err)
 			}
@@ -429,7 +438,7 @@ func TestRoutingExecutionExecFailureAndFastExit(t *testing.T) {
 		{"fast-exit", "#!/bin/sh\nprintf executed >> \"$RECORD\"\nexit 7\n", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fixture, sp, info, payload, _, _, output, start := adversarialExecutionFixture(t, tc.script, func(binding *config.RoutingExecutionBinding) {
+			fixture, sp, info, payload, _, _, output, watcher, start := adversarialExecutionFixture(t, tc.script, func(binding *config.RoutingExecutionBinding) {
 				if tc.name == "start-failure" {
 					binding.WorkDir = filepath.Join(binding.WorkDir, "missing-workdir")
 				}
@@ -440,7 +449,7 @@ func TestRoutingExecutionExecFailureAndFastExit(t *testing.T) {
 			}
 			if tc.success {
 				// Wait for the recorder only, never as a proxy authorizing the receipt.
-				awaitRoutingExecutionWitness(t, output, "executed", 1)
+				awaitRoutingExecutionWitness(t, watcher, output, "executed", 1)
 			} else {
 				if sp.IsRunning(info.SessionName) {
 					t.Fatal("failed exec running")
