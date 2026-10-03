@@ -113,6 +113,9 @@ var coreFieldHalf = map[string]string{
 
 var excludedFromCore = map[string]string{
 	"IsolatedLocalExecution": "authority-derived subprocess launch mechanism, enforced afresh after fingerprint resolution by durable v3 launch authorization; not user configuration",
+	"BoundExecutable":        "direct-exec transport filled from independently verified local invocation after fingerprint resolution; durable launch authorization revalidates it on each start",
+	"BoundArgs":              "direct-exec transport filled from independently verified local invocation after fingerprint resolution; not a second user command configuration",
+	"BoundEnvironment":       "isolated transport environment filled from independently verified local invocation after fingerprint resolution; not the user Env fingerprint axis",
 	"WorkDir":                "run location, not config identity",
 	"StartupEnvelope":        "T3 startup metadata, explicitly excluded from Core",
 	"ReadyPromptPrefix":      "startup readiness hint",
@@ -202,6 +205,32 @@ func TestFingerprintPartitionStableAndVersioned(t *testing.T) {
 	// The two halves are distinct hashes (not accidentally the same function).
 	if ProvisionFingerprint(cfg) == LaunchFingerprint(cfg) {
 		t.Error("ProvisionFingerprint and LaunchFingerprint produced identical hashes for the comprehensive fixture")
+	}
+}
+
+// Prepared transport is not a configuration input. Each start independently
+// authorizes the local invocation before filling these fields. The contract is
+// unchanged; this witnesses the explicit exclusions rather than weakening the
+// partition guard to ignore newly introduced Config fields.
+func TestFingerprintExcludesPreparedDirectExecTransport(t *testing.T) {
+	base := goldenFixtures()["comprehensive"]
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{"BoundExecutable", func(c *Config) { c.BoundExecutable = "/fixture/account" }},
+		{"BoundArgs", func(c *Config) { c.BoundArgs = []string{"--model", "literal/model"} }},
+		{"BoundEnvironment", func(c *Config) { c.BoundEnvironment = map[string]string{"HOME": "/fixture/home"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared := base
+			tc.mutate(&prepared)
+			if CoreFingerprint(base) != CoreFingerprint(prepared) ||
+				ProvisionFingerprint(base) != ProvisionFingerprint(prepared) ||
+				LaunchFingerprint(base) != LaunchFingerprint(prepared) {
+				t.Fatal("prepared transport changed configuration identity")
+			}
+		})
 	}
 }
 
