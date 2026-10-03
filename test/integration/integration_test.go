@@ -98,14 +98,17 @@ var (
 
 // TestMain builds gc and confines all cleanup to this binary's fresh roots.
 func TestMain(m *testing.M) {
+	if runOwnedIntegrationProcessHelper() {
+		return
+	}
 	if os.Getenv("GC_INTEGRATION_SUPERVISOR_STOP_HELPER") == "1" {
 		select {}
 	}
 
 	subprocess := os.Getenv("GC_SESSION") == "subprocess"
 
-	// Build gc binary to a temp directory. The pid in the dir name lets a later
-	// run reap this run's dolt orphans if it dies abnormally (issue #3640).
+	// Build gc inside a fresh exclusive root. The PID is diagnostic only;
+	// later runs never inherit cleanup authority over this allocation.
 	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("gc-integration-%d-*", os.Getpid()))
 	if err != nil {
 		panic("integration: creating temp dir: " + err.Error())
@@ -269,8 +272,8 @@ func installIntegrationSignalSweeper(subprocess bool) func() {
 	// exits.
 	// NOTE: `go test -timeout` does not normally reach this handler — the
 	// in-binary deadline fires a panic() from an internal timer goroutine and
-	// the runtime calls os.Exit(2) directly, so a timed-out run's orphans are
-	// caught only by the next run's pre-sweep in TestMain. The handler still
+	// the runtime calls os.Exit(2) directly. A later run must not reclaim the
+	// interrupted run's roots or processes. The handler still
 	// has to stay registered: cmd/go sends SIGQUIT as a backstop once the
 	// binary blows past testTimeout + WaitDelay (issue #3640).
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
@@ -472,7 +475,7 @@ type procSnapshot struct {
 }
 
 func sweepSubprocessTestProcesses() {
-	procs := readProcessSnapshot()
+	procs := integrationCleanupSnapshot()
 	if len(procs) == 0 {
 		return
 	}
@@ -482,16 +485,7 @@ func sweepSubprocessTestProcesses() {
 		return
 	}
 
-	for pid := range killSet {
-		_ = syscall.Kill(pid, syscall.SIGTERM)
-	}
-	time.Sleep(150 * time.Millisecond)
-	for pid := range killSet {
-		if err := syscall.Kill(pid, syscall.Signal(0)); err == nil {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
-		}
-	}
-	waitForPIDsReaped(killSet)
+	terminateIntegrationPIDs(procs, killSet)
 }
 
 func configureIntegrationSupervisorCommand(cmd *exec.Cmd) {
@@ -512,11 +506,11 @@ func registerIntegrationDoltSQLServerCleanup(t *testing.T, root string) {
 }
 
 func cleanupIntegrationDoltSQLServersUnderRoot(root string) {
-	procs := readProcessSnapshot()
+	procs := integrationCleanupSnapshot()
 	if len(procs) == 0 {
 		return
 	}
-	terminateIntegrationPIDs(integrationDoltSQLServerKillSet(procs, root))
+	terminateIntegrationPIDs(procs, integrationDoltSQLServerKillSet(procs, root))
 }
 
 func integrationDoltSQLServerKillSet(procs map[int]procSnapshot, root string) map[int]bool {
@@ -571,36 +565,105 @@ func pathWithinIntegrationRoot(root, path string) bool {
 	return cleanPath == cleanRoot || strings.HasPrefix(cleanPath, cleanRoot+string(os.PathSeparator))
 }
 
-func terminateIntegrationPIDs(killSet map[int]bool) {
-	if len(killSet) == 0 {
-		return
-	}
+var (
+	integrationCleanupStartTime = integrationProcessStartTime
+	integrationCleanupSnapshot  = readProcessSnapshot
+	integrationCleanupSignal    = syscall.Kill
+	integrationCleanupPause     = func(delay time.Duration) { time.Sleep(delay) }
+)
+
+// Bind the owned snapshot's ancestry to process-start identities before any
+// signal. A name/PID alone is never sufficient, including during escalation.
+func terminateIntegrationPIDs(procs map[int]procSnapshot, killSet map[int]bool) {
+	identities := make(map[int]string, len(killSet))
+	owned := make(map[int]procSnapshot, len(killSet))
 	for pid := range killSet {
-		_ = syscall.Kill(pid, syscall.SIGTERM)
-	}
-	time.Sleep(150 * time.Millisecond)
-	for pid := range killSet {
-		if err := syscall.Kill(pid, syscall.Signal(0)); err == nil {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
+		if info, ok := procs[pid]; ok {
+			owned[pid] = info
+		}
+		if pid <= 1 || pid == os.Getpid() {
+			continue
+		}
+		if start, err := integrationCleanupStartTime(pid); err == nil && start != "" {
+			identities[pid] = start
 		}
 	}
-	waitForPIDsReaped(killSet)
+	if len(identities) == 0 {
+		return
+	}
+	// Renew command/ancestry after identity capture: a recycled PID between
+	// discovery and capture must not inherit the former process's authority.
+	current := integrationCleanupSnapshot()
+	bound := make(map[int]string)
+	for pid, start := range identities {
+		if integrationIdentityMatches(pid, owned, current, identities, false) {
+			bound[pid] = start
+		}
+	}
+	for pid := range bound {
+		if integrationIdentityMatches(pid, owned, integrationCleanupSnapshot(), bound, true) {
+			_ = integrationCleanupSignal(pid, syscall.SIGTERM)
+		}
+	}
+	integrationCleanupPause(150 * time.Millisecond)
+	for pid := range bound {
+		if integrationIdentityMatches(pid, owned, integrationCleanupSnapshot(), bound, true) {
+			_ = integrationCleanupSignal(pid, syscall.SIGKILL)
+		}
+	}
+	waitForPIDsReaped(bound)
 }
 
-// waitForPIDsReaped blocks until every PID in killSet is gone (signal-0 errors)
-// or a bounded deadline elapses. Without it, a SIGKILL returns before the
+// Once bound, a same-identity descendant may be reparented to init when its
+// owned parent exits. Any other ancestry/command/identity change fails closed.
+func integrationIdentityMatches(pid int, original, current map[int]procSnapshot, identities map[int]string, allowOrphan bool) bool {
+	seen := make(map[int]bool)
+	for {
+		if seen[pid] || identities[pid] == "" {
+			return false
+		}
+		seen[pid] = true
+		before, ok := original[pid]
+		now, live := current[pid]
+		if !ok || !live || before.cmd != now.cmd {
+			return false
+		}
+		start, err := integrationCleanupStartTime(pid)
+		if err != nil || start != identities[pid] {
+			return false
+		}
+		if allowOrphan && now.ppid == 1 {
+			return true
+		}
+		if before.ppid != now.ppid {
+			return false
+		}
+		if _, ownedParent := original[before.ppid]; !ownedParent {
+			return true // root's external parent grants no cleanup authority
+		}
+		pid = before.ppid
+	}
+}
+
+// waitForPIDsReaped waits only for the captured process identities, never a
+// recycled numeric PID, until exit/identity change or a bounded deadline.
+// Missing identities fail closed for further signals. A SIGKILL returns before the
 // kernel has torn the process down and released its open files: a following
 // t.TempDir() RemoveAll then races a dying managed Dolt server under
 // cityDir/.beads/dolt ("directory not empty"), and a following test can
 // re-bind the just-freed managed Dolt port and adopt a half-dead server whose
 // DB still has prior tables ("alter pre-existing dirty tables"). The deadline
 // guarantees a wedged process can never hang the suite.
-func waitForPIDsReaped(killSet map[int]bool) {
+func waitForPIDsReaped(identities map[int]string) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		alive := false
-		for pid := range killSet {
-			if err := syscall.Kill(pid, syscall.Signal(0)); err == nil {
+		for pid, start := range identities {
+			current, err := integrationCleanupStartTime(pid)
+			if err == nil && current == start {
+				if err := integrationCleanupSignal(pid, syscall.Signal(0)); err != nil {
+					continue
+				}
 				alive = true
 				break
 			}
