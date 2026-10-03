@@ -301,12 +301,15 @@ same respective failed assertions. Evidence is preserved in
 provider ledger, or unrelated source was changed to evade the gate. Push/PR
 publication is blocked until the owning gate defects are resolved normally.
 
-## Current parent-owned convergence state (October 2, 2026)
+## Delivered SDK consumer state (October 2, 2026 PDT)
 
 Plugin PR #11 is merged, with independent exact-byte approval of
-`c2e1020dd8b6b4c8d67c566d5c95c8270b2b947d`. City PR #41 remains draft at
-`c4abade1ac00bd91a66006b7b45fdea1575ce5ab`. SDK consumer source was committed
-at `45cc591ec9b0f492837b3726151670b011f58301`, not published.
+`c2e1020dd8b6b4c8d67c566d5c95c8270b2b947d`. SDK PR #60 is merged at
+`8b5d6292a3da64aa5f3238585ee56dda00373f78`; its tree exactly matches independently
+approved final branch `9d1cc0117e2bd70668493c4e8fbdb97b529f0932`. City PR #41
+has approved consumer source, with delivery records on its branch. See City's
+canonical `engdocs/plans/wayfinder-v3-fresh-work-interface.md` for its delivery
+state rather than duplicating a mutable PR status here.
 
 Independent adversarial review reproduced three P1 defects despite positive
 convergence: an installed-but-unavailable authority hook permitted legacy
@@ -315,21 +318,35 @@ the real controller wake incarnation change prevented original-work recovery.
 Commit `67ea05800e0296f1fa9b752c6bb2fda14901cd62` contains tracked regressions
 and fixes: independent durable classification, direct bound-executable exec,
 and append-only authorized successor incarnations. Normal pre-commit passed.
-The implementer was interrupted during a broad test run; that run is not a
-passing gate. Parent has independently inspected the committed fixes; renewed
-exact-byte adversarial approval remains outstanding.
+The interrupted implementer run was not counted as passing. Renewed independent
+adversarial review approved the fixes, including actual controller pre-wake,
+exec failures, valid fast exit, and unavailable/corrupt/locked authority denial.
 
 Remote main `0d823e02cfb868eef9662c3cac858495ea845f16` (PR #59) independently
 landed the approved tmux conformance and real alias-fixture changes. Parent
 merged it into this branch without changing foreign work. This supersedes the
-two historical baseline defects above, but not all test-harness safety gaps:
-normal full-gate paths still contain foreign sibling/process cleanup. The
-separate `fix/sdk-gate-delivery` lane owns narrow ownership fixes; no full push
-gate is authorized until its owned-only cleanup is proved and reviewed.
+two historical baseline defects above. Gate ownership fixes through
+`e16eefe8e8dfc9515c68083e969b1d3b191255f3` additionally isolate package-init and
+TestMain cleanup in fresh owned roots and revalidate kernel process identity
+and rooted ancestry before integration escalation. Actual adjacent filesystem
+and tmux canaries plus owned descendant cleanup passed independent macOS review.
+Linux cross-compilation passed; native Linux execution and acceptance_c cleanup
+are not claimed. The latter remains outside this normal/integration gate scope.
 
 Final proof uses the clean producer worktree at `a3eda7e521019e675ba23d7a23dfb0e9c15bb3ab`,
-not installed runtime state. Required next actions remain agent-owned: close
-test cleanup safety, independently approve final consumer bytes, run actual
-City/signer/SDK/recording-child/producer convergence and normal final gates,
-publish and merge, and remove owned residue. Live activation, provider calls,
-key installation and existing-session migration remain outside authorization.
+not installed runtime state. Independent final resource-test review approved
+`a11a18c5c4da6fcc87b8de4703043619db5aa05d`; parent runtime fingerprint-test
+correction `9d1cc0117` was separately reviewed. Policy ceilings and expiry dates
+were not increased. All 37 routing owners and mandatory actual built-root proof
+remain exercised. Parent reran actual City/signer/SDK/recording-child/producer
+convergence, full City Go tests, focused race tests, lint and factory-router
+tests. Final normal SDK pre-push passed all ten jobs before publication; the
+earlier failed gates were diagnosed and rerun, never waived or bypassed.
+
+The supported local adapter is opt-in. Runtime Start proves actual invocation,
+not inference or completion: terminal outcomes remain unknown. Trusted immutable
+executable installation is required; a digest check does not eliminate concurrent
+replacement races. Live activation, provider calls, key installation, strict
+waiver-mode approval and existing-session migration remain unperformed. Deployment
+requires separately approved authority, exact representable tuples, explicit
+workload/policy/evidence, reviewed executable pins and activation scope.
