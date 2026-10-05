@@ -303,6 +303,75 @@ func TestDispatcherRequeuesTransientDeliveryFailureInsteadOfDestroyingRequest(t 
 	}
 }
 
+func TestDispatcherMarksAmbiguousDeliveryWithoutRetrying(t *testing.T) {
+	start := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	clock := start
+	service := NewServiceWithOptions(beads.NewMemStore(), ServiceOptions{Now: func() time.Time { return clock }})
+	input := testRequestInput(start)
+	input.IdempotencyKey = "idem-ambiguous"
+	input.Target.ConversationID = "conversation-ambiguous"
+	record, err := service.Enqueue(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstream := &fakeTransport{receipt: &extmsg.PublishReceipt{FailureKind: extmsg.PublishFailureUncertain}}
+	dispatcher := Dispatcher{Queue: service, Adapter: NewTransportAdapter(downstream, "city-a"), Worker: "worker-uncertain"}
+	if _, _, err := dispatcher.DeliverNext(context.Background(), start); !errors.Is(err, ErrAmbiguousDelivery) {
+		t.Fatalf("DeliverNext error = %v, want ErrAmbiguousDelivery", err)
+	}
+	stored, err := service.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateUncertain {
+		t.Fatalf("state = %q, want uncertain", stored.State)
+	}
+	if _, err := service.Claim(context.Background(), record.ID, "replacement-worker", start.Add(time.Hour)); !errors.Is(err, ErrNotQueued) {
+		t.Fatalf("claim after ambiguous delivery = %v, want ErrNotQueued", err)
+	}
+}
+
+func TestDispatcherHonorsDeterministicRetryDeadline(t *testing.T) {
+	start := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	clock := start
+	service := NewServiceWithOptions(beads.NewMemStore(), ServiceOptions{
+		Now:       func() time.Time { return clock },
+		RetryBase: 2 * time.Second,
+		RetryMax:  8 * time.Second,
+	})
+	input := testRequestInput(start)
+	input.IdempotencyKey = "idem-retry-deadline"
+	input.Target.ConversationID = "conversation-retry"
+	record, err := service.Enqueue(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	down := &fakeTransport{receipt: &extmsg.PublishReceipt{FailureKind: extmsg.PublishFailureTransient}}
+	dispatcher := Dispatcher{Queue: service, Adapter: NewTransportAdapter(down, "city-a"), Worker: "worker-retry"}
+	if _, _, err := dispatcher.DeliverNext(context.Background(), start); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("initial DeliverNext error = %v, want ErrUnavailable", err)
+	}
+	stored, err := service.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stored.RetryAt(), start.Add(2*time.Second); !got.Equal(want) {
+		t.Fatalf("retry_at = %s, want %s", got, want)
+	}
+	up := &fakeTransport{}
+	clock = start.Add(time.Second)
+	if got, receipt, err := (&Dispatcher{Queue: service, Adapter: NewTransportAdapter(up, "city-a"), Worker: "worker-retry"}).DeliverNext(context.Background(), clock); err != nil || got != nil || receipt != nil {
+		t.Fatalf("early retry result = record=%+v receipt=%+v err=%v, want no delivery", got, receipt, err)
+	}
+	clock = start.Add(2 * time.Second)
+	if _, receipt, err := (&Dispatcher{Queue: service, Adapter: NewTransportAdapter(up, "city-a"), Worker: "worker-retry"}).DeliverNext(context.Background(), clock); err != nil || receipt == nil || receipt.State != StateRunning {
+		t.Fatalf("due retry result = receipt=%+v err=%v, want running delivery", receipt, err)
+	}
+	if up.published.Metadata["correlation_id"] != input.CorrelationID {
+		t.Fatalf("retry metadata = %+v", up.published.Metadata)
+	}
+}
+
 // TestDispatcherStillFailsPermanentDeliveryRejection keeps the other half of
 // the line: a permanent rejection is the request's problem and must stay
 // terminal, or a poison request would be retried forever.

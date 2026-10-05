@@ -101,7 +101,7 @@ func (a *HTTPAdapter) Publish(ctx context.Context, req PublishRequest) (*Publish
 		return &PublishReceipt{
 			Conversation: req.Conversation,
 			Delivered:    false,
-			FailureKind:  PublishFailureTransient,
+			FailureKind:  PublishFailureUncertain,
 		}, nil
 	}
 	defer resp.Body.Close() //nolint:errcheck
@@ -111,7 +111,7 @@ func (a *HTTPAdapter) Publish(ctx context.Context, req PublishRequest) (*Publish
 		return &PublishReceipt{
 			Conversation: req.Conversation,
 			Delivered:    false,
-			FailureKind:  PublishFailureTransient,
+			FailureKind:  PublishFailureUncertain,
 		}, nil
 	}
 
@@ -148,7 +148,7 @@ func (a *HTTPAdapter) Publish(ctx context.Context, req PublishRequest) (*Publish
 		return &PublishReceipt{
 			Conversation: req.Conversation,
 			Delivered:    false,
-			FailureKind:  PublishFailureTransient,
+			FailureKind:  PublishFailureUncertain,
 		}, nil
 	}
 	return wire.toPublishReceipt(), nil

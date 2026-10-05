@@ -110,6 +110,26 @@ func TestHTTPAdapterPublishParsesQueuedAcceptanceSeparatelyFromDelivery(t *testi
 	}
 }
 
+func TestHTTPAdapterPublishMarksUnreadableSuccessAsUncertain(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPAdapterTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, "not-json")
+	}))
+	adapter := NewHTTPAdapter("hermes", server.URL, AdapterCapabilities{})
+	receipt, err := adapter.Publish(context.Background(), PublishRequest{
+		Conversation: ConversationRef{Provider: "hermes", ConversationID: "conversation-uncertain", Kind: ConversationDM},
+		Text:         "hello",
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if receipt.FailureKind != PublishFailureUncertain {
+		t.Fatalf("FailureKind = %q, want uncertain", receipt.FailureKind)
+	}
+}
+
 func TestAdapterRegistryCredentialAuthenticatesHTTPCallbacks(t *testing.T) {
 	t.Parallel()
 

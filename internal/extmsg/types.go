@@ -192,6 +192,9 @@ const (
 	PublishFailureTransient PublishFailureKind = "transient"
 	// PublishFailureRateLimited means the request was rate-limited.
 	PublishFailureRateLimited PublishFailureKind = "rate_limited"
+	// PublishFailureUncertain means the publish outcome cannot establish whether
+	// the remote service accepted the request. Callers must reconcile before retry.
+	PublishFailureUncertain PublishFailureKind = "uncertain"
 	// PublishFailurePermanent means a permanent failure occurred.
 	PublishFailurePermanent PublishFailureKind = "permanent"
 	// PublishFailureAuth means an authentication failure occurred.

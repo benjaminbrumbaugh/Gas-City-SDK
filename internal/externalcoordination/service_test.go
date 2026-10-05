@@ -51,6 +51,24 @@ type failOnceScrubStore struct {
 	fail   atomic.Bool
 }
 
+type failingConditionalWriter struct {
+	beads.ConditionalWriter
+	err error
+}
+
+func (w failingConditionalWriter) UpdateIfMatch(string, int64, beads.UpdateOpts) error {
+	return w.err
+}
+
+type failingConditionalStore struct {
+	beads.Store
+	writer beads.ConditionalWriter
+}
+
+func (s failingConditionalStore) ConditionalWriterHandle() (beads.ConditionalWriter, bool) {
+	return s.writer, true
+}
+
 func (s *failOnceScrubStore) Update(id string, opts beads.UpdateOpts) error {
 	if opts.Description != nil && s.fail.CompareAndSwap(true, false) {
 		return errors.New("injected scrub failure")
@@ -144,6 +162,205 @@ func TestClaimRequiresAttemptAndCorrelationFences(t *testing.T) {
 		ReceivedAt:    now.Add(3 * time.Second),
 	}); err != nil {
 		t.Fatalf("RecordResponse matching fence: %v", err)
+	}
+}
+
+func TestClaimsAcrossServiceInstancesHaveOneDurableWinner(t *testing.T) {
+	now := time.Date(2026, 10, 5, 11, 0, 0, 0, time.UTC)
+	store := beads.NewMemStore()
+	input := testRequestInput(now)
+	input.IdempotencyKey = "claim-race"
+	created, err := NewServiceWithOptions(store, ServiceOptions{Now: func() time.Time { return now }}).Enqueue(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := NewServiceWithOptions(store, ServiceOptions{Now: func() time.Time { return now }, ClaimLease: time.Minute})
+	second := NewServiceWithOptions(store, ServiceOptions{Now: func() time.Time { return now }, ClaimLease: time.Minute})
+	results := make(chan error, 2)
+	for _, item := range []struct {
+		service *Service
+		worker  string
+	}{{first, "worker-a"}, {second, "worker-b"}} {
+		go func(service *Service, worker string) {
+			_, claimErr := service.Claim(context.Background(), created.ID, worker, now)
+			results <- claimErr
+		}(item.service, item.worker)
+	}
+	var wins, losses int
+	for range 2 {
+		err := <-results
+		switch {
+		case err == nil:
+			wins++
+		case errors.Is(err, ErrNotQueued):
+			losses++
+		default:
+			t.Fatalf("claim error = %v, want one winner and one durable loser", err)
+		}
+	}
+	if wins != 1 || losses != 1 {
+		t.Fatalf("claims = %d wins, %d losses; want one each", wins, losses)
+	}
+	stored, err := first.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateRunning || stored.Attempt != 1 {
+		t.Fatalf("stored claim = state %q attempt %d, want running/1", stored.State, stored.Attempt)
+	}
+}
+
+func TestClaimUsesStableWorkerIdentityWithoutProcessLocalCoordination(t *testing.T) {
+	now := time.Date(2026, 10, 5, 11, 0, 0, 0, time.UTC)
+	store := beads.NewMemStore()
+	service := NewServiceWithOptions(store, ServiceOptions{Now: func() time.Time { return now }})
+	input := testRequestInput(now)
+	input.IdempotencyKey = "claim-worker"
+	created, err := service.Enqueue(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), created.ID, "worker-a", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.ClaimedBy != "worker-a" {
+		t.Fatalf("claimed_by = %q, want worker-a", claimed.ClaimedBy)
+	}
+}
+
+func TestExpiryPersistenceErrorsAreVisible(t *testing.T) {
+	now := time.Date(2026, 10, 5, 11, 0, 0, 0, time.UTC)
+	store := beads.NewMemStore()
+	created, err := NewServiceWithOptions(store, ServiceOptions{Now: func() time.Time { return now }}).Enqueue(context.Background(), testRequestInput(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseWriter, ok := beads.ConditionalWriterFor(store)
+	if !ok {
+		t.Fatal("MemStore does not expose a conditional writer")
+	}
+	injected := errors.New("injected expiry persistence failure")
+	failing := failingConditionalStore{Store: store, writer: failingConditionalWriter{ConditionalWriter: baseWriter, err: injected}}
+	expired := NewServiceWithOptions(failing, ServiceOptions{Now: func() time.Time { return now.Add(25 * time.Hour) }})
+	if _, err := expired.Get(context.Background(), created.ID); !errors.Is(err, injected) {
+		t.Fatalf("Get expired request error = %v, want injected persistence error", err)
+	}
+}
+
+func TestRecoverAbandonedRunningClaimDoesNotRequeueAmbiguousDelivery(t *testing.T) {
+	start := time.Date(2026, 10, 5, 11, 0, 0, 0, time.UTC)
+	clock := start
+	store := beads.NewMemStore()
+	service := NewServiceWithOptions(store, ServiceOptions{Now: func() time.Time { return clock }, ClaimLease: time.Minute})
+	input := testRequestInput(start)
+	input.IdempotencyKey = "abandoned-running"
+	created, err := service.Enqueue(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), created.ID, "crashed-worker", start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = start.Add(2 * time.Minute)
+	recovered, err := service.RecoverAbandoned(context.Background(), clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != 1 || recovered[0].Record.ID != claimed.ID {
+		t.Fatalf("recovery results = %+v, want one result for %s", recovered, claimed.ID)
+	}
+	stored, err := service.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateUncertain {
+		t.Fatalf("abandoned state = %q, want uncertain; a crashed post-submit claim cannot be resent", stored.State)
+	}
+	if _, err := service.Claim(context.Background(), created.ID, "replacement-worker", clock); !errors.Is(err, ErrNotQueued) {
+		t.Fatalf("claim after ambiguous recovery = %v, want ErrNotQueued", err)
+	}
+}
+
+func TestRecoverExpiredRunningClaimRecordsExpiredOutcome(t *testing.T) {
+	start := time.Date(2026, 10, 5, 11, 0, 0, 0, time.UTC)
+	clock := start
+	store := beads.NewMemStore()
+	service := NewServiceWithOptions(store, ServiceOptions{Now: func() time.Time { return clock }, ClaimLease: time.Minute})
+	input := testRequestInput(start)
+	input.IdempotencyKey = "expired-running"
+	input.ExpiresAt = start.Add(30 * time.Second)
+	created, err := service.Enqueue(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Claim(context.Background(), created.ID, "expired-worker", start); err != nil {
+		t.Fatal(err)
+	}
+	clock = start.Add(2 * time.Minute)
+	if _, err := service.RecoverAbandoned(context.Background(), clock); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := service.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != StateExpired {
+		t.Fatalf("expired running state = %q, want expired", stored.State)
+	}
+}
+
+func TestResponseOutcomesRemainTruthfulAndUnknownIsRejected(t *testing.T) {
+	for _, outcome := range []string{"answered", "refused", "failed", "expired"} {
+		t.Run(outcome, func(t *testing.T) {
+			now := time.Date(2026, 10, 5, 11, 0, 0, 0, time.UTC)
+			store := beads.NewMemStore()
+			service := NewServiceWithOptions(store, ServiceOptions{Now: func() time.Time { return now }})
+			input := testRequestInput(now)
+			input.IdempotencyKey = "outcome-" + outcome
+			created, err := service.Enqueue(context.Background(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claimed, err := service.Claim(context.Background(), created.ID, "response-worker", now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := service.RecordResponse(context.Background(), Response{
+				RequestID: claimed.Request.RequestID, Attempt: claimed.Attempt,
+				CorrelationID: claimed.Request.CorrelationID, ResponseID: "response-" + outcome,
+				State: ResponseOutcome(outcome), ReceivedAt: now.Add(time.Second),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			stored, err := service.Get(context.Background(), created.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(stored.Outcome()); got != outcome {
+				t.Fatalf("stored outcome = %q, want %q", got, outcome)
+			}
+		})
+	}
+
+	service := NewService(beads.NewMemStore())
+	input := testRequestInput(time.Now())
+	input.IdempotencyKey = "outcome-unknown"
+	created, err := service.Enqueue(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), created.ID, "response-worker", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RecordResponse(context.Background(), Response{
+		RequestID: claimed.Request.RequestID, Attempt: claimed.Attempt,
+		CorrelationID: claimed.Request.CorrelationID, State: "unknown",
+		ReceivedAt: time.Now(),
+	}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("unknown response outcome error = %v, want ErrInvalidInput", err)
 	}
 }
 
