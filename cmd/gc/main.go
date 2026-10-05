@@ -1555,17 +1555,31 @@ func effectiveFileStorePrefix(scopeRoot, cityPath string) string {
 	if err != nil {
 		return ""
 	}
+	hasExplicitRigPrefix := false
 	for i := range cfg.Rigs {
 		rig := cfg.Rigs[i]
 		if strings.TrimSpace(rig.Path) == "" {
 			continue
 		}
 		if samePath(resolveStoreScopeRoot(cityPath, rig.Path), scopeRoot) {
-			return rig.EffectivePrefix()
+			// Legacy file stores deliberately share the default gc prefix across
+			// city and rig scopes. An explicit rig prefix opts that scope into
+			// the newer prefix-aware layout without rewriting legacy IDs.
+			if strings.TrimSpace(rig.Prefix) == "" {
+				return ""
+			}
+			return rig.Prefix
+		}
+		if strings.TrimSpace(rig.Prefix) != "" {
+			hasExplicitRigPrefix = true
 		}
 	}
 	if samePath(resolveStoreScopeRoot(cityPath, cityPath), scopeRoot) {
-		return config.EffectiveHQPrefix(cfg)
+		if strings.TrimSpace(cfg.Workspace.Prefix) != "" ||
+			strings.TrimSpace(cfg.ResolvedWorkspacePrefix) != "" ||
+			hasExplicitRigPrefix {
+			return config.EffectiveHQPrefix(cfg)
+		}
 	}
 	return ""
 }
