@@ -253,7 +253,7 @@ func openExistingRoutingDecisionWorkStore(ctx context.Context, cityPath string, 
 	provider := rawBeadsProviderForScope(resolveStoreScopeRoot(cityPath, scopeRoot), cityPath)
 	switch {
 	case provider == "file":
-		return openExistingScopeLocalFileStore(resolveStoreScopeRoot(cityPath, scopeRoot))
+		return openExistingScopeLocalFileStore(resolveStoreScopeRoot(cityPath, scopeRoot), cityPath)
 	case providerUsesBdStoreContract(provider):
 		if err := requireExistingExecutionReemitBdStore(resolveStoreScopeRoot(cityPath, scopeRoot)); err != nil {
 			return nil, err

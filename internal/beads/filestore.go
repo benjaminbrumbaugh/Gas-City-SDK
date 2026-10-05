@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -171,11 +172,24 @@ func (f fileFreshness) same(other fileFreshness) bool {
 	return f.size == other.size && f.modTime.Equal(other.modTime)
 }
 
+// FileStoreOption configures a FileStore at open time.
+type FileStoreOption func(*FileStore)
+
+// WithFileStoreIDPrefix sets the bead ID prefix this store mints under. A
+// blank or whitespace-only prefix preserves the default gc prefix.
+func WithFileStoreIDPrefix(prefix string) FileStoreOption {
+	return func(store *FileStore) {
+		if strings.TrimSpace(prefix) != "" {
+			store.IDPrefix = normalizeIDPrefix(prefix)
+		}
+	}
+}
+
 // OpenFileStore opens or creates a file-backed bead store at path. All file
 // I/O goes through fs for testability. If the file exists, its contents are
 // loaded into memory. If it doesn't exist, the store starts empty. Parent
 // directories are created as needed.
-func OpenFileStore(fs fsys.FS, path string) (*FileStore, error) {
+func OpenFileStore(fs fsys.FS, path string, opts ...FileStoreOption) (*FileStore, error) {
 	if err := fs.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("opening file store: %w", err)
 	}
@@ -188,13 +202,17 @@ func OpenFileStore(fs fsys.FS, path string) (*FileStore, error) {
 	data, err := fs.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &FileStore{
+			store := &FileStore{
 				MemStore:  NewMemStore(),
 				fs:        fs,
 				path:      path,
 				locker:    locker,
 				freshness: fileFreshness{known: true},
-			}, nil
+			}
+			for _, opt := range opts {
+				opt(store)
+			}
+			return store, nil
 		}
 		return nil, fmt.Errorf("opening file store: %w", err)
 	}
@@ -210,6 +228,9 @@ func OpenFileStore(fs fsys.FS, path string) (*FileStore, error) {
 		fs:       fs,
 		path:     path,
 		locker:   locker,
+	}
+	for _, opt := range opts {
+		opt(store)
 	}
 	// The JSON we just loaded and the file's current freshness can diverge if
 	// another handle rewrites the store between ReadFile and a follow-up Stat.
