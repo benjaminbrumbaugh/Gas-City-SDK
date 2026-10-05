@@ -50,6 +50,24 @@ if ! push_gate_acquire_slot "$gate_slot_dir" gate_fd "$gate_label"; then
   exit 75
 fi
 
+# Every local parallel run owns its Go build cache. The default GOCACHE is
+# shared by all sessions on the host, so an unrelated `go clean -cache` can
+# remove an artifact between a shard's compile and test phases. Keep module
+# downloads shared, but put compiled artifacts in a unique on-disk directory
+# for this invocation. The path is deliberately fixed under /var/tmp rather
+# than inheriting TMPDIR, which may be the shared /tmp tmpfs on macOS.
+test_cache_dir=""
+test_cache_owned=0
+gc_local_parallel_cleanup_cache() {
+  if [[ "$test_cache_owned" -ne 1 || -z "$test_cache_dir" ]]; then
+    return 0
+  fi
+  case "$test_cache_dir" in
+    /var/tmp/gc-test-local-parallel.*) rm -rf "$test_cache_dir" ;;
+    *) echo "refusing to remove unexpected test cache path: $test_cache_dir" >&2; return 1 ;;
+  esac
+}
+
 # This invocation owns every process it fans out (gas-px0). The fan-out runs as
 # one supervised process group so a signal here tears down xargs, every shard
 # runner, and every test binary beneath them, instead of leaving the tree to
@@ -64,7 +82,7 @@ gc_local_parallel_on_signal() {
   trap - "$sig"
   kill -"$sig" $$
 }
-trap 'gc_harness_terminate_group "${gc_harness_supervised_pgid:-}" "$gc_local_parallel_drain_ticks"; push_gate_release_slot "$gate_fd"' EXIT
+trap 'gc_harness_terminate_group "${gc_harness_supervised_pgid:-}" "$gc_local_parallel_drain_ticks"; push_gate_release_slot "$gate_fd"; gc_local_parallel_cleanup_cache' EXIT
 trap 'gc_local_parallel_on_signal INT' INT
 trap 'gc_local_parallel_on_signal TERM' TERM
 trap 'gc_local_parallel_on_signal HUP' HUP
@@ -113,6 +131,14 @@ gocache_val="$(go env GOCACHE)"
 gomodcache_val="$(go env GOMODCACHE)"
 gotmpdir_val="$(go env GOTMPDIR)"
 goroot_val="$(go env GOROOT)"
+
+if ! test_cache_dir="$(mktemp -d /var/tmp/gc-test-local-parallel.XXXXXX)"; then
+  echo "unable to allocate private Go build cache under /var/tmp" >&2
+  exit 1
+fi
+test_cache_owned=1
+gocache_val="$test_cache_dir"
+echo "Using isolated Go build cache: $gocache_val"
 
 jobspecs=()
 
