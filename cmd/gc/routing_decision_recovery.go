@@ -19,7 +19,7 @@ type routingDecisionRecoveryAuthorizer struct {
 
 func (cr *CityRuntime) newRoutingDecisionRecoveryAuthorizer(now time.Time) routingDecisionRecoveryAuthorizer {
 	authorizer := routingDecisionRecoveryAuthorizer{cr: cr, now: now.UTC()}
-	if cr == nil || cr.routingDecisionVerifier == nil || strings.TrimSpace(cr.cityPath) == "" {
+	if cr == nil || strings.TrimSpace(cr.cityPath) == "" || cr.routingDecisionStore == nil {
 		return authorizer
 	}
 	authorizer.verifier = cr.routingDecisionVerifier
@@ -38,15 +38,29 @@ func (authorizer routingDecisionRecoveryAuthorizer) Allows(rig string, bead bead
 	if decisionID == "" {
 		return true
 	}
-	if authorizer.cr == nil || authorizer.store == nil || authorizer.verifier == nil {
+	if authorizer.cr == nil || authorizer.store == nil {
 		return false
 	}
 	record, err := authorizer.store.Get(decisionID)
-	if err != nil || record.State != routingdecision.StateAdmitted || record.Approval == nil || record.Signature == nil || !record.Payload.IsActiveAt(authorizer.cr.routingDecisionNow()) {
+	if err != nil || record.State != routingdecision.StateAdmitted || (!record.Local && authorizer.verifier == nil) || (!record.Local && (record.Approval == nil || record.Signature == nil)) || (record.Local && (record.Approval != nil || record.Signature != nil)) || !record.Payload.IsActiveAt(authorizer.cr.routingDecisionNow()) {
 		return false
 	}
-	if authorizer.verifier.Verify(record.Payload, *record.Approval, *record.Signature) != nil {
-		return false
+	if !record.Local {
+		if authorizer.verifier.Verify(record.Payload, *record.Approval, *record.Signature) != nil {
+			return false
+		}
+	} else {
+		if authorizer.cr.routingExecutionAdapter == nil {
+			return false
+		}
+		agent, digest, ok := authorizer.cr.resolveRoutingDecisionTarget(record.Payload.Target, rig)
+		if !ok || digest != record.Payload.TargetConfigDigest {
+			return false
+		}
+		actual, err := authorizer.cr.routingExecutionAdapter(agent, authorizer.cr.cfg, nil)
+		if err != nil || record.Payload.MatchesExecution(actual) != nil {
+			return false
+		}
 	}
 	payload := record.Payload
 	if payload.City != authorizer.cr.cityName || payload.Rig != rig || payload.WorkBeadID != bead.ID {

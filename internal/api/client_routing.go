@@ -195,3 +195,34 @@ func (c *Client) RoutingIngest(request routingdecision.IngestApprovedRequest) (r
 	}
 	return convertRoutingWire[routingdecision.IngestApprovedResult](*response.JSON201)
 }
+
+// RoutingAdmitLocal sends one typed advisory selection through the normal
+// city-write grant and CSRF path. It never creates signed approval material.
+func (c *Client) RoutingAdmitLocal(request routingdecision.LocalAdmissionRequest, idempotencyToken string) (routingdecision.LocalAdmissionResult, error) {
+	if err := c.requireCityScope(); err != nil {
+		return routingdecision.LocalAdmissionResult{}, err
+	}
+	if idempotencyToken == "" {
+		return routingdecision.LocalAdmissionResult{}, fmt.Errorf("local routing idempotency key required")
+	}
+	body, err := convertRoutingWire[genclient.LocalAdmissionRequest](request)
+	if err != nil {
+		return routingdecision.LocalAdmissionResult{}, err
+	}
+	response, err := c.cw.PostV0CityByCityNameRoutingAdmitWithResponse(context.Background(), c.cityName, &genclient.PostV0CityByCityNameRoutingAdmitParams{
+		XGCRequest: "true", IdempotencyKey: idempotencyToken,
+	}, body)
+	if err != nil {
+		return routingdecision.LocalAdmissionResult{}, &connError{err: fmt.Errorf("request failed: %w", err)}
+	}
+	if response == nil {
+		return routingdecision.LocalAdmissionResult{}, &connError{err: fmt.Errorf("nil response")}
+	}
+	if err := apiErrorFromResponse(response.StatusCode(), pdOf(response)); err != nil {
+		return routingdecision.LocalAdmissionResult{}, err
+	}
+	if response.JSON200 == nil {
+		return routingdecision.LocalAdmissionResult{}, fmt.Errorf("API returned %d with no body", response.StatusCode())
+	}
+	return convertRoutingWire[routingdecision.LocalAdmissionResult](*response.JSON200)
+}

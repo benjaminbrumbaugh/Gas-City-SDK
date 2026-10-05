@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "next_id": 221,
+  "next_id": 222,
   "permanent_ids": [
     {
       "name": "help",
@@ -3502,6 +3502,21 @@
       "canonical_target": "@help",
       "owner": "structural",
       "id": 1
+    },
+    {
+      "path": "gc routing admit",
+      "aliases": [],
+      "conditional_modes": [],
+      "hidden": false,
+      "effective_hidden": false,
+      "disable_flag_parsing": false,
+      "shape": "runnable",
+      "recording_policy": "recordable",
+      "mode": "standard",
+      "notice_policy": "eligible",
+      "classification": "routing-admit",
+      "owner": "immediate",
+      "id": 221
     },
     {
       "path": "gc routing decisions",

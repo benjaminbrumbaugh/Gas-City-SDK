@@ -152,10 +152,14 @@ func (store *Store) Verify(verifier Verifier) (VerifyReport, error) {
 				return ErrStoreCorrupt
 			}
 			requiresApproval := record.State == StateApproved || record.State == StateAdmitted || record.State == StateRefusedAfterRace || record.State == StateClaimed || record.State == StateOutcomeRecorded
-			if requiresApproval && (record.Approval == nil || record.Signature == nil) {
+			if record.Local {
+				if record.Payload.Schema != ExecutionSchemaVersion || record.Approval != nil || record.Signature != nil {
+					return ErrStoreCorrupt
+				}
+			} else if requiresApproval && (record.Approval == nil || record.Signature == nil) {
 				return ErrStoreCorrupt
 			}
-			if record.Approval != nil || record.Signature != nil {
+			if !record.Local && (record.Approval != nil || record.Signature != nil) {
 				if record.Approval == nil || record.Signature == nil {
 					return ErrStoreCorrupt
 				}
@@ -209,9 +213,10 @@ func (store *Store) Verify(verifier Verifier) (VerifyReport, error) {
 				return ErrStoreCorrupt
 			}
 			expectedRevision := auditCount[audit.DecisionID] + 1
+			localAdmissionEdge := expectedRevision == 2 && records[audit.DecisionID].Local && lastState[audit.DecisionID] == StateProposed && (audit.To == StateAdmitted || audit.To == StateRefusedAfterRace)
 			if audit.RecordRevision != expectedRevision ||
 				(expectedRevision == 1 && (audit.From != "" || audit.To != StateProposed)) ||
-				(expectedRevision > 1 && (lastState[audit.DecisionID] != audit.From || !IsAllowedTransition(audit.From, audit.To))) {
+				(expectedRevision > 1 && !localAdmissionEdge && (lastState[audit.DecisionID] != audit.From || !IsAllowedTransition(audit.From, audit.To))) {
 				return ErrStoreCorrupt
 			}
 			auditCount[audit.DecisionID] = expectedRevision
@@ -292,11 +297,14 @@ func receiptIdentity(receipt idempotencyRecord) (string, uint64, bool) {
 			return "", 0, false
 		}
 		return receipt.Created.Payload.DecisionID, receipt.Created.StoreRevision, true
-	case "transition", "admission", "ingest":
+	case "transition", "admission", "ingest", "local-admission":
 		if receipt.Created != nil || receipt.Transition == nil {
 			return "", 0, false
 		}
 		if receipt.Kind == "ingest" && receipt.Transition.State != StateApproved {
+			return "", 0, false
+		}
+		if receipt.Kind == "local-admission" && receipt.Transition.State != StateAdmitted && receipt.Transition.State != StateRefusedAfterRace {
 			return "", 0, false
 		}
 		return receipt.Transition.DecisionID, receipt.Transition.StoreRevision, true

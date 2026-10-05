@@ -39,8 +39,8 @@ func (sm *SupervisorMux) registerCityRoutes() {
 	cityGet(sm, "/usage", (*Server).humaHandleUsage, errorStatuses(http.StatusNotFound, http.StatusServiceUnavailable))
 
 	// Durable routing decisions. Reads follow the normal city read-auth policy;
-	// ingest additionally passes the dedicated direct-loopback perimeter before
-	// the normal write-auth, CSRF, read-only, Huma, and routing-signature gates.
+	// signed ingest retains its dedicated direct-loopback perimeter, while local
+	// advisory admission uses the normal city write grant and CSRF gates.
 	cityRegister(sm, huma.Operation{
 		OperationID: "get-routing-status", Method: http.MethodGet, Path: "/routing/status",
 		Summary: "Get durable routing-decision status",
@@ -81,6 +81,8 @@ func (sm *SupervisorMux) registerCityRoutes() {
 		Summary: "Ingest one signed routing decision", DefaultStatus: http.StatusCreated,
 		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity, http.StatusServiceUnavailable},
 	}, (*Server).humaHandleRoutingDecisionIngest)
+	cityPost(sm, "/routing/admit", (*Server).humaHandleRoutingDecisionLocalAdmission,
+		errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusServiceUnavailable))
 	// Reconciliation observation. Factual, generation-bound, and read from an
 	// already-published in-memory value — no request-time store, runtime,
 	// provider or filesystem probing, and no health verdict. 503 means the

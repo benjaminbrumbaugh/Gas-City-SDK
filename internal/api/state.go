@@ -35,6 +35,7 @@ type RoutingDecisionProvider interface {
 	RoutingDecisionList(context.Context, routingdecision.ListOptions) (routingdecision.DecisionPage, error)
 	RoutingDecisionOutcomes(context.Context, routingdecision.OutcomeListOptions) (routingdecision.OutcomePage, error)
 	RoutingDecisionIngest(context.Context, routingdecision.IngestApprovedRequest) (routingdecision.IngestApprovedResult, error)
+	RoutingDecisionAdmitLocal(context.Context, routingdecision.LocalAdmissionRequest, string) (routingdecision.LocalAdmissionResult, error)
 }
 
 // MaintenanceProvider is the subset of supervisor.StoreMaintenanceLoop that

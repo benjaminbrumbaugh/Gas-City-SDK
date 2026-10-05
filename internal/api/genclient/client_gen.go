@@ -1973,6 +1973,21 @@ type ExecutionBinding struct {
 	Target           string `json:"target"`
 }
 
+// ExecutionCandidateSnapshot defines model for ExecutionCandidateSnapshot.
+type ExecutionCandidateSnapshot struct {
+	Account          string `json:"account"`
+	AdapterDigest    string `json:"adapter_digest"`
+	AdapterId        string `json:"adapter_id"`
+	CanonicalModel   string `json:"canonical_model"`
+	ConfigDigest     string `json:"config_digest"`
+	InvocationDigest string `json:"invocation_digest"`
+	Provider         string `json:"provider"`
+	ReasoningEffort  string `json:"reasoning_effort"`
+	Schema           int64  `json:"schema"`
+	ServeAs          string `json:"serve_as"`
+	Target           string `json:"target"`
+}
+
 // ExecutionClaimWindowExpiredPayload defines model for ExecutionClaimWindowExpiredPayload.
 type ExecutionClaimWindowExpiredPayload struct {
 	BeadId          string `json:"bead_id"`
@@ -2738,6 +2753,13 @@ type LiveStatus struct {
 	Status             string      `json:"status"`
 	Store              StoreStatus `json:"store"`
 	TerminalStateBasis string      `json:"terminal_state_basis"`
+}
+
+// LocalAdmissionRequest defines model for LocalAdmissionRequest.
+type LocalAdmissionRequest struct {
+	Candidate        ExecutionCandidateSnapshot `json:"candidate"`
+	RecommendationId string                     `json:"recommendation_id"`
+	Work             EligibleWorkSnapshot       `json:"work"`
 }
 
 // LogicalNode defines model for LogicalNode.
@@ -3789,9 +3811,16 @@ type RoutingDecisionListBody struct {
 	Total      int64                        `json:"total"`
 }
 
+// RoutingDecisionLocalAdmissionResult defines model for RoutingDecisionLocalAdmissionResult.
+type RoutingDecisionLocalAdmissionResult struct {
+	Receipt TransitionReceipt     `json:"receipt"`
+	Record  RoutingDecisionRecord `json:"record"`
+}
+
 // RoutingDecisionRecord defines model for RoutingDecisionRecord.
 type RoutingDecisionRecord struct {
 	Approval       *ApprovalPayload `json:"approval,omitempty"`
+	Local          *bool            `json:"local,omitempty"`
 	Payload        DecisionPayload  `json:"payload"`
 	RecordRevision int64            `json:"record_revision"`
 	Signature      *Signature       `json:"signature,omitempty"`
@@ -3969,9 +3998,10 @@ type ScopeGroup = map[string]interface{}
 
 // SelectionSnapshot defines model for SelectionSnapshot.
 type SelectionSnapshot struct {
-	ObservedAt time.Time               `json:"observed_at"`
-	Targets    *[]TargetSnapshot       `json:"targets"`
-	Work       *[]EligibleWorkSnapshot `json:"work"`
+	Candidates *[]ExecutionCandidateSnapshot `json:"candidates"`
+	ObservedAt time.Time                     `json:"observed_at"`
+	Targets    *[]TargetSnapshot             `json:"targets"`
+	Work       *[]EligibleWorkSnapshot       `json:"work"`
 }
 
 // ServiceRestartOutputBody defines model for ServiceRestartOutputBody.
@@ -10193,6 +10223,15 @@ type CreateRigParams struct {
 	IdempotencyKey *string `json:"Idempotency-Key,omitempty"`
 }
 
+// PostV0CityByCityNameRoutingAdmitParams defines parameters for PostV0CityByCityNameRoutingAdmit.
+type PostV0CityByCityNameRoutingAdmitParams struct {
+	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+	XGCRequest string `json:"X-GC-Request"`
+
+	// IdempotencyKey Required stable key for exact local-admission retries.
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
 // ListRoutingDecisionsParams defines parameters for ListRoutingDecisions.
 type ListRoutingDecisionsParams struct {
 	// State Filter by exact lifecycle state.
@@ -10609,6 +10648,9 @@ type PatchV0CityByCityNameRigByNameJSONRequestBody = RigUpdateInputBody
 
 // CreateRigJSONRequestBody defines body for CreateRig for application/json ContentType.
 type CreateRigJSONRequestBody = RigCreateBody
+
+// PostV0CityByCityNameRoutingAdmitJSONRequestBody defines body for PostV0CityByCityNameRoutingAdmit for application/json ContentType.
+type PostV0CityByCityNameRoutingAdmitJSONRequestBody = LocalAdmissionRequest
 
 // IngestRoutingDecisionJSONRequestBody defines body for IngestRoutingDecision for application/json ContentType.
 type IngestRoutingDecisionJSONRequestBody = RoutingDecisionIngestBody
@@ -19925,6 +19967,11 @@ type ClientInterface interface {
 
 	CreateRig(ctx context.Context, cityName string, params *CreateRigParams, body CreateRigJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// PostV0CityByCityNameRoutingAdmitWithBody request with any body
+	PostV0CityByCityNameRoutingAdmitWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingAdmitParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostV0CityByCityNameRoutingAdmit(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingAdmitParams, body PostV0CityByCityNameRoutingAdmitJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListRoutingDecisions request
 	ListRoutingDecisions(ctx context.Context, cityName string, params *ListRoutingDecisionsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -22076,6 +22123,30 @@ func (c *Client) CreateRigWithBody(ctx context.Context, cityName string, params 
 
 func (c *Client) CreateRig(ctx context.Context, cityName string, params *CreateRigParams, body CreateRigJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateRigRequest(c.Server, cityName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameRoutingAdmitWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingAdmitParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameRoutingAdmitRequestWithBody(c.Server, cityName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameRoutingAdmit(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingAdmitParams, body PostV0CityByCityNameRoutingAdmitJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameRoutingAdmitRequest(c.Server, cityName, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -30959,6 +31030,75 @@ func NewCreateRigRequestWithBody(server string, cityName string, params *CreateR
 	return req, nil
 }
 
+// NewPostV0CityByCityNameRoutingAdmitRequest calls the generic PostV0CityByCityNameRoutingAdmit builder with application/json body
+func NewPostV0CityByCityNameRoutingAdmitRequest(server string, cityName string, params *PostV0CityByCityNameRoutingAdmitParams, body PostV0CityByCityNameRoutingAdmitJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostV0CityByCityNameRoutingAdmitRequestWithBody(server, cityName, params, "application/json", bodyReader)
+}
+
+// NewPostV0CityByCityNameRoutingAdmitRequestWithBody generates requests for PostV0CityByCityNameRoutingAdmit with any type of body
+func NewPostV0CityByCityNameRoutingAdmitRequestWithBody(server string, cityName string, params *PostV0CityByCityNameRoutingAdmitParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/routing/admit", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Request", headerParam0)
+
+		var headerParam1 string
+
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "Idempotency-Key", params.IdempotencyKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("Idempotency-Key", headerParam1)
+
+	}
+
+	return req, nil
+}
+
 // NewListRoutingDecisionsRequest generates requests for ListRoutingDecisions
 func NewListRoutingDecisionsRequest(server string, cityName string, params *ListRoutingDecisionsParams) (*http.Request, error) {
 	var err error
@@ -34385,6 +34525,11 @@ type ClientWithResponsesInterface interface {
 	CreateRigWithBodyWithResponse(ctx context.Context, cityName string, params *CreateRigParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateRigResponse, error)
 
 	CreateRigWithResponse(ctx context.Context, cityName string, params *CreateRigParams, body CreateRigJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateRigResponse, error)
+
+	// PostV0CityByCityNameRoutingAdmitWithBodyWithResponse request with any body
+	PostV0CityByCityNameRoutingAdmitWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingAdmitParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameRoutingAdmitResponse, error)
+
+	PostV0CityByCityNameRoutingAdmitWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingAdmitParams, body PostV0CityByCityNameRoutingAdmitJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameRoutingAdmitResponse, error)
 
 	// ListRoutingDecisionsWithResponse request
 	ListRoutingDecisionsWithResponse(ctx context.Context, cityName string, params *ListRoutingDecisionsParams, reqEditors ...RequestEditorFn) (*ListRoutingDecisionsResponse, error)
@@ -38069,6 +38214,35 @@ func (r CreateRigResponse) StatusCode() int {
 	return 0
 }
 
+type PostV0CityByCityNameRoutingAdmitResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *RoutingDecisionLocalAdmissionResult
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON401 *ErrorModel
+	ApplicationproblemJSON403 *ErrorModel
+	ApplicationproblemJSON409 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r PostV0CityByCityNameRoutingAdmitResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostV0CityByCityNameRoutingAdmitResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type ListRoutingDecisionsResponse struct {
 	Body                      []byte
 	HTTPResponse              *http.Response
@@ -40768,6 +40942,23 @@ func (c *ClientWithResponses) CreateRigWithResponse(ctx context.Context, cityNam
 		return nil, err
 	}
 	return ParseCreateRigResponse(rsp)
+}
+
+// PostV0CityByCityNameRoutingAdmitWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameRoutingAdmitResponse
+func (c *ClientWithResponses) PostV0CityByCityNameRoutingAdmitWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingAdmitParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameRoutingAdmitResponse, error) {
+	rsp, err := c.PostV0CityByCityNameRoutingAdmitWithBody(ctx, cityName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameRoutingAdmitResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostV0CityByCityNameRoutingAdmitWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingAdmitParams, body PostV0CityByCityNameRoutingAdmitJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameRoutingAdmitResponse, error) {
+	rsp, err := c.PostV0CityByCityNameRoutingAdmit(ctx, cityName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameRoutingAdmitResponse(rsp)
 }
 
 // ListRoutingDecisionsWithResponse request returning *ListRoutingDecisionsResponse
@@ -49292,6 +49483,81 @@ func ParseCreateRigResponse(rsp *http.Response) (*CreateRigResponse, error) {
 			return nil, err
 		}
 		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostV0CityByCityNameRoutingAdmitResponse parses an HTTP response from a PostV0CityByCityNameRoutingAdmitWithResponse call
+func ParsePostV0CityByCityNameRoutingAdmitResponse(rsp *http.Response) (*PostV0CityByCityNameRoutingAdmitResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostV0CityByCityNameRoutingAdmitResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RoutingDecisionLocalAdmissionResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
 
 	}
 

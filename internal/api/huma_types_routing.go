@@ -96,3 +96,24 @@ type RoutingDecisionIngestResult struct {
 	Record  RoutingDecisionRecord             `json:"record"`
 	Receipt routingdecision.TransitionReceipt `json:"receipt"`
 }
+
+// RoutingDecisionLocalAdmissionInput is the normal city-write-authenticated
+// local advisory admission request. Its idempotency key is request metadata;
+// the body contains only the typed selector output.
+type RoutingDecisionLocalAdmissionInput struct {
+	CityScope
+	IdempotencyKey string `header:"Idempotency-Key" required:"true" minLength:"1" maxLength:"4096" doc:"Required stable key for exact local-admission retries."`
+	Body           routingdecision.LocalAdmissionRequest
+}
+
+// RoutingDecisionLocalAdmissionResult is the local record and admission
+// receipt. It does not assert provider execution or work completion.
+type RoutingDecisionLocalAdmissionResult struct {
+	Record  RoutingDecisionRecord             `json:"record"`
+	Receipt routingdecision.TransitionReceipt `json:"receipt"`
+}
+
+// RoutingDecisionLocalAdmissionOutput wraps the local admission result.
+type RoutingDecisionLocalAdmissionOutput struct {
+	Body RoutingDecisionLocalAdmissionResult
+}

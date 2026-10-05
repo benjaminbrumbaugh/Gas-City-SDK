@@ -65,7 +65,7 @@ func (cr *CityRuntime) checkRoutingExecutionLaunch(target, rig string, info sess
 	if info.RoutingExecutionDecisionID != "" && info.RoutingExecutionDecisionID != decisionID {
 		return errors.New("routing session migration refused")
 	}
-	if cr.routingDecisionStore == nil || cr.routingDecisionVerifier == nil {
+	if cr.routingDecisionStore == nil {
 		return routingdecision.ErrAuthorizationRequired
 	}
 	record, err := cr.routingDecisionStore.Get(decisionID)
@@ -82,11 +82,16 @@ func (cr *CityRuntime) checkRoutingExecutionLaunch(target, rig string, info sess
 	continuing := bound != nil && bound.DecisionID == p.DecisionID && work.Status == "in_progress" &&
 		work.ClaimFence == p.ClaimFence+1 && slices.Contains(sessionpkg.AssigneeIdentities(info), strings.TrimSpace(work.Assignee)) &&
 		strings.TrimSpace(work.Metadata[beadmeta.RoutedToMetadataKey]) == ""
-	if (record.State != routingdecision.StateAdmitted && (!continuing || record.State != routingdecision.StateClaimed)) || record.Approval == nil || record.Signature == nil || (!continuing && !p.IsActiveAt(cr.routingDecisionNow())) {
+	if (record.State != routingdecision.StateAdmitted && (!continuing || record.State != routingdecision.StateClaimed)) || (!record.Local && (record.Approval == nil || record.Signature == nil)) || (record.Local && (record.Approval != nil || record.Signature != nil)) || (!continuing && !p.IsActiveAt(cr.routingDecisionNow())) {
 		return errors.New("routing selection unavailable")
 	}
-	if err := cr.routingDecisionVerifier.Verify(p, *record.Approval, *record.Signature); err != nil {
-		return err
+	if !record.Local {
+		if cr.routingDecisionVerifier == nil {
+			return routingdecision.ErrAuthorizationRequired
+		}
+		if err := cr.routingDecisionVerifier.Verify(p, *record.Approval, *record.Signature); err != nil {
+			return err
+		}
 	}
 	if p.City != cr.cityName || p.Rig != rig || p.Target != target || p.WorkBeadID != work.ID ||
 		(!continuing && (work.Status != "open" || strings.TrimSpace(work.Assignee) != "" || work.ClaimFence != p.ClaimFence)) ||

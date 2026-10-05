@@ -15,6 +15,16 @@ ledger handle shared by controller ticks and the live API. Missing, unsafe, or
 malformed authority input leaves the service denied and does not create a
 ledger. Gas City never owns a private key or signs an approval.
 
+When `routing_execution.enabled=true` and the local executable registry is
+valid, the controller may also run its local advisory lane without an external
+authority file. This lane is not a second trust authority: the selector sends
+one recommendation identity, one exact eligible-work snapshot, and one
+SDK-exported execution candidate. The controller re-resolves the target,
+executable digest, adapter digest, invocation digest, and work fence before
+performing the existing readiness CAS. Its durable record has `local=true` and
+must not contain synthetic approval or signature fields. Signed ingest remains
+denied until the authority file is available.
+
 An admitted decision only adds the existing route metadata to fresh, ready
 work. It does not launch or stop an Agent, invoke Sling, change capacity,
 select an alternative, migrate active work, or contact a provider. Normal
@@ -85,6 +95,10 @@ proposed ──> approved ──> admitted ──> claimed ──> outcome_recor
     └──────────> expired
 ```
 
+The local lane records `proposed ──> admitted` inside one SDK-owned ledger
+transaction after the readiness callback succeeds. That edge is valid only
+for `local=true` records; the signed lifecycle graph above is unchanged.
+
 All other edges are invalid. `proposed`, `approved`, `admitted`, and `claimed`
 are active. `outcome_recorded`, `refused_after_race`, `revoked`, and `expired`
 are terminal. The controller records claim and outcome transitions only from an
@@ -153,6 +167,7 @@ GET  /v0/city/{cityName}/routing/targets
 GET  /v0/city/{cityName}/routing/eligible
 GET  /v0/city/{cityName}/routing/decisions
 POST /v0/city/{cityName}/routing/decisions
+POST /v0/city/{cityName}/routing/admit
 ```
 
 Target responses expose only canonical identity, Rig, description, resolved
@@ -175,6 +190,14 @@ operator-supplied `--write-grant-command`; the command receives the exact typed
 request binding as JSON on stdin, and its token is neither placed in argv nor
 printed. The hidden `gc route-decision` group remains the stopped-city
 maintenance surface described below.
+
+The local advisory projection is also available as
+`gc routing admit --file <selection.json> --idempotency-key <key>
+--write-grant-command <command>`. It uses the ordinary city write grant and
+CSRF middleware; a loopback peer alone is insufficient. A successful response
+means only that fresh work was admitted to the SDK ledger. Provider launch and
+terminal outcome facts still require the durable runtime receipts described
+below.
 
 ## Restart recovery
 

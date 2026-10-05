@@ -26,6 +26,7 @@ var requireIdempotency = map[string]bool{
 	"emit-event":              true,
 	"post-v0-city":            true,
 	"ingest-routing-decision": true,
+	"post-v0-city-by-city-name-routing-admit":                   true,
 	"post-v0-city-by-city-name-external-coordination-requests":  true,
 	"post-v0-city-by-city-name-external-coordination-responses": true,
 }

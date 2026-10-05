@@ -1109,6 +1109,20 @@ export type ExecutionBinding = {
     target: string;
 };
 
+export type ExecutionCandidateSnapshot = {
+    account: string;
+    adapter_digest: string;
+    adapter_id: string;
+    canonical_model: string;
+    config_digest: string;
+    invocation_digest: string;
+    provider: string;
+    reasoning_effort: string;
+    schema: number;
+    serve_as: string;
+    target: string;
+};
+
 export type ExecutionClaimWindowExpiredPayload = {
     bead_id: string;
     invocation_age_ms: number;
@@ -2009,6 +2023,12 @@ export type LiveStatus = {
     status: string;
     store: StoreStatus;
     terminal_state_basis: string;
+};
+
+export type LocalAdmissionRequest = {
+    candidate: ExecutionCandidateSnapshot;
+    recommendation_id: string;
+    work: EligibleWorkSnapshot;
 };
 
 export type LogicalNode = {
@@ -3253,8 +3273,14 @@ export type RoutingDecisionListBody = {
     total: number;
 };
 
+export type RoutingDecisionLocalAdmissionResult = {
+    receipt: TransitionReceipt;
+    record: RoutingDecisionRecord;
+};
+
 export type RoutingDecisionRecord = {
     approval?: ApprovalPayload;
+    local?: boolean;
     payload: DecisionPayload;
     record_revision: number;
     signature?: Signature;
@@ -3480,6 +3506,7 @@ export type ScopeGroup = {
 };
 
 export type SelectionSnapshot = {
+    candidates: Array<ExecutionCandidateSnapshot> | null;
     observed_at: string;
     targets: Array<TargetSnapshot> | null;
     work: Array<EligibleWorkSnapshot> | null;
@@ -17390,6 +17417,70 @@ export type CreateRigResponses = {
 };
 
 export type CreateRigResponse = CreateRigResponses[keyof CreateRigResponses];
+
+export type PostV0CityByCityNameRoutingAdmitData = {
+    body: LocalAdmissionRequest;
+    headers: {
+        /**
+         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+         */
+        'X-GC-Request': string;
+        /**
+         * Required stable key for exact local-admission retries.
+         */
+        'Idempotency-Key': string;
+    };
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/routing/admit';
+};
+
+export type PostV0CityByCityNameRoutingAdmitErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Unauthorized
+     */
+    401: ErrorModel;
+    /**
+     * Forbidden
+     */
+    403: ErrorModel;
+    /**
+     * Conflict
+     */
+    409: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type PostV0CityByCityNameRoutingAdmitError = PostV0CityByCityNameRoutingAdmitErrors[keyof PostV0CityByCityNameRoutingAdmitErrors];
+
+export type PostV0CityByCityNameRoutingAdmitResponses = {
+    /**
+     * OK
+     */
+    200: RoutingDecisionLocalAdmissionResult;
+};
+
+export type PostV0CityByCityNameRoutingAdmitResponse = PostV0CityByCityNameRoutingAdmitResponses[keyof PostV0CityByCityNameRoutingAdmitResponses];
 
 export type ListRoutingDecisionsData = {
     body?: never;

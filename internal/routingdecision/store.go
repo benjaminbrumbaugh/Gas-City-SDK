@@ -138,12 +138,15 @@ type TransitionAudit struct {
 
 // Record is the full durable decision and its current lifecycle metadata.
 type Record struct {
-	Payload        DecisionPayload  `json:"payload"`
-	Approval       *ApprovalPayload `json:"approval,omitempty"`
-	Signature      *Signature       `json:"signature,omitempty"`
-	State          State            `json:"state"`
-	RecordRevision uint64           `json:"record_revision"`
-	StoreRevision  uint64           `json:"store_revision"`
+	Payload   DecisionPayload  `json:"payload"`
+	Approval  *ApprovalPayload `json:"approval,omitempty"`
+	Signature *Signature       `json:"signature,omitempty"`
+	// Local marks records admitted through the SDK's local advisory lane.
+	// Local records never carry synthetic approval or signature material.
+	Local          bool   `json:"local,omitempty"`
+	State          State  `json:"state"`
+	RecordRevision uint64 `json:"record_revision"`
+	StoreRevision  uint64 `json:"store_revision"`
 }
 
 // TransitionRequest is a payload-immutable lifecycle compare-and-swap.
@@ -875,6 +878,110 @@ func (store *Store) Create(payload DecisionPayload, token string) (Record, error
 	return result, classifyStoreError(err)
 }
 
+// AdmitLocal performs one SDK-owned local admission while holding the ledger
+// writer transaction across the same bounded readiness callback used by the
+// signed admission path. The local record is explicit and carries no approval
+// or signature; the caller must still compensate any external work CAS if the
+// ledger commit fails.
+func (store *Store) AdmitLocal(payload DecisionPayload, token string, callback func(Record) (AdmissionCallbackResult, error)) (LocalAdmissionResult, error) {
+	if payload.Schema != ExecutionSchemaVersion || payload.Execution == nil {
+		return LocalAdmissionResult{}, fmt.Errorf("%w: local admission requires schema-2 execution", ErrInvalidDecision)
+	}
+	if err := payload.Validate(); err != nil {
+		return LocalAdmissionResult{}, err
+	}
+	if strings.TrimSpace(token) == "" || callback == nil {
+		return LocalAdmissionResult{}, fmt.Errorf("%w: incomplete local admission", ErrInvalidDecision)
+	}
+	// CreatedAt/ExpiresAt are SDK-generated admission-window facts. Excluding
+	// them from the request fingerprint makes a retry with the same caller token
+	// replay the original result even when the controller clock has advanced.
+	fingerprintPayload := payload
+	fingerprintPayload.CreatedAt = time.Time{}
+	fingerprintPayload.ExpiresAt = time.Time{}
+	fingerprint := fingerprintOf(struct {
+		Kind    string            `json:"kind"`
+		Payload canonicalDecision `json:"payload"`
+	}{Kind: "local-admission", Payload: normalizedDecision(fingerprintPayload, true)})
+	var result LocalAdmissionResult
+	err := store.db.Update(func(tx *bbolt.Tx) error {
+		if replay, found, err := readIdempotency(tx, token, fingerprint); err != nil {
+			return err
+		} else if found {
+			if replay.Kind != "local-admission" || replay.Transition == nil || replay.DecisionID != payload.DecisionID {
+				return ErrIdempotencyConflict
+			}
+			var record Record
+			if err := decodeRecord(tx.Bucket(bucketDecisions).Get([]byte(payload.DecisionID)), &record); err != nil {
+				return err
+			}
+			result = LocalAdmissionResult{Record: record, Receipt: *replay.Transition}
+			return nil
+		}
+		if tx.Bucket(bucketPurgedDecisions).Get([]byte(payload.DecisionID)) != nil || tx.Bucket(bucketDecisions).Get([]byte(payload.DecisionID)) != nil {
+			return ErrDecisionExists
+		}
+		now := store.now().UTC()
+		if !payload.IsActiveAt(now) {
+			return invalidf("local admission is outside the payload validity window")
+		}
+		proposedRevision, err := nextStoreRevision(tx)
+		if err != nil {
+			return err
+		}
+		record := Record{Payload: canonicalPayloadCopy(payload), Local: true, State: StateProposed, RecordRevision: 1, StoreRevision: proposedRevision}
+		if err := putRecord(tx, record); err != nil {
+			return err
+		}
+		if err := adjustStateCount(tx, StateProposed, 1); err != nil {
+			return err
+		}
+		if err := putAudit(tx, TransitionAudit{DecisionID: payload.DecisionID, To: StateProposed, At: now, Reason: "created local advisory admission", RecordRevision: 1, StoreRevision: proposedRevision}); err != nil {
+			return err
+		}
+		callbackResult, callbackErr := callback(record)
+		if callbackErr != nil {
+			return ErrAdmissionCallback
+		}
+		if callbackResult.State != StateAdmitted && callbackResult.State != StateRefusedAfterRace {
+			return fmt.Errorf("%w: callback state", ErrInvalidTransition)
+		}
+		if err := validateText("admission reason", callbackResult.Reason, true); err != nil {
+			return err
+		}
+		if store.beforeAdmissionCommit != nil && store.beforeAdmissionCommit() != nil {
+			return ErrAdmissionCommit
+		}
+		oldIndex := stateIndexKey(record)
+		storeRevision, err := nextStoreRevision(tx)
+		if err != nil {
+			return err
+		}
+		record.State = callbackResult.State
+		record.RecordRevision = 2
+		record.StoreRevision = storeRevision
+		if err := tx.Bucket(bucketStateExpiry).Delete(oldIndex); err != nil {
+			return ErrStoreCorrupt
+		}
+		if err := putRecord(tx, record); err != nil {
+			return err
+		}
+		if err := moveStateCount(tx, StateProposed, record.State); err != nil {
+			return err
+		}
+		if err := putAudit(tx, TransitionAudit{DecisionID: payload.DecisionID, From: StateProposed, To: record.State, At: now, Reason: callbackResult.Reason, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}); err != nil {
+			return err
+		}
+		receipt := TransitionReceipt{DecisionID: payload.DecisionID, State: record.State, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
+		if err := putIdempotency(tx, token, idempotencyRecord{Kind: "local-admission", Fingerprint: fingerprint, DecisionID: payload.DecisionID, Transition: &receipt}); err != nil {
+			return err
+		}
+		result = LocalAdmissionResult{Record: record, Receipt: receipt}
+		return nil
+	})
+	return result, classifyStoreError(err)
+}
+
 // Get returns one decision by exact ID.
 func (store *Store) Get(decisionID string) (Record, error) {
 	var result Record
@@ -1280,6 +1387,9 @@ func decodeRecord(data []byte, record *Record) error {
 	}
 	if err := record.Payload.Validate(); err != nil {
 		return fmt.Errorf("%w: %w: decision %q payload: %w", ErrInvalidDecision, ErrStoredDecisionInvalid, record.Payload.DecisionID, err)
+	}
+	if record.Local && (record.Payload.Schema != ExecutionSchemaVersion || record.Approval != nil || record.Signature != nil) {
+		return ErrStoreCorrupt
 	}
 	if record.RecordRevision == 0 || record.StoreRevision == 0 || !knownState(record.State) {
 		return ErrStoreCorrupt

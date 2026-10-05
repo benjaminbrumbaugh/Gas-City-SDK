@@ -580,6 +580,20 @@ export const zDecisionPayload = z.object({
     work_state_digest: z.string()
 });
 
+export const zExecutionCandidateSnapshot = z.object({
+    account: z.string(),
+    adapter_digest: z.string(),
+    adapter_id: z.string(),
+    canonical_model: z.string(),
+    config_digest: z.string(),
+    invocation_digest: z.string(),
+    provider: z.string(),
+    reasoning_effort: z.string(),
+    schema: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    serve_as: z.string(),
+    target: z.string()
+});
+
 export const zExecutionClaimWindowExpiredPayload = z.object({
     bead_id: z.string(),
     invocation_age_ms: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
@@ -919,6 +933,12 @@ export const zListBodyExtmsgAdapterInfo = z.object({
     partial: z.boolean().optional(),
     partial_errors: z.array(z.string()).nullish(),
     total: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' })
+});
+
+export const zLocalAdmissionRequest = z.object({
+    candidate: zExecutionCandidateSnapshot,
+    recommendation_id: z.string(),
+    work: zEligibleWorkSnapshot
 });
 
 export const zLogicalNode = z.record(z.string(), z.never());
@@ -3557,6 +3577,7 @@ export const zRoutingDecisionIngestBody = z.object({
 
 export const zRoutingDecisionRecord = z.object({
     approval: zApprovalPayload.optional(),
+    local: z.boolean().optional(),
     payload: zDecisionPayload,
     record_revision: z.coerce.bigint().gte(BigInt(0)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
     signature: zSignature.optional(),
@@ -4029,6 +4050,7 @@ export const zRoutingDecisionTargetsBody = z.object({
 });
 
 export const zSelectionSnapshot = z.object({
+    candidates: z.array(zExecutionCandidateSnapshot).nullable(),
     observed_at: z.iso.datetime(),
     targets: z.array(zTargetSnapshot).nullable(),
     work: z.array(zEligibleWorkSnapshot).nullable()
@@ -4153,6 +4175,11 @@ export const zTransitionReceipt = z.object({
 });
 
 export const zRoutingDecisionIngestResult = z.object({
+    receipt: zTransitionReceipt,
+    record: zRoutingDecisionRecord
+});
+
+export const zRoutingDecisionLocalAdmissionResult = z.object({
     receipt: zTransitionReceipt,
     record: zRoutingDecisionRecord
 });
@@ -9997,6 +10024,22 @@ export const zCreateRigPath = z.object({
  * Rig already exists — idempotent request_id replay of a succeeded async create.
  */
 export const zCreateRigResponse = zRigCreateResponseBody;
+
+export const zPostV0CityByCityNameRoutingAdmitBody = zLocalAdmissionRequest;
+
+export const zPostV0CityByCityNameRoutingAdmitHeaders = z.object({
+    'X-GC-Request': z.string().min(1),
+    'Idempotency-Key': z.string().min(1).max(4096)
+});
+
+export const zPostV0CityByCityNameRoutingAdmitPath = z.object({
+    cityName: z.string().min(1).regex(/\S/)
+});
+
+/**
+ * OK
+ */
+export const zPostV0CityByCityNameRoutingAdmitResponse = zRoutingDecisionLocalAdmissionResult;
 
 export const zListRoutingDecisionsPath = z.object({
     cityName: z.string().min(1).regex(/\S/)

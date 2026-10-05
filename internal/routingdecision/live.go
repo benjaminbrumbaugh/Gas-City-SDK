@@ -10,6 +10,9 @@ const (
 
 	// ReasonReady identifies a fully initialized routing service.
 	ReasonReady = "ready"
+	// ReasonLocalReady identifies a local execution lane without external
+	// signed-routing authority. Signed ingest remains unavailable in this mode.
+	ReasonLocalReady = "local_ready"
 	// ReasonAuthorityUnavailable identifies an absent or unreadable authority input.
 	ReasonAuthorityUnavailable = "authority_unavailable"
 	// ReasonAuthorityInvalid identifies malformed or unsafe authority input.
@@ -62,7 +65,8 @@ type EligibleWorkSnapshot struct {
 
 // SelectionSnapshot is one deterministic external-selector input boundary.
 type SelectionSnapshot struct {
-	ObservedAt time.Time              `json:"observed_at"`
-	Work       []EligibleWorkSnapshot `json:"work"`
-	Targets    []TargetSnapshot       `json:"targets"`
+	ObservedAt time.Time                    `json:"observed_at"`
+	Work       []EligibleWorkSnapshot       `json:"work"`
+	Targets    []TargetSnapshot             `json:"targets"`
+	Candidates []ExecutionCandidateSnapshot `json:"candidates"`
 }

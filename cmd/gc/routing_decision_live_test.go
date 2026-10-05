@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -21,6 +24,9 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/routingdecision"
+	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/runtime/subprocess"
+	sessionpkg "github.com/gastownhall/gascity/internal/session"
 )
 
 func writeRoutingAuthority(t *testing.T, cityRoot string, publicKey ed25519.PublicKey) {
@@ -100,6 +106,140 @@ func TestRoutingDecisionServiceBootLatchesAuthorityBeforeOpeningLedger(t *testin
 	status = ready.routingDecisionService.Status()
 	if status.Status != routingdecision.AvailabilityReady || status.Reason != routingdecision.ReasonReady || !status.AuthorityReady || ready.routingDecisionStore == nil || ready.routingDecisionVerifier == nil {
 		t.Fatalf("ready service = status=%+v store=%p verifier=%p", status, ready.routingDecisionStore, ready.routingDecisionVerifier)
+	}
+}
+
+func TestRoutingDecisionServiceAdmitsLocalLaneWithoutExternalAuthority(t *testing.T) {
+	root := t.TempDir()
+	executable := filepath.Join(root, "account-a")
+	contents := []byte("#!/bin/sh\nexit 0\n")
+	if err := os.WriteFile(executable, contents, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(contents)
+	binding := config.RoutingExecutionBinding{
+		CanonicalModel: "model-a", ServeAs: "model-a", ReasoningEffort: "high", Account: "account-a",
+		Provider: "local", AdapterID: "adapter-a", Executable: executable, ExecutableDigest: hex.EncodeToString(hash[:]),
+		Args: []string{"--model", "model-a", "--effort", "high"}, ModelArgIndex: 1, EffortArgIndex: 3,
+		WorkDir: root, Environment: map[string]string{"HOME": root}, Transport: "subprocess",
+	}
+	command, err := routingExecutionCommand(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxActive, minActive := 2, 1
+	cr := &CityRuntime{
+		cityPath: root, cityName: "city-a", stderr: io.Discard, sp: subprocess.NewProvider(),
+		cfg: &config.City{
+			Rigs:             []config.Rig{{Name: "rig-a", Path: filepath.Join(root, "rig-a")}},
+			Agents:           []config.Agent{{Name: "worker", Dir: "rig-a", Provider: "local", Session: "subprocess", MaxActiveSessions: &maxActive, MinActiveSessions: &minActive}},
+			Providers:        map[string]config.ProviderSpec{"local": {Command: command}},
+			RoutingExecution: &config.RoutingExecutionConfig{Enabled: true, Bindings: map[string]config.RoutingExecutionBinding{"rig-a/worker": binding}},
+		},
+	}
+	initializeRoutingDecisionService(cr)
+	t.Cleanup(func() { cr.routingDecisionService.Close() })
+	status := cr.routingDecisionService.Status()
+	if status.Status != routingdecision.AvailabilityReady || status.Reason != routingdecision.ReasonLocalReady || status.AuthorityReady || cr.routingDecisionStore == nil || cr.routingDecisionVerifier != nil {
+		t.Fatalf("local-only routing status = %+v store=%p verifier=%p", status, cr.routingDecisionStore, cr.routingDecisionVerifier)
+	}
+	selection, err := cr.routingDecisionEligibleSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selection.Candidates) != 1 || selection.Candidates[0].Target != "rig-a/worker" {
+		t.Fatalf("local candidates = %+v", selection.Candidates)
+	}
+	encoded, err := json.Marshal(selection.Candidates[0])
+	if err != nil || strings.Contains(string(encoded), executable) || strings.Contains(string(encoded), "HOME") {
+		t.Fatalf("candidate leaked local invocation details: %s err=%v", encoded, err)
+	}
+	base := beads.NewMemStoreFrom(0, []beads.Bead{{ID: "work-1", Status: "open"}}, nil)
+	cr.standaloneRigStores = map[string]beads.Store{"rig-a": requireRoutingDecisionWorkStore(t, base)}
+	selection, err = cr.routingDecisionEligibleSnapshot()
+	if err != nil || len(selection.Work) != 1 || len(selection.Candidates) != 1 {
+		t.Fatalf("local admission inputs = %+v err=%v", selection, err)
+	}
+	request := routingdecision.LocalAdmissionRequest{
+		RecommendationID: "routing/v3:" + strings.Repeat("a", 64), Work: selection.Work[0], Candidate: selection.Candidates[0],
+	}
+	stale := request
+	stale.Candidate.ConfigDigest = strings.Repeat("f", 64)
+	if _, err := cr.admitLocalRoutingDecision(context.Background(), stale, "local-stale"); err == nil {
+		t.Fatal("stale local execution candidate was admitted")
+	}
+	result, err := cr.admitLocalRoutingDecision(context.Background(), request, "local-admit-1")
+	if err != nil || result.Receipt.State != routingdecision.StateAdmitted || !result.Record.Local {
+		t.Fatalf("local admission = %+v err=%v", result, err)
+	}
+	work, err := cr.standaloneRigStores["rig-a"].Get("work-1")
+	if err != nil || work.Metadata[beadmeta.RoutingDecisionIDMetadataKey] != result.Record.Payload.DecisionID {
+		t.Fatalf("local admission marker = %+v err=%v", work, err)
+	}
+	final := runtime.Config{Command: command, WorkDir: root}
+	if err := cr.checkRoutingExecutionLaunch("rig-a/worker", "rig-a", sessionpkg.Info{TriggerBeadID: "work-1"}, final); err != nil {
+		t.Fatalf("local launch refused without external verifier: %v", err)
+	}
+	final.Command = "changed invocation"
+	if err := cr.checkRoutingExecutionLaunch("rig-a/worker", "rig-a", sessionpkg.Info{TriggerBeadID: "work-1"}, final); err == nil {
+		t.Fatal("local launch accepted a changed invocation")
+	}
+	if err := cr.standaloneRigStores["rig-a"].SetMetadata("work-1", beadmeta.RoutedToMetadataKey, ""); err != nil {
+		t.Fatal(err)
+	}
+	work, err = cr.standaloneRigStores["rig-a"].Get("work-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cr.newRoutingDecisionRecoveryAuthorizer(cr.routingDecisionNow()).Allows("rig-a", work) {
+		t.Fatal("local admitted carrier was not eligible for restart recovery")
+	}
+	replay, err := cr.admitLocalRoutingDecision(context.Background(), request, "local-admit-1")
+	if err != nil || replay.Receipt != result.Receipt {
+		t.Fatalf("local admission replay = %+v err=%v", replay, err)
+	}
+}
+
+func TestRoutingDecisionServiceCloseWaitsForLocalAdmission(t *testing.T) {
+	store, err := routingdecision.OpenStore(t.TempDir(), routingdecision.StoreOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	service := &cityRoutingDecisionService{
+		store:            store,
+		status:           routingdecision.AvailabilityReady,
+		executionEnabled: true,
+		localAdmit: func(context.Context, routingdecision.LocalAdmissionRequest, string) (routingdecision.LocalAdmissionResult, error) {
+			close(started)
+			<-release
+			return routingdecision.LocalAdmissionResult{}, nil
+		},
+	}
+	admitDone := make(chan error, 1)
+	go func() {
+		_, admitErr := service.AdmitLocal(context.Background(), routingdecision.LocalAdmissionRequest{}, "local-close")
+		admitDone <- admitErr
+	}()
+	<-started
+	closeDone := make(chan struct{})
+	go func() {
+		service.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned while local admission was in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-admitDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not complete after local admission returned")
 	}
 }
 

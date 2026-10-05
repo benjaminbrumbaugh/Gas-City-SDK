@@ -78,3 +78,11 @@ func (s *controllerState) RoutingDecisionIngest(ctx context.Context, request rou
 	}
 	return service.Ingest(ctx, request)
 }
+
+func (s *controllerState) RoutingDecisionAdmitLocal(ctx context.Context, request routingdecision.LocalAdmissionRequest, token string) (routingdecision.LocalAdmissionResult, error) {
+	service := s.routingDecisions()
+	if service == nil {
+		return routingdecision.LocalAdmissionResult{}, errors.New("routing decision service unavailable")
+	}
+	return service.AdmitLocal(ctx, request, token)
+}

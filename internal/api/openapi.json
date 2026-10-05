@@ -3312,6 +3312,59 @@
         ],
         "type": "object"
       },
+      "ExecutionCandidateSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "adapter_digest": {
+            "type": "string"
+          },
+          "adapter_id": {
+            "type": "string"
+          },
+          "canonical_model": {
+            "type": "string"
+          },
+          "config_digest": {
+            "type": "string"
+          },
+          "invocation_digest": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "type": "string"
+          },
+          "schema": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "serve_as": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "canonical_model",
+          "serve_as",
+          "reasoning_effort",
+          "account",
+          "provider",
+          "target",
+          "config_digest",
+          "adapter_id",
+          "adapter_digest",
+          "invocation_digest"
+        ],
+        "type": "object"
+      },
       "ExecutionClaimWindowExpiredPayload": {
         "additionalProperties": false,
         "properties": {
@@ -5343,6 +5396,26 @@
           "retention_months",
           "terminal_state_basis",
           "store"
+        ],
+        "type": "object"
+      },
+      "LocalAdmissionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate": {
+            "$ref": "#/components/schemas/ExecutionCandidateSnapshot"
+          },
+          "recommendation_id": {
+            "type": "string"
+          },
+          "work": {
+            "$ref": "#/components/schemas/EligibleWorkSnapshot"
+          }
+        },
+        "required": [
+          "recommendation_id",
+          "work",
+          "candidate"
         ],
         "type": "object"
       },
@@ -11812,11 +11885,30 @@
         ],
         "type": "object"
       },
+      "RoutingDecisionLocalAdmissionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "receipt": {
+            "$ref": "#/components/schemas/TransitionReceipt"
+          },
+          "record": {
+            "$ref": "#/components/schemas/RoutingDecisionRecord"
+          }
+        },
+        "required": [
+          "record",
+          "receipt"
+        ],
+        "type": "object"
+      },
       "RoutingDecisionRecord": {
         "additionalProperties": false,
         "properties": {
           "approval": {
             "$ref": "#/components/schemas/ApprovalPayload"
+          },
+          "local": {
+            "type": "boolean"
           },
           "payload": {
             "$ref": "#/components/schemas/DecisionPayload"
@@ -12226,6 +12318,15 @@
       "SelectionSnapshot": {
         "additionalProperties": false,
         "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionCandidateSnapshot"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "observed_at": {
             "format": "date-time",
             "type": "string"
@@ -12252,7 +12353,8 @@
         "required": [
           "observed_at",
           "work",
-          "targets"
+          "targets",
+          "candidates"
         ],
         "type": "object"
       },
@@ -49103,6 +49205,181 @@
           }
         },
         "summary": "Create a rig"
+      }
+    },
+    "/v0/city/{cityName}/routing/admit": {
+      "post": {
+        "operationId": "post-v0-city-by-city-name-routing-admit",
+        "parameters": [
+          {
+            "description": "Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.",
+            "in": "header",
+            "name": "X-GC-Request",
+            "required": true,
+            "schema": {
+              "description": "Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.",
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "City name.",
+            "in": "path",
+            "name": "cityName",
+            "required": true,
+            "schema": {
+              "description": "City name.",
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required stable key for exact local-admission retries.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "description": "Required stable key for exact local-admission retries.",
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalAdmissionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingDecisionLocalAdmissionResult"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Forbidden",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Conflict",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Unprocessable Entity",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Post v0 city by city name routing admit"
       }
     },
     "/v0/city/{cityName}/routing/decisions": {

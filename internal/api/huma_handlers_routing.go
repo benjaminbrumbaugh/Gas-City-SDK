@@ -121,3 +121,26 @@ func (s *Server) humaHandleRoutingDecisionIngest(ctx context.Context, input *Rou
 		Record: RoutingDecisionRecord(result.Record), Receipt: result.Receipt,
 	}}, nil
 }
+
+func (s *Server) humaHandleRoutingDecisionLocalAdmission(ctx context.Context, input *RoutingDecisionLocalAdmissionInput) (*RoutingDecisionLocalAdmissionOutput, error) {
+	provider, err := s.routingDecisionProvider()
+	if err != nil {
+		return nil, err
+	}
+	result, err := provider.RoutingDecisionAdmitLocal(ctx, input.Body, input.IdempotencyKey)
+	if err != nil {
+		switch {
+		case errors.Is(err, routingdecision.ErrIdempotencyConflict), errors.Is(err, routingdecision.ErrDecisionExists):
+			return nil, apierr.RoutingIdempotencyConflict.Msg("local routing admission idempotency conflict")
+		case errors.Is(err, routingdecision.ErrInvalidDecision):
+			return nil, apierr.RoutingDecisionInvalid.Msg("local routing admission is malformed or stale")
+		case errors.Is(err, routingdecision.ErrAdmissionCallback), errors.Is(err, routingdecision.ErrAdmissionCommit):
+			return nil, apierr.RoutingUnavailable.Msg("local routing admission could not be committed")
+		default:
+			return nil, apierr.RoutingUnavailable.Msg("local routing admission unavailable")
+		}
+	}
+	return &RoutingDecisionLocalAdmissionOutput{Body: RoutingDecisionLocalAdmissionResult{
+		Record: RoutingDecisionRecord(result.Record), Receipt: result.Receipt,
+	}}, nil
+}

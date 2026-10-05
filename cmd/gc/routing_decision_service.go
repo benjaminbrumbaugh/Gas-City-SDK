@@ -36,6 +36,7 @@ type cityRoutingDecisionService struct {
 	lifecycleCursor     string
 	targets             func() ([]routingdecision.TargetSnapshot, error)
 	eligible            func() (routingdecision.SelectionSnapshot, error)
+	localAdmit          func(context.Context, routingdecision.LocalAdmissionRequest, string) (routingdecision.LocalAdmissionResult, error)
 	now                 func() time.Time
 	outcomeWork         func(context.Context, routingdecision.DecisionPayload) (routingdecision.OutcomeWorkSnapshot, error)
 	outcomeAuthority    func(context.Context, routingdecision.DecisionPayload) routingdecision.OutcomeAuthoritySnapshot
@@ -56,19 +57,24 @@ func initializeRoutingDecisionService(cr *CityRuntime) {
 		launchAuthorization: cr.authorizeRoutingExecutionLaunch,
 		status:              routingdecision.AvailabilityDenied, reason: routingdecision.ReasonAuthorityUnavailable,
 		targets: cr.routingDecisionTargetSnapshots, eligible: cr.routingDecisionEligibleSnapshot,
-		now: cr.routingDecisionNow, outcomeWork: cr.routingDecisionOutcomeWork,
+		localAdmit: cr.admitLocalRoutingDecision,
+		now:        cr.routingDecisionNow, outcomeWork: cr.routingDecisionOutcomeWork,
 		outcomeAuthority: cr.routingDecisionOutcomeAuthority,
 		reconcile:        cr.reconcileRoutingDecisionsAndLog,
 	}
 	cr.routingDecisionService = service
-	verifier, err := routingdecision.LoadAuthorityFile(cr.cityPath)
-	if err != nil {
-		if !errors.Is(err, routingdecision.ErrAuthorizationRequired) {
-			service.reason = routingdecision.ReasonAuthorityInvalid
-		}
+	verifier, authorityErr := routingdecision.LoadAuthorityFile(cr.cityPath)
+	localEnabled := service.executionEnabled && cr.routingExecutionAdapter != nil
+	if authorityErr != nil && !errors.Is(authorityErr, routingdecision.ErrAuthorizationRequired) {
+		service.reason = routingdecision.ReasonAuthorityInvalid
 		return
 	}
-	service.authorityReady = true
+	if authorityErr == nil {
+		service.authorityReady = true
+	}
+	if authorityErr != nil && !localEnabled {
+		return
+	}
 	store, err := routingdecision.OpenStore(cr.cityPath, routingdecision.StoreOptions{Now: cr.routingDecisionNow})
 	if err != nil {
 		service.reason = routingdecision.ReasonLedgerUnavailable
@@ -84,11 +90,19 @@ func initializeRoutingDecisionService(cr *CityRuntime) {
 		return
 	}
 	service.store = store
-	service.verifier = &verifier
+	if service.authorityReady {
+		service.verifier = &verifier
+	}
 	service.status = routingdecision.AvailabilityReady
-	service.reason = routingdecision.ReasonReady
+	if service.authorityReady {
+		service.reason = routingdecision.ReasonReady
+	} else {
+		service.reason = routingdecision.ReasonLocalReady
+	}
 	cr.routingDecisionStore = store
-	cr.routingDecisionVerifier = &verifier
+	if service.authorityReady {
+		cr.routingDecisionVerifier = &verifier
+	}
 }
 
 func (service *cityRoutingDecisionService) Status() routingdecision.LiveStatus {
@@ -159,6 +173,22 @@ func (service *cityRoutingDecisionService) Eligible(ctx context.Context) (routin
 		return routingdecision.SelectionSnapshot{}, errors.New("routing decision service unavailable")
 	}
 	return service.eligible()
+}
+
+func (service *cityRoutingDecisionService) AdmitLocal(ctx context.Context, request routingdecision.LocalAdmissionRequest, token string) (routingdecision.LocalAdmissionResult, error) {
+	if err := ctx.Err(); err != nil {
+		return routingdecision.LocalAdmissionResult{}, err
+	}
+	service.mu.RLock()
+	if service.closed || service.status != routingdecision.AvailabilityReady || service.store == nil || !service.executionEnabled || service.localAdmit == nil {
+		service.mu.RUnlock()
+		return routingdecision.LocalAdmissionResult{}, errors.New("local routing admission unavailable")
+	}
+	localAdmit := service.localAdmit
+	service.ingestWG.Add(1)
+	service.mu.RUnlock()
+	defer service.ingestWG.Done()
+	return localAdmit(ctx, request, token)
 }
 
 func (service *cityRoutingDecisionService) List(ctx context.Context, opts routingdecision.ListOptions) (routingdecision.DecisionPage, error) {
@@ -426,6 +456,11 @@ func (cr *CityRuntime) routingDecisionEligibleSnapshot() (routingdecision.Select
 	result := routingdecision.SelectionSnapshot{
 		ObservedAt: observedAt, Work: []routingdecision.EligibleWorkSnapshot{}, Targets: targets,
 	}
+	if cr.routingExecutionAdapter != nil {
+		result.Candidates = cr.routingDecisionExecutionCandidates(targets)
+	} else {
+		result.Candidates = []routingdecision.ExecutionCandidateSnapshot{}
+	}
 	for _, scope := range cr.routingDecisionScopes() {
 		if scope.store == nil || len(result.Work) >= routingDecisionAdmissionLimit {
 			continue
@@ -465,6 +500,108 @@ func (cr *CityRuntime) routingDecisionEligibleSnapshot() (routingdecision.Select
 		return result.Work[i].WorkBeadID < result.Work[j].WorkBeadID
 	})
 	return result, nil
+}
+
+func (cr *CityRuntime) admitLocalRoutingDecision(ctx context.Context, request routingdecision.LocalAdmissionRequest, token string) (routingdecision.LocalAdmissionResult, error) {
+	if err := ctx.Err(); err != nil {
+		return routingdecision.LocalAdmissionResult{}, err
+	}
+	if cr.routingExecutionAdapter == nil || cr.cfg == nil || cr.cfg.RoutingExecution == nil || !cr.cfg.RoutingExecution.Enabled {
+		return routingdecision.LocalAdmissionResult{}, errors.New("local routing admission unavailable")
+	}
+	service := cr.routingDecisionService
+	if service == nil {
+		return routingdecision.LocalAdmissionResult{}, errors.New("routing decision service unavailable")
+	}
+	service.mu.RLock()
+	store := service.store
+	closed := service.closed
+	service.mu.RUnlock()
+	if closed || store == nil {
+		return routingdecision.LocalAdmissionResult{}, errors.New("routing decision service unavailable")
+	}
+	if err := request.Validate(); err != nil {
+		return routingdecision.LocalAdmissionResult{}, err
+	}
+	if strings.TrimSpace(token) == "" {
+		return routingdecision.LocalAdmissionResult{}, errors.New("local routing idempotency key required")
+	}
+	payload, err := routingdecision.LocalAdmissionPayload(cr.cityName, request, cr.routingDecisionNow())
+	if err != nil {
+		return routingdecision.LocalAdmissionResult{}, err
+	}
+	scope, ok := cr.routingDecisionScopeForRig(request.Work.Rig)
+	if !ok || scope.store == nil {
+		return routingdecision.LocalAdmissionResult{}, errors.New("local routing work scope unavailable")
+	}
+	agent, digest, ok := cr.resolveRoutingDecisionTarget(request.Candidate.Target, request.Work.Rig)
+	if !ok || digest != request.Candidate.ConfigDigest {
+		return routingdecision.LocalAdmissionResult{}, errors.New("local routing target binding changed")
+	}
+	actual, err := cr.routingExecutionAdapter(agent, cr.cfg, nil)
+	if err != nil {
+		return routingdecision.LocalAdmissionResult{}, errors.New("local routing execution unavailable")
+	}
+	if err := routingdecision.CandidateMatches(request.Candidate, actual); err != nil {
+		return routingdecision.LocalAdmissionResult{}, err
+	}
+	if _, ok := beads.ReadyConditionalWriterFor(scope.store); !ok {
+		return routingdecision.LocalAdmissionResult{}, errors.New("atomic readiness unavailable")
+	}
+	attempt := routingDecisionAdmissionAttempt{}
+	result, err := store.AdmitLocal(payload, token, func(record routingdecision.Record) (routingdecision.AdmissionCallbackResult, error) {
+		return cr.routeDecisionAtAdmissionBoundary(scope, record, &attempt)
+	})
+	if err != nil {
+		if attempt.stamped {
+			_ = cr.compensateRoutingDecisionStamp(scope, payload, attempt.postStampRevision)
+		}
+		return routingdecision.LocalAdmissionResult{}, err
+	}
+	if result.Receipt.State == routingdecision.StateAdmitted {
+		result.Record, err = store.Get(payload.DecisionID)
+		if err != nil {
+			return routingdecision.LocalAdmissionResult{}, err
+		}
+	}
+	return result, nil
+}
+
+func (cr *CityRuntime) routingDecisionScopeForRig(rig string) (routingDecisionScope, bool) {
+	for _, scope := range cr.routingDecisionScopes() {
+		if scope.rig == rig {
+			return scope, true
+		}
+	}
+	return routingDecisionScope{}, false
+}
+
+func (cr *CityRuntime) routingDecisionExecutionCandidates(targets []routingdecision.TargetSnapshot) []routingdecision.ExecutionCandidateSnapshot {
+	candidates := make([]routingdecision.ExecutionCandidateSnapshot, 0, len(targets))
+	if cr.routingExecutionAdapter == nil || cr.cfg == nil || cr.cfg.RoutingExecution == nil || !cr.cfg.RoutingExecution.Enabled {
+		return candidates
+	}
+	seen := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		if _, exists := seen[target.Target]; exists {
+			continue
+		}
+		agent, _, ok := cr.resolveRoutingDecisionTarget(target.Target, target.Rig)
+		if !ok {
+			continue
+		}
+		binding, err := cr.routingExecutionAdapter(agent, cr.cfg, nil)
+		if err != nil {
+			continue
+		}
+		candidate := routingdecision.ExecutionCandidateSnapshot(binding)
+		if candidate.Validate() != nil {
+			continue
+		}
+		seen[target.Target] = struct{}{}
+		candidates = append(candidates, candidate)
+	}
+	return candidates
 }
 
 func routingDecisionSelectionState(bead beads.Bead, now time.Time) (routingdecision.WorkState, bool) {

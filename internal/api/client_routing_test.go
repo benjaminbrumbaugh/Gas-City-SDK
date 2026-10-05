@@ -49,6 +49,15 @@ func TestRoutingClientUsesGeneratedRoutesAndFinalGrantBinding(t *testing.T) {
 				Record:  routingdecision.Record{Payload: routingdecision.DecisionPayload{DecisionID: "decision-1"}, State: routingdecision.StateApproved},
 				Receipt: routingdecision.TransitionReceipt{DecisionID: "decision-1", State: routingdecision.StateApproved},
 			}
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/city/acme/routing/admit":
+			if r.Header.Get("Idempotency-Key") != "local-1" || r.Header.Get("X-GC-City-Write") != "grant-token" {
+				t.Fatalf("local headers = %#v", r.Header)
+			}
+			status = http.StatusOK
+			value = routingdecision.LocalAdmissionResult{
+				Record:  routingdecision.Record{Local: true, Payload: routingdecision.DecisionPayload{DecisionID: "local-1"}, State: routingdecision.StateAdmitted},
+				Receipt: routingdecision.TransitionReceipt{DecisionID: "local-1", State: routingdecision.StateAdmitted},
+			}
 		default:
 			status = http.StatusNotFound
 			value = struct{}{}
@@ -97,5 +106,23 @@ func TestRoutingClientUsesGeneratedRoutesAndFinalGrantBinding(t *testing.T) {
 	if binding.Method != http.MethodPost || binding.Path != "/v0/city/acme/routing/decisions" ||
 		binding.BodySHA256 == "" || binding.ReqDigest == "" || strings.Contains(binding.ReqDigest, "decision-1") {
 		t.Fatalf("binding = %+v", binding)
+	}
+	localRequest := routingdecision.LocalAdmissionRequest{
+		RecommendationID: "routing/v3:" + strings.Repeat("a", 64),
+		Work: routingdecision.EligibleWorkSnapshot{
+			Rig: "myrig", Scope: "rig", WorkBeadID: "work-1", WorkRevision: 7, ClaimFence: 3, WorkStateDigest: strings.Repeat("b", 64),
+		},
+		Candidate: routingdecision.ExecutionCandidateSnapshot{
+			Schema: 1, CanonicalModel: "model", ServeAs: "model", ReasoningEffort: "high", Account: "account", Provider: "provider", Target: "worker",
+			ConfigDigest: strings.Repeat("c", 64), AdapterID: "adapter", AdapterDigest: strings.Repeat("d", 64), InvocationDigest: strings.Repeat("e", 64),
+		},
+	}
+	local, err := client.RoutingAdmitLocal(localRequest, "local-1")
+	if err != nil || !local.Record.Local || local.Record.State != routingdecision.StateAdmitted {
+		t.Fatalf("RoutingAdmitLocal = (%+v, %v)", local, err)
+	}
+	if binding.Method != http.MethodPost || binding.Path != "/v0/city/acme/routing/admit" ||
+		binding.BodySHA256 == "" || binding.ReqDigest == "" || strings.Contains(binding.ReqDigest, "model") {
+		t.Fatalf("local binding = %+v", binding)
 	}
 }

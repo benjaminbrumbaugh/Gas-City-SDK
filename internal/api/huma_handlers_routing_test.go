@@ -22,10 +22,11 @@ import (
 
 type routingTestState struct {
 	*fakeState
-	store     *routingdecision.Store
-	verifier  routingdecision.Verifier
-	targets   []routingdecision.TargetSnapshot
-	selection routingdecision.SelectionSnapshot
+	store      *routingdecision.Store
+	verifier   routingdecision.Verifier
+	targets    []routingdecision.TargetSnapshot
+	selection  routingdecision.SelectionSnapshot
+	localCalls int
 }
 
 func (s *routingTestState) RoutingDecisionStatus() routingdecision.LiveStatus {
@@ -67,6 +68,17 @@ func (s *routingTestState) RoutingDecisionOutcomes(_ context.Context, _ routingd
 
 func (s *routingTestState) RoutingDecisionIngest(_ context.Context, request routingdecision.IngestApprovedRequest) (routingdecision.IngestApprovedResult, error) {
 	return s.store.IngestApproved(request, s.verifier)
+}
+
+func (s *routingTestState) RoutingDecisionAdmitLocal(_ context.Context, request routingdecision.LocalAdmissionRequest, token string) (routingdecision.LocalAdmissionResult, error) {
+	s.localCalls++
+	payload, err := routingdecision.LocalAdmissionPayload(s.CityName(), request, time.Now().UTC())
+	if err != nil {
+		return routingdecision.LocalAdmissionResult{}, err
+	}
+	return s.store.AdmitLocal(payload, token, func(routingdecision.Record) (routingdecision.AdmissionCallbackResult, error) {
+		return routingdecision.AdmissionCallbackResult{State: routingdecision.StateAdmitted, Reason: "test"}, nil
+	})
 }
 
 func newRoutingTestState(t *testing.T, now time.Time) (*routingTestState, ed25519.PrivateKey) {
@@ -161,6 +173,34 @@ func TestRoutingReadRoutesExposeTypedDeterministicSnapshots(t *testing.T) {
 	}
 }
 
+func TestLocalRoutingAdmissionRequiresNormalCityWriteGrant(t *testing.T) {
+	now := time.Now().UTC().Round(0)
+	state, _ := newRoutingTestState(t, now)
+	publicKey, _ := mustKeypair(t)
+	h := NewSupervisorMux(&stateCityResolver{state: state}, nil, false, "test", "", now).
+		WithAllowedHosts([]string{"example.com"}).WithWriteAuth(realClockVerifier(t, publicKey)).Handler()
+	request := routingdecision.LocalAdmissionRequest{
+		RecommendationID: "routing/v3:" + strings.Repeat("a", 64),
+		Work:             routingdecision.EligibleWorkSnapshot{Rig: "myrig", Scope: "rig", WorkBeadID: "work-1", WorkRevision: 7, ClaimFence: 3, WorkStateDigest: strings.Repeat("b", 64)},
+		Candidate:        routingdecision.ExecutionCandidateSnapshot{Schema: 1, CanonicalModel: "model", ServeAs: "model", ReasoningEffort: "high", Account: "account", Provider: "provider", Target: "worker", ConfigDigest: strings.Repeat("c", 64), AdapterID: "adapter", AdapterDigest: strings.Repeat("d", 64), InvocationDigest: strings.Repeat("e", 64)},
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := cityURL(state, "/routing/admit")
+	req := newPostRequest(path, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GC-Request", "true")
+	req.Header.Set("Idempotency-Key", "local-api-1")
+	req.RemoteAddr = "127.0.0.1:9000"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || state.localCalls != 0 {
+		t.Fatalf("loopback-only local admission = %d calls=%d body=%s", rec.Code, state.localCalls, rec.Body.String())
+	}
+}
+
 func TestRoutingRoutesExposeExactTypedContract(t *testing.T) {
 	sm := NewSupervisorMux(&stateCityResolver{state: newFakeState(t)}, nil, false, "test", "", time.Time{})
 	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
@@ -193,6 +233,7 @@ func TestRoutingRoutesExposeExactTypedContract(t *testing.T) {
 		{http.MethodGet, "/v0/city/{cityName}/routing/decisions", "list-routing-decisions"},
 		{http.MethodGet, "/v0/city/{cityName}/routing/outcomes", "list-routing-outcomes"},
 		{http.MethodPost, "/v0/city/{cityName}/routing/decisions", "ingest-routing-decision"},
+		{http.MethodPost, "/v0/city/{cityName}/routing/admit", "post-v0-city-by-city-name-routing-admit"},
 	} {
 		op, ok := spec.Paths[want.path][strings.ToLower(want.method)]
 		if !ok || op.OperationID != want.id {

@@ -45,6 +45,7 @@ func newRoutingCmd(stdout, stderr io.Writer) *cobra.Command {
 		newRoutingDecisionsCmd(stdout, stderr),
 		newRoutingOutcomesCmd(stdout, stderr),
 		newRoutingIngestCmd(stdout, stderr),
+		newRoutingAdmitCmd(stdout, stderr),
 	)
 	return cmd
 }
@@ -335,6 +336,50 @@ func newRoutingIngestCmd(stdout, stderr io.Writer) *cobra.Command {
 	return cmd
 }
 
+func newRoutingAdmitCmd(stdout, stderr io.Writer) *cobra.Command {
+	var file, idempotencyKey, grantCommand string
+	var jsonOutput bool
+	cmd := &cobra.Command{Use: "admit", Short: "Admit one SDK-validated local routing selection", Args: cobra.NoArgs}
+	cmd.Flags().StringVar(&file, "file", "", "Typed local-admission JSON file")
+	cmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "Required stable retry key")
+	cmd.Flags().StringVar(&grantCommand, "write-grant-command", "", "Command that reads GrantBinding JSON on stdin and prints one city-write token")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		if strings.TrimSpace(file) == "" || strings.TrimSpace(idempotencyKey) == "" || strings.TrimSpace(grantCommand) == "" {
+			fmt.Fprintln(stderr, "gc routing admit: --file, --idempotency-key, and --write-grant-command are required") //nolint:errcheck
+			return errExit
+		}
+		request, err := readRoutingLocalAdmissionFile(file)
+		if err != nil {
+			fmt.Fprintf(stderr, "gc routing admit: local-admission file rejected: %v\n", err) //nolint:errcheck
+			return errExit
+		}
+		client, err := routingClient(stderr, "admit")
+		if err != nil {
+			return err
+		}
+		if err := client.SetGrantSource(func(binding gcapi.GrantBinding) (string, error) {
+			grantCtx, cancel := context.WithTimeout(cmd.Context(), routingGrantTimeout)
+			defer cancel()
+			return routingGrantCommandRun(grantCtx, grantCommand, binding)
+		}); err != nil {
+			fmt.Fprintln(stderr, "gc routing admit: live routing API unavailable") //nolint:errcheck
+			return errExit
+		}
+		result, err := client.RoutingAdmitLocal(request, idempotencyKey)
+		if err != nil {
+			fmt.Fprintf(stderr, "gc routing admit: %v\n", err) //nolint:errcheck
+			return errExit
+		}
+		if jsonOutput {
+			return writeCLIJSONLine(stdout, result)
+		}
+		fmt.Fprintf(stdout, "Admitted %s (record revision %d, store revision %d)\n", result.Record.Payload.DecisionID, result.Record.RecordRevision, result.Record.StoreRevision) //nolint:errcheck
+		return nil
+	}
+	return cmd
+}
+
 func readRoutingIngestFile(path string) (gcapi.RoutingDecisionIngestBody, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -360,6 +405,36 @@ func readRoutingIngestFile(path string) (gcapi.RoutingDecisionIngestBody, error)
 		return gcapi.RoutingDecisionIngestBody{}, errors.New("trailing JSON data")
 	}
 	return envelope, nil
+}
+
+func readRoutingLocalAdmissionFile(path string) (routingdecision.LocalAdmissionRequest, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return routingdecision.LocalAdmissionRequest{}, errors.New("file unavailable")
+	}
+	defer file.Close() //nolint:errcheck
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > routingIngestFileLimit {
+		return routingdecision.LocalAdmissionRequest{}, errors.New("file must be regular and at most 1 MiB")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, routingIngestFileLimit+1))
+	if err != nil || len(data) > routingIngestFileLimit {
+		return routingdecision.LocalAdmissionRequest{}, errors.New("file must be regular and at most 1 MiB")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var request routingdecision.LocalAdmissionRequest
+	if err := decoder.Decode(&request); err != nil {
+		return routingdecision.LocalAdmissionRequest{}, errors.New("invalid typed JSON")
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return routingdecision.LocalAdmissionRequest{}, errors.New("trailing JSON data")
+	}
+	if err := request.Validate(); err != nil {
+		return routingdecision.LocalAdmissionRequest{}, errors.New("local admission request is invalid")
+	}
+	return request, nil
 }
 
 type cappedCommandBuffer struct {

@@ -41,7 +41,7 @@ func TestRoutingCLICommandGroupIsPublicAndComplete(t *testing.T) {
 	if err != nil || group == nil || group.Hidden {
 		t.Fatalf("routing group = (%v, %v), want visible command", group, err)
 	}
-	want := map[string]bool{"status": false, "targets": false, "eligible": false, "decisions": false, "outcomes": false, "ingest": false}
+	want := map[string]bool{"status": false, "targets": false, "eligible": false, "decisions": false, "outcomes": false, "ingest": false, "admit": false}
 	for _, child := range group.Commands() {
 		if _, ok := want[child.Name()]; ok {
 			want[child.Name()] = !child.Hidden
@@ -293,6 +293,49 @@ func TestRoutingCLIIngestFailsBeforeSendWithoutGrantCommandOrTypedFile(t *testin
 	}
 	if requests != 0 {
 		t.Fatalf("requests before validation = %d", requests)
+	}
+}
+
+func TestRoutingCLIAdmitUsesTypedLocalSelectionAndGrant(t *testing.T) {
+	var requests int
+	transport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		if r.URL.Path != "/v0/city/acme/routing/admit" || r.Header.Get("X-GC-City-Write") != "secret-grant-token" || r.Header.Get("Idempotency-Key") != "local-idem" {
+			t.Fatalf("request = path %s headers %#v", r.URL.Path, r.Header)
+		}
+		return routingCLIResponse(t, http.StatusOK, routingdecision.LocalAdmissionResult{
+			Record:  routingdecision.Record{Local: true, State: routingdecision.StateAdmitted, Payload: routingdecision.DecisionPayload{DecisionID: "local/v3:decision"}},
+			Receipt: routingdecision.TransitionReceipt{DecisionID: "local/v3:decision", State: routingdecision.StateAdmitted},
+		}), nil
+	})
+	withRoutingCLIClient(t, transport)
+	path := filepath.Join(t.TempDir(), "local.json")
+	request := routingdecision.LocalAdmissionRequest{
+		RecommendationID: "routing/v3:" + strings.Repeat("a", 64),
+		Work:             routingdecision.EligibleWorkSnapshot{Rig: "rig-a", Scope: "rig", WorkBeadID: "work-1", WorkRevision: 1, ClaimFence: 1, WorkStateDigest: strings.Repeat("b", 64)},
+		Candidate:        routingdecision.ExecutionCandidateSnapshot{Schema: 1, CanonicalModel: "model", ServeAs: "model", ReasoningEffort: "high", Account: "account", Provider: "provider", Target: "rig-a/worker", ConfigDigest: strings.Repeat("c", 64), AdapterID: "adapter", AdapterDigest: strings.Repeat("d", 64), InvocationDigest: strings.Repeat("e", 64)},
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	priorRunner := routingGrantCommandRun
+	routingGrantCommandRun = func(_ context.Context, _ string, binding gcapi.GrantBinding) (string, error) {
+		if binding.Path != "/v0/city/acme/routing/admit" {
+			t.Fatalf("grant binding path = %q", binding.Path)
+		}
+		return "secret-grant-token", nil
+	}
+	t.Cleanup(func() { routingGrantCommandRun = priorRunner })
+	stdout, stderr, err := executeRoutingCommand(t, "admit", "--file", path, "--idempotency-key", "local-idem", "--write-grant-command", "signer", "--json")
+	if err != nil || requests != 1 || !strings.Contains(stdout, "local/v3:decision") {
+		t.Fatalf("local admit: err=%v requests=%d stdout=%q stderr=%q", err, requests, stdout, stderr)
+	}
+	if strings.Contains(stdout, "secret-grant-token") || strings.Contains(stderr, "secret-grant-token") {
+		t.Fatal("grant token disclosed")
 	}
 }
 

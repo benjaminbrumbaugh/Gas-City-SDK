@@ -25,6 +25,15 @@
         "null"
       ]
     },
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/ExecutionCandidateSnapshot"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
     "ok": {
       "const": true
     }
@@ -33,6 +42,7 @@
     "observed_at",
     "work",
     "targets",
+    "candidates",
     "ok"
   ],
   "$defs": {
@@ -95,6 +105,36 @@
         "description",
         "resolved_provider",
         "config_digest"
+      ],
+      "type": "object"
+    },
+    "ExecutionCandidateSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "type": "integer" },
+        "canonical_model": { "type": "string" },
+        "serve_as": { "type": "string" },
+        "reasoning_effort": { "type": "string" },
+        "account": { "type": "string" },
+        "provider": { "type": "string" },
+        "target": { "type": "string" },
+        "config_digest": { "type": "string" },
+        "adapter_id": { "type": "string" },
+        "adapter_digest": { "type": "string" },
+        "invocation_digest": { "type": "string" }
+      },
+      "required": [
+        "schema",
+        "canonical_model",
+        "serve_as",
+        "reasoning_effort",
+        "account",
+        "provider",
+        "target",
+        "config_digest",
+        "adapter_id",
+        "adapter_digest",
+        "invocation_digest"
       ],
       "type": "object"
     }

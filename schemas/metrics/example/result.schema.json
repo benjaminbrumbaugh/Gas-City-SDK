@@ -230,7 +230,8 @@
               "worktree-cleanup",
               "worktree-ensure",
               "worktree-verify",
-              "trace-snapshot"
+              "trace-snapshot",
+              "routing-admit"
             ]
           },
           "event_id": {
