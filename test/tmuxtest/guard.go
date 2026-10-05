@@ -177,7 +177,26 @@ func killTestSocketServer(socketName string) error {
 func killTestSocketPath(socketPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxGuardCommandTimeout)
 	defer cancel()
-	return exec.CommandContext(ctx, "tmux", "-S", socketPath, "kill-server").Run()
+	out, err := exec.CommandContext(ctx, "tmux", "-S", socketPath, "kill-server").CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if tmuxServerAlreadyStopped(out) {
+		return nil
+	}
+	if detail := strings.TrimSpace(string(out)); detail != "" {
+		return fmt.Errorf("%w: %s", err, detail)
+	}
+	return err
+}
+
+func tmuxServerAlreadyStopped(output []byte) bool {
+	normalized := strings.ToLower(string(output))
+	if strings.Contains(normalized, "no server running") {
+		return true
+	}
+	return strings.Contains(normalized, "error connecting to") &&
+		strings.Contains(normalized, "no such file or directory")
 }
 
 // listTestSocketPaths returns tmux socket paths for orphaned gctest cities.
