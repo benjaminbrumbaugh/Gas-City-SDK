@@ -331,31 +331,77 @@ func filterEnvMany(env []string, prefixes ...string) []string {
 func extractBeadID(t *testing.T, output string) string {
 	t.Helper()
 
-	re := regexp.MustCompile(`\b(?:bd|gc|mc)-[A-Za-z0-9]+\b`)
-	if match := re.FindString(output); match != "" {
-		return match
+	id, ok := parseBeadID(output)
+	if !ok {
+		t.Fatalf("could not parse bead ID from output: %s", output)
 	}
+	return id
+}
 
-	for _, prefix := range []string{"Created bead: ", "Created issue: "} {
-		if idx := strings.Index(output, prefix); idx >= 0 {
-			rest := output[idx+len(prefix):]
-			fields := strings.Fields(rest)
-			if len(fields) > 0 {
-				return fields[0]
-			}
+// beadIDERE matches a whole bead ID by shape rather than a hardcoded prefix.
+// Configured file-backed rigs can mint prefixes such as r0/r1, while command
+// diagnostics may contain unrelated gc-integration path tokens.
+const beadIDERE = `[A-Za-z][A-Za-z0-9]*(-[A-Za-z0-9]+)+([.][A-Za-z0-9]+)*`
+
+var beadIDTokenRE = regexp.MustCompile("^" + beadIDERE + "$")
+
+func isBeadIDToken(s string) bool {
+	return beadIDTokenRE.MatchString(s)
+}
+
+func parseBeadID(output string) (string, bool) {
+	for _, anchor := range []string{"Created bead:", "Created issue:", "Created convoy"} {
+		idx := strings.Index(output, anchor)
+		if idx < 0 {
+			continue
+		}
+		fields := strings.Fields(output[idx+len(anchor):])
+		if len(fields) == 0 {
+			continue
+		}
+		if candidate := strings.TrimRight(fields[0], ":,"); isBeadIDToken(candidate) {
+			return candidate, true
 		}
 	}
-
 	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "bd-") || strings.HasPrefix(line, "gc-") || strings.HasPrefix(line, "mc-") {
-			fields := strings.Fields(line)
-			if len(fields) > 0 {
-				return fields[0]
-			}
+		fields := strings.Fields(line)
+		if len(fields) > 0 && isBeadIDToken(fields[0]) {
+			return fields[0], true
 		}
 	}
+	return "", false
+}
 
-	t.Fatalf("could not parse bead ID from output: %s", output)
-	return ""
+func TestIsBeadIDToken(t *testing.T) {
+	for _, id := range []string{"gc-1", "r0-1", "ga-t832q4.2", "my-rig-12"} {
+		if !isBeadIDToken(id) {
+			t.Errorf("isBeadIDToken(%q) = false, want true", id)
+		}
+	}
+	for _, token := range []string{"", "ID", "gc-", "1gc-2", "gc_1", "gc--1"} {
+		if isBeadIDToken(token) {
+			t.Errorf("isBeadIDToken(%q) = true, want false", token)
+		}
+	}
+}
+
+func TestParseBeadIDAnchorsCreatedOutput(t *testing.T) {
+	tests := []struct {
+		name, output, want string
+	}{
+		{name: "shim", output: "Created bead: gc-3", want: "gc-3"},
+		{name: "real bd", output: "✓ Created issue: r0-1 — standalone bead", want: "r0-1"},
+		{name: "convoy", output: `Created convoy uw-19 "Sprint 1"`, want: "uw-19"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseBeadID(tc.output)
+			if !ok || got != tc.want {
+				t.Fatalf("parseBeadID(%q) = (%q, %t), want (%q, true)", tc.output, got, ok, tc.want)
+			}
+		})
+	}
+	if got, ok := parseBeadID("warning: re-initializing gc-integration-123"); ok || got != "" {
+		t.Fatalf("parseBeadID diagnostic = (%q, %t), want (empty, false)", got, ok)
+	}
 }
