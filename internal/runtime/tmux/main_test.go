@@ -14,7 +14,10 @@ import (
 // macOS callers must provide a short TMPDIR; there is no shared /tmp fallback.
 func TestMain(m *testing.M) {
 	_ = os.Unsetenv(AgentSliceEnv)
-	root, err := os.MkdirTemp("", "rt-")
+	// tmux puts named sockets below TMUX_TMPDIR/tmux-$uid. On macOS the
+	// resulting Unix socket path must fit sun_path, so do not add the long
+	// per-user temporary-directory prefix returned by os.TempDir.
+	root, err := os.MkdirTemp("/tmp", "rt-")
 	if err != nil {
 		panic("tmux tests: creating owned root: " + err.Error())
 	}
