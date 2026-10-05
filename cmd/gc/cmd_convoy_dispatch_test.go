@@ -6341,7 +6341,7 @@ prefix = "BL"
 		t.Fatalf("WriteFile(city.toml): %v", err)
 	}
 	writeBuiltinImportsFixture(t, cityDir, "core")
-	writeCatalogFile(t, cityDir, ".gc/site.toml", "workspace_name = \"test-city\"\n\n[[rig]]\nname = \"alpha\"\npath = \"rigs/alpha\"\n")
+	writeCatalogFile(t, cityDir, ".gc/site.toml", "workspace_name = \"test-city\"\nworkspace_prefix = \"BL\"\n\n[[rig]]\nname = \"alpha\"\npath = \"rigs/alpha\"\n")
 	t.Setenv("GC_CITY", cityDir)
 	t.Setenv("GC_BEADS", "file")
 	t.Setenv("GC_BEADS_SCOPE_ROOT", "")
@@ -6460,7 +6460,7 @@ prefix = "BL"
 		t.Fatalf("WriteFile(city.toml): %v", err)
 	}
 	writeBuiltinImportsFixture(t, cityDir, "core")
-	writeCatalogFile(t, cityDir, ".gc/site.toml", "workspace_name = \"test-city\"\n\n[[rig]]\nname = \"alpha\"\npath = \"rigs/alpha\"\n")
+	writeCatalogFile(t, cityDir, ".gc/site.toml", "workspace_name = \"test-city\"\nworkspace_prefix = \"BL\"\n\n[[rig]]\nname = \"alpha\"\npath = \"rigs/alpha\"\n")
 	t.Setenv("GC_CITY", cityDir)
 	t.Setenv("GC_BEADS", "file")
 	t.Setenv("GC_BEADS_SCOPE_ROOT", "")
