@@ -34,7 +34,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return proxy(realBD, args, stdout, stderr)
 	}
 
-	code, handled, err := runFileStore(cityDir, args, stdout)
+	code, handled, err := runFileStore(fileStoreScopeRoot(cityDir), args, stdout)
 	if !handled {
 		return proxy(realBD, args, stdout, stderr)
 	}
@@ -103,8 +103,15 @@ func hasFileStore(dir string) bool {
 	return err == nil
 }
 
-func runFileStore(cityDir string, args []string, stdout io.Writer) (int, bool, error) {
-	store, recorder, err := openFileStore(cityDir)
+func fileStoreScopeRoot(cityDir string) string {
+	if scopeRoot := strings.TrimSpace(os.Getenv("GC_STORE_ROOT")); scopeRoot != "" {
+		return scopeRoot
+	}
+	return cityDir
+}
+
+func runFileStore(scopeRoot string, args []string, stdout io.Writer) (int, bool, error) {
+	store, recorder, err := openFileStore(scopeRoot)
 	if err != nil {
 		return 0, false, err
 	}
@@ -386,13 +393,18 @@ func parseUpdateArgs(args []string) (id string, opts beads.UpdateOpts, jsonOut b
 	return id, opts, jsonOut, nil
 }
 
-func openFileStore(cityDir string) (beads.Store, *events.FileRecorder, error) {
-	store, err := beads.OpenFileStore(fsys.OSFS{}, filepath.Join(cityDir, ".gc", "beads.json"))
+func openFileStore(scopeRoot string) (beads.Store, *events.FileRecorder, error) {
+	beadsPath := filepath.Join(scopeRoot, ".gc", "beads.json")
+	var opts []beads.FileStoreOption
+	if prefix := strings.TrimSpace(os.Getenv("GC_BEADS_PREFIX")); prefix != "" {
+		opts = append(opts, beads.WithFileStoreIDPrefix(prefix))
+	}
+	store, err := beads.OpenFileStore(fsys.OSFS{}, beadsPath, opts...)
 	if err != nil {
 		return nil, nil, err
 	}
-	store.SetLocker(beads.NewFileFlock(filepath.Join(cityDir, ".gc", "beads.json.lock")))
-	recorder, err := events.NewFileRecorder(filepath.Join(cityDir, ".gc", "events.jsonl"), io.Discard)
+	store.SetLocker(beads.NewFileFlock(beadsPath + ".lock"))
+	recorder, err := events.NewFileRecorder(filepath.Join(scopeRoot, ".gc", "events.jsonl"), io.Discard)
 	if err != nil {
 		return nil, nil, err
 	}
