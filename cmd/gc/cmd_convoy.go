@@ -15,6 +15,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
+	"github.com/gastownhall/gascity/internal/convoycallback"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/spf13/cobra"
@@ -271,12 +272,7 @@ func doConvoyCreateWithOptionsJSON(store beads.Store, cfg *config.City, cityPath
 		}
 	}
 
-	rec.Record(events.Event{
-		Type:    events.ConvoyCreated,
-		Actor:   eventActor(),
-		Subject: convoy.ID,
-		Message: name,
-	})
+	recordConvoyLifecycleEvent(rec, store, convoy, convoycallback.EventConvoyCreated, name, cfg, convoyLifecycleCityName(cfg, cityPath), stderr)
 
 	switch {
 	case jsonOut:
@@ -771,6 +767,10 @@ func openConvoyStoreByIDAt(convoyID, cityPath string, stderr io.Writer, cmdName 
 		return nil, 1
 	}
 	emitLoadCityConfigWarnings(stderr, prov)
+	return openConvoyStoreByIDAtWithConfig(convoyID, cityPath, cfg, stderr, cmdName)
+}
+
+func openConvoyStoreByIDAtWithConfig(convoyID, cityPath string, cfg *config.City, stderr io.Writer, cmdName string) (beads.Store, int) {
 	store, err := resolveConvoyStore(convoyID, cfg, cityPath, func(storeDir string) (beads.Store, error) {
 		return openStoreAtForCity(storeDir, cityPath)
 	})
@@ -1349,16 +1349,27 @@ func cmdConvoyCloseJSON(args []string, jsonOut bool, stdout, stderr io.Writer) i
 	if len(args) < 1 {
 		return doConvoyCloseJSON(nil, events.Discard, args, jsonOut, stdout, stderr)
 	}
+	cityPath, err := resolveCity()
+	if err != nil {
+		fmt.Fprintf(stderr, "gc convoy close: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	cfg, prov, err := config.LoadWithIncludes(fsys.OSFS{}, filepath.Join(cityPath, "city.toml"))
+	if err != nil {
+		fmt.Fprintf(stderr, "gc convoy close: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	emitLoadCityConfigWarnings(stderr, prov)
 	convoyID := ""
 	if len(args) > 0 {
 		convoyID = args[0]
 	}
-	store, code := openConvoyStoreByID(convoyID, stderr, "gc convoy close")
+	store, code := openConvoyStoreByIDAtWithConfig(convoyID, cityPath, cfg, stderr, "gc convoy close")
 	if store == nil {
 		return code
 	}
-	rec := openCityRecorder(stderr)
-	return doConvoyCloseJSON(store, rec, args, jsonOut, stdout, stderr)
+	rec := openCityRecorderAt(cityPath, stderr)
+	return doConvoyCloseJSONWithConfig(store, cfg, cityPath, rec, args, jsonOut, stdout, stderr)
 }
 
 // doConvoyClose closes a convoy bead.
@@ -1367,6 +1378,10 @@ func doConvoyClose(store beads.Store, rec events.Recorder, args []string, stdout
 }
 
 func doConvoyCloseJSON(store beads.Store, rec events.Recorder, args []string, jsonOut bool, stdout, stderr io.Writer) int {
+	return doConvoyCloseJSONWithConfig(store, nil, "", rec, args, jsonOut, stdout, stderr)
+}
+
+func doConvoyCloseJSONWithConfig(store beads.Store, cfg *config.City, cityPath string, rec events.Recorder, args []string, jsonOut bool, stdout, stderr io.Writer) int {
 	if len(args) < 1 {
 		fmt.Fprintln(stderr, "gc convoy close: missing convoy ID") //nolint:errcheck // best-effort stderr
 		return 1
@@ -1387,11 +1402,7 @@ func doConvoyCloseJSON(store beads.Store, rec events.Recorder, args []string, js
 		return 1
 	}
 
-	rec.Record(events.Event{
-		Type:    events.ConvoyClosed,
-		Actor:   eventActor(),
-		Subject: id,
-	})
+	recordConvoyLifecycleEvent(rec, store, convoy, convoycallback.EventConvoyClosed, "", cfg, convoyLifecycleCityName(cfg, cityPath), stderr)
 
 	if jsonOut {
 		return writeCLIJSONLineOrExit(stdout, stderr, "gc convoy close", convoyActionResult{SchemaVersion: "1", OK: true, Command: "convoy.close", Action: "close", ConvoyID: id})
@@ -1464,8 +1475,13 @@ func doConvoyCheckFallback(cityPath string, jsonOut bool, stdout, stderr io.Writ
 	if stores == nil {
 		return code
 	}
+	cfg, _, err := config.LoadWithIncludes(fsys.OSFS{}, filepath.Join(cityPath, "city.toml"))
+	if err != nil {
+		fmt.Fprintf(stderr, "gc convoy check: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
 	rec := openCityRecorderAt(cityPath, stderr)
-	return doConvoyCheckAcrossStoresJSON(stores, rec, jsonOut, stdout, stderr)
+	return doConvoyCheckAcrossStoresJSONWithConfig(stores, cfg, cityPath, rec, jsonOut, stdout, stderr)
 }
 
 // hasLabel reports whether the labels slice contains the target label.
@@ -1536,6 +1552,10 @@ func doConvoyCheckAcrossStores(stores []convoyStoreView, rec events.Recorder, st
 }
 
 func doConvoyCheckAcrossStoresJSON(stores []convoyStoreView, rec events.Recorder, jsonOut bool, stdout, stderr io.Writer) int {
+	return doConvoyCheckAcrossStoresJSONWithConfig(stores, nil, "", rec, jsonOut, stdout, stderr)
+}
+
+func doConvoyCheckAcrossStoresJSONWithConfig(stores []convoyStoreView, cfg *config.City, cityPath string, rec events.Recorder, jsonOut bool, stdout, stderr io.Writer) int {
 	convoys, err := collectOpenConvoys(stores)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc convoy check: %v\n", err) //nolint:errcheck // best-effort stderr
@@ -1557,11 +1577,7 @@ func doConvoyCheckAcrossStoresJSON(stores []convoyStoreView, rec events.Recorder
 				fmt.Fprintf(stderr, "gc convoy check: closing %s: %v\n", item.bead.ID, err) //nolint:errcheck // best-effort stderr
 				return 1
 			}
-			rec.Record(events.Event{
-				Type:    events.ConvoyClosed,
-				Actor:   eventActor(),
-				Subject: item.bead.ID,
-			})
+			recordConvoyLifecycleEvent(rec, item.store, item.bead, convoycallback.EventConvoyClosed, "", cfg, convoyLifecycleCityName(cfg, cityPath), stderr)
 			if !jsonOut {
 				fmt.Fprintf(stdout, "Auto-closed convoy %s %q\n", item.bead.ID, item.bead.Title) //nolint:errcheck // best-effort stdout
 			}
@@ -1733,16 +1749,27 @@ func cmdConvoyLandJSON(args []string, opts landOpts, jsonOut bool, stdout, stder
 	if len(args) < 1 {
 		return doConvoyLandJSON(nil, events.Discard, args, opts, jsonOut, stdout, stderr)
 	}
+	cityPath, err := resolveCity()
+	if err != nil {
+		fmt.Fprintf(stderr, "gc convoy land: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	cfg, prov, err := config.LoadWithIncludes(fsys.OSFS{}, filepath.Join(cityPath, "city.toml"))
+	if err != nil {
+		fmt.Fprintf(stderr, "gc convoy land: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	emitLoadCityConfigWarnings(stderr, prov)
 	convoyID := ""
 	if len(args) > 0 {
 		convoyID = args[0]
 	}
-	store, code := openConvoyStoreByID(convoyID, stderr, "gc convoy land")
+	store, code := openConvoyStoreByIDAtWithConfig(convoyID, cityPath, cfg, stderr, "gc convoy land")
 	if store == nil {
 		return code
 	}
-	rec := openCityRecorder(stderr)
-	return doConvoyLandJSON(store, rec, args, opts, jsonOut, stdout, stderr)
+	rec := openCityRecorderAt(cityPath, stderr)
+	return doConvoyLandJSONWithConfig(store, cfg, cityPath, rec, args, opts, jsonOut, stdout, stderr)
 }
 
 // doConvoyLand verifies an owned convoy's children are closed, optionally
@@ -1752,6 +1779,10 @@ func doConvoyLand(store beads.Store, rec events.Recorder, args []string, opts la
 }
 
 func doConvoyLandJSON(store beads.Store, rec events.Recorder, args []string, opts landOpts, jsonOut bool, stdout, stderr io.Writer) int {
+	return doConvoyLandJSONWithConfig(store, nil, "", rec, args, opts, jsonOut, stdout, stderr)
+}
+
+func doConvoyLandJSONWithConfig(store beads.Store, cfg *config.City, cityPath string, rec events.Recorder, args []string, opts landOpts, jsonOut bool, stdout, stderr io.Writer) int {
 	if len(args) < 1 {
 		fmt.Fprintln(stderr, "gc convoy land: missing convoy ID") //nolint:errcheck // best-effort stderr
 		return 1
@@ -1835,11 +1866,7 @@ func doConvoyLandJSON(store beads.Store, rec events.Recorder, args []string, opt
 		return 1
 	}
 
-	rec.Record(events.Event{
-		Type:    events.ConvoyClosed,
-		Actor:   eventActor(),
-		Subject: convoyID,
-	})
+	recordConvoyLifecycleEvent(rec, store, convoy, convoycallback.EventConvoyClosed, "", cfg, convoyLifecycleCityName(cfg, cityPath), stderr)
 
 	// Notification.
 	fields := getConvoyFields(convoy)
@@ -1888,7 +1915,7 @@ func doConvoyAutoclose(beadID string, stdout, stderr io.Writer) {
 	// so rig-store closes autoclose their convoys instead of silently
 	// no-op'ing (#3411).
 	if store, _, ok := autocloseOwningStore(beadID, cityPath); ok {
-		doConvoyAutocloseWith(store, rec, beadID, stdout, stderr)
+		doConvoyAutocloseWithCity(store, rec, beadID, cityPath, stdout, stderr)
 		return
 	}
 
@@ -1900,7 +1927,7 @@ func doConvoyAutoclose(beadID string, stdout, stderr io.Writer) {
 	if err != nil {
 		return
 	}
-	doConvoyAutocloseWith(store, rec, beadID, stdout, stderr)
+	doConvoyAutocloseWithCity(store, rec, beadID, cityPath, stdout, stderr)
 }
 
 // autocloseOwningStore resolves the store that owns beadID, and the store
@@ -1995,18 +2022,27 @@ func autocloseCityPathForStoreRoot(storeRoot string) string {
 // tracks dependents are convoys with all children closed, and if so closes
 // them. All errors are silently swallowed — this is best-effort
 // infrastructure called from a bd hook script.
-func doConvoyAutocloseWith(store beads.Store, rec events.Recorder, beadID string, stdout, _ io.Writer) {
+func doConvoyAutocloseWith(store beads.Store, rec events.Recorder, beadID string, stdout, stderr io.Writer) {
+	doConvoyAutocloseWithCity(store, rec, beadID, "", stdout, stderr)
+}
+
+func doConvoyAutocloseWithCity(store beads.Store, rec events.Recorder, beadID, cityPath string, stdout, stderr io.Writer) {
 	bead, err := store.Get(beadID)
 	if err != nil {
 		return
 	}
+	var cfg *config.City
+	if loaded, _, loadErr := config.LoadWithIncludes(fsys.OSFS{}, filepath.Join(cityPath, "city.toml")); loadErr == nil {
+		cfg = loaded
+	}
+	cityName := convoyLifecycleCityName(cfg, cityPath)
 
 	seen := make(map[string]bool)
 	if bead.ParentID != "" {
 		parent, err := store.Get(bead.ParentID)
 		if err == nil {
 			seen[parent.ID] = true
-			autocloseConvoyIfComplete(store, rec, parent, stdout)
+			autocloseConvoyIfCompleteWithConfig(store, rec, parent, stdout, stderr, cfg, cityName)
 		}
 	}
 
@@ -2019,11 +2055,11 @@ func doConvoyAutocloseWith(store beads.Store, rec events.Recorder, beadID string
 			continue
 		}
 		seen[convoy.ID] = true
-		autocloseConvoyIfComplete(store, rec, convoy, stdout)
+		autocloseConvoyIfCompleteWithConfig(store, rec, convoy, stdout, stderr, cfg, cityName)
 	}
 }
 
-func autocloseConvoyIfComplete(store beads.Store, rec events.Recorder, convoy beads.Bead, stdout io.Writer) {
+func autocloseConvoyIfCompleteWithConfig(store beads.Store, rec events.Recorder, convoy beads.Bead, stdout, stderr io.Writer, cfg *config.City, cityName string) {
 	if convoy.Type != "convoy" || convoycore.IsTerminalStatus(convoy.Status) || hasLabel(convoy.Labels, "owned") {
 		return
 	}
@@ -2037,11 +2073,7 @@ func autocloseConvoyIfComplete(store beads.Store, rec events.Recorder, convoy be
 		return
 	}
 
-	rec.Record(events.Event{
-		Type:    events.ConvoyClosed,
-		Actor:   eventActor(),
-		Subject: convoy.ID,
-	})
+	recordConvoyLifecycleEvent(rec, store, convoy, convoycallback.EventConvoyClosed, "", cfg, cityName, stderr)
 
 	fmt.Fprintf(stdout, "Auto-closed convoy %s %q\n", convoy.ID, convoy.Title) //nolint:errcheck // best-effort stdout
 }

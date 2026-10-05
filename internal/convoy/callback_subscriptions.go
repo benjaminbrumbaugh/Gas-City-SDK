@@ -243,6 +243,46 @@ func (s *SubscriptionService) List(ctx context.Context, owner string) ([]Subscri
 	return out, nil
 }
 
+// ListAll returns every durable callback subscription. The controller uses
+// this read-only projection when evaluating one lifecycle event against all
+// owner- and generation-fenced registrations. Admission still filters for
+// active state, scope, interests, and the stored registration fence; route
+// identity is never used as an authorization credential.
+func (s *SubscriptionService) ListAll(ctx context.Context) ([]SubscriptionRecord, error) {
+	if err := checkSubscriptionContext(ctx); err != nil {
+		return nil, err
+	}
+	if s == nil || s.store == nil {
+		return nil, invalidSubscriptionInput("nil store")
+	}
+	items, err := s.store.List(beads.ListQuery{
+		Label:         callbackSubscriptionLabel,
+		IncludeClosed: true,
+		Sort:          beads.SortCreatedAsc,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list all callback subscriptions: %w", err)
+	}
+	out := make([]SubscriptionRecord, 0, len(items))
+	for _, item := range items {
+		if err := checkSubscriptionContext(ctx); err != nil {
+			return nil, err
+		}
+		snapshot, err := decodeSubscriptionBead(item)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cloneSubscriptionRecord(snapshot.record))
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].RegisteredAt.Equal(out[j].RegisteredAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].RegisteredAt.Before(out[j].RegisteredAt)
+	})
+	return out, nil
+}
+
 // Renew advances the registration generation without changing its payload.
 func (s *SubscriptionService) Renew(ctx context.Context, owner, id string, fence RegistrationFence, now time.Time) (SubscriptionRecord, error) {
 	return s.mutate(ctx, owner, id, fence, func(current SubscriptionRecord) (SubscriptionRecord, error) {
