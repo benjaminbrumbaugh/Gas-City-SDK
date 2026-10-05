@@ -95,6 +95,12 @@ func newCapstoneHarness(t *testing.T) *capstoneHarness {
 
 	cityName := "capstone-city"
 	cityPath := t.TempDir()
+	// Scoped-roots layout, matching what `gc init` bootstraps for every fresh
+	// file-provider city. This ensures a provisioned rig resolves to its own
+	// file store instead of the legacy shared-city alias.
+	if err := bootstrapScopedFileProviderCityFS(fsys.OSFS{}, cityPath); err != nil {
+		t.Fatal(err)
+	}
 	// Explicit HQ prefix "hq" keeps the city store's own bead prefix distinct from
 	// the rig prefix the sling scenario routes on. The single agent is declared the
 	// schema-2 way (agents/<name>/agent.toml) so the post-provision config reload

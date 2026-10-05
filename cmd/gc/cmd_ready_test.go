@@ -945,10 +945,9 @@ func TestReadyResultSchemaDescribesTheEmittedArray(t *testing.T) {
 // funnel relocates nothing, so no graph leg is resolved and the answer is the
 // work stores' own.
 //
-// It also pins first-leg-wins on real stores, using a property of legacy file
-// mode rather than a contrivance: the file provider mints "gc-<n>" per scope
-// regardless of a rig's configured prefix, so the city and the rig really do
-// alias each other's ids there. internal/api's ready arm names the same
+// It also pins first-leg-wins on real stores: the city and rig use the same
+// explicitly configured prefix, so they intentionally alias each other's ids.
+// internal/api's ready arm names the same
 // aliasing. One id is one bead, and the city leg runs first, so the city's row
 // is the one served.
 func TestCmdReadyOnALegacyCityFederatesCityAndRigStores(t *testing.T) {
@@ -957,10 +956,10 @@ func TestCmdReadyOnALegacyCityFederatesCityAndRigStores(t *testing.T) {
 	if err := os.MkdirAll(rigDir, 0o755); err != nil {
 		t.Fatalf("creating rig dir: %v", err)
 	}
-	cityToml := "[workspace]\nname = \"readytest\"\n\n" +
+	cityToml := "[workspace]\nname = \"readytest\"\nprefix = \"re\"\n\n" +
 		"[beads]\nprovider = \"file\"\n\n" +
 		"[session]\nprovider = \"fake\"\n\n" +
-		"[[rigs]]\nname = \"frontend\"\npath = " + strconv.Quote(rigDir) + "\n"
+		"[[rigs]]\nname = \"frontend\"\npath = " + strconv.Quote(rigDir) + "\nprefix = \"re\"\n"
 	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(cityToml), 0o644); err != nil {
 		t.Fatalf("write city.toml: %v", err)
 	}
@@ -997,7 +996,7 @@ func TestCmdReadyOnALegacyCityFederatesCityAndRigStores(t *testing.T) {
 	// Now the city store, whose first bead aliases the rig's id.
 	cityBead := mustCreateReadyBead(t, cityStore, beads.Bead{Title: "city work", Type: "task"})
 	if cityBead.ID != rigBead.ID {
-		t.Fatalf("city bead %s did not alias the rig bead %s; legacy file mode was expected to mint the same id per scope", cityBead.ID, rigBead.ID)
+		t.Fatalf("city bead %s did not alias the rig bead %s; city and rig share an explicit prefix and were expected to mint the same id", cityBead.ID, rigBead.ID)
 	}
 	second := mustCreateReadyBead(t, cityStore, beads.Bead{Title: "more city work", Type: "task"})
 
