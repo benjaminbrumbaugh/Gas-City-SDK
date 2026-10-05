@@ -115,6 +115,56 @@ func TestListTestSocketPathsSkipsLiveSiblingRoots(t *testing.T) {
 	}
 }
 
+func TestCleanupOwnedSocketRootTreatsAbsentServerAsSuccess(t *testing.T) {
+	fixtureBin := t.TempDir()
+	writeFakeTmux(t, fixtureBin, "error connecting to socket (No such file or directory)\n", 1)
+	t.Setenv("PATH", fixtureBin)
+
+	socketRoot := filepath.Join(t.TempDir(), "tmux")
+	socketPath := filepath.Join(socketRoot, "tmux-"+strconv.Itoa(os.Getuid()), "owned")
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		t.Fatalf("creating socket parent: %v", err)
+	}
+	if err := os.WriteFile(socketPath, nil, 0o600); err != nil {
+		t.Fatalf("creating stale socket: %v", err)
+	}
+
+	if err := CleanupOwnedSocketRoot(socketRoot); err != nil {
+		t.Fatalf("CleanupOwnedSocketRoot() returned absent-server error: %v", err)
+	}
+}
+
+func TestCleanupOwnedSocketRootReportsUnexpectedServerError(t *testing.T) {
+	fixtureBin := t.TempDir()
+	writeFakeTmux(t, fixtureBin, "permission denied\n", 1)
+	t.Setenv("PATH", fixtureBin)
+
+	socketRoot := filepath.Join(t.TempDir(), "tmux")
+	socketPath := filepath.Join(socketRoot, "tmux-"+strconv.Itoa(os.Getuid()), "owned")
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		t.Fatalf("creating socket parent: %v", err)
+	}
+	if err := os.WriteFile(socketPath, nil, 0o600); err != nil {
+		t.Fatalf("creating socket: %v", err)
+	}
+
+	err := CleanupOwnedSocketRoot(socketRoot)
+	if err == nil {
+		t.Fatal("CleanupOwnedSocketRoot() swallowed unexpected tmux error")
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("CleanupOwnedSocketRoot() error = %q, want command output", err)
+	}
+}
+
+func writeFakeTmux(t *testing.T, bin, stderr string, exitCode int) {
+	t.Helper()
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' %q >&2\nexit %d\n", stderr, exitCode)
+	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(script), 0o700); err != nil {
+		t.Fatalf("writing fake tmux: %v", err)
+	}
+}
+
 func TestTmuxSocketRootPatternsCoverKnownRuntimePrefixes(t *testing.T) {
 	namespace := t.TempDir()
 	tests := []struct {
