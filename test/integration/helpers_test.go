@@ -405,3 +405,10 @@ func TestParseBeadIDAnchorsCreatedOutput(t *testing.T) {
 		t.Fatalf("parseBeadID diagnostic = (%q, %t), want (empty, false)", got, ok)
 	}
 }
+
+func TestExtractBeadIDPrefersExplicitCreateMarker(t *testing.T) {
+	output := "/private/var/folders/x/gc-integration-123-abc/city.toml: warning\nCreated issue: r0-fake\n"
+	if got := extractBeadID(t, output); got != "r0-fake" {
+		t.Fatalf("extractBeadID() = %q, want r0-fake", got)
+	}
+}
