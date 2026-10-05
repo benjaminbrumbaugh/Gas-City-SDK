@@ -1588,11 +1588,7 @@ func openExistingScopeLocalFileStore(scopeRoot, cityPath string) (*beads.FileSto
 	if _, err := os.Stat(beadsPath); err != nil {
 		return nil, err
 	}
-	store, err := openScopeLocalFileStoreForCity(scopeRoot, cityPath)
-	if err == nil {
-		fmt.Fprintf(os.Stderr, "DEBUG file store scope=%s city=%s prefix=%s\\n", scopeRoot, cityPath, store.IDPrefix)
-	}
-	return store, err
+	return openScopeLocalFileStoreForCity(scopeRoot, cityPath)
 }
 
 func openCompatibleFileStore(scopeRoot, cityPath string) (*beads.FileStore, error) {
