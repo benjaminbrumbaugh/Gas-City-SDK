@@ -10,6 +10,58 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
+func TestRunFileStoreUsesProjectedScopeAndPrefix(t *testing.T) {
+	cityDir := t.TempDir()
+	rigDir := filepath.Join(t.TempDir(), "rig-0")
+	t.Setenv("GC_STORE_ROOT", rigDir)
+	t.Setenv("GC_BEADS_PREFIX", "r0")
+
+	var stdout bytes.Buffer
+	code, handled, err := runFileStore(fileStoreScopeRoot(cityDir), []string{"create", "work"}, &stdout)
+	if err != nil {
+		t.Fatalf("runFileStore: %v", err)
+	}
+	if !handled || code != 0 {
+		t.Fatalf("runFileStore result = (%d, %t), want (0, true)", code, handled)
+	}
+	if got, want := stdout.String(), "Created bead: r0-1\n"; got != want {
+		t.Fatalf("create output = %q, want %q", got, want)
+	}
+
+	store, recorder, err := openFileStore(rigDir)
+	if err != nil {
+		t.Fatalf("open rig store: %v", err)
+	}
+	t.Cleanup(func() { _ = recorder.Close() })
+	if _, err := store.Get("r0-1"); err != nil {
+		t.Fatalf("rig store missing created bead: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cityDir, ".gc", "beads.json")); !os.IsNotExist(err) {
+		t.Fatalf("city store was used: stat error = %v", err)
+	}
+}
+
+func TestFileStoreScopeRootFallsBackToCity(t *testing.T) {
+	cityDir := t.TempDir()
+	t.Setenv("GC_STORE_ROOT", "")
+	if got := fileStoreScopeRoot(cityDir); got != cityDir {
+		t.Fatalf("fileStoreScopeRoot = %q, want %q", got, cityDir)
+	}
+
+	store, recorder, err := openFileStore(cityDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = recorder.Close() })
+	bead, err := store.Create(beads.Bead{Title: "city work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bead.ID != "gc-1" {
+		t.Fatalf("fallback store ID = %q, want gc-1", bead.ID)
+	}
+}
+
 func TestRunFileStoreReadyExcludesSessionBeads(t *testing.T) {
 	cityDir := newShimTestCity(t)
 	store, recorder, err := openFileStore(cityDir)
