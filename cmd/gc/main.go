@@ -1555,31 +1555,17 @@ func effectiveFileStorePrefix(scopeRoot, cityPath string) string {
 	if err != nil {
 		return ""
 	}
-	hasExplicitRigPrefix := false
 	for i := range cfg.Rigs {
 		rig := cfg.Rigs[i]
 		if strings.TrimSpace(rig.Path) == "" {
 			continue
 		}
 		if samePath(resolveStoreScopeRoot(cityPath, rig.Path), scopeRoot) {
-			// Legacy file stores deliberately share the default gc prefix across
-			// city and rig scopes. An explicit rig prefix opts that scope into
-			// the newer prefix-aware layout without rewriting legacy IDs.
-			if strings.TrimSpace(rig.Prefix) == "" {
-				return ""
-			}
-			return rig.Prefix
-		}
-		if strings.TrimSpace(rig.Prefix) != "" {
-			hasExplicitRigPrefix = true
+			return rig.EffectivePrefix()
 		}
 	}
 	if samePath(resolveStoreScopeRoot(cityPath, cityPath), scopeRoot) {
-		if strings.TrimSpace(cfg.Workspace.Prefix) != "" ||
-			strings.TrimSpace(cfg.ResolvedWorkspacePrefix) != "" ||
-			hasExplicitRigPrefix {
-			return config.EffectiveHQPrefix(cfg)
-		}
+		return config.EffectiveHQPrefix(cfg)
 	}
 	return ""
 }
@@ -1602,7 +1588,11 @@ func openExistingScopeLocalFileStore(scopeRoot, cityPath string) (*beads.FileSto
 	if _, err := os.Stat(beadsPath); err != nil {
 		return nil, err
 	}
-	return openScopeLocalFileStoreForCity(scopeRoot, cityPath)
+	store, err := openScopeLocalFileStoreForCity(scopeRoot, cityPath)
+	if err == nil {
+		fmt.Fprintf(os.Stderr, "DEBUG file store scope=%s city=%s prefix=%s\\n", scopeRoot, cityPath, store.IDPrefix)
+	}
+	return store, err
 }
 
 func openCompatibleFileStore(scopeRoot, cityPath string) (*beads.FileStore, error) {
