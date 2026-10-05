@@ -1808,6 +1808,25 @@ type DecisionPayload struct {
 	WorkStateDigest    string            `json:"work_state_digest"`
 }
 
+// DeliveryAck defines model for DeliveryAck.
+type DeliveryAck struct {
+	AcknowledgedAtUnix int64  `json:"acknowledged_at_unix"`
+	DeliveryId         string `json:"delivery_id"`
+	PayloadSha256      string `json:"payload_sha256"`
+}
+
+// DeliveryAckRequest defines model for DeliveryAckRequest.
+type DeliveryAckRequest struct {
+	DeliveryId    string `json:"delivery_id"`
+	PayloadSha256 string `json:"payload_sha256"`
+}
+
+// DeliveryAckResult defines model for DeliveryAckResult.
+type DeliveryAckResult struct {
+	Ack    DeliveryAck `json:"ack"`
+	Replay bool        `json:"replay"`
+}
+
 // DeliveryContextRecord defines model for DeliveryContextRecord.
 type DeliveryContextRecord struct {
 	BindingGeneration int64             `json:"BindingGeneration"`
@@ -1819,6 +1838,27 @@ type DeliveryContextRecord struct {
 	SchemaVersion     int64             `json:"SchemaVersion"`
 	SessionID         string            `json:"SessionID"`
 	SourceSessionID   string            `json:"SourceSessionID"`
+}
+
+// DeliveryItem defines model for DeliveryItem.
+type DeliveryItem struct {
+	DeliveryId           string `json:"delivery_id"`
+	EvidenceAtUnix       int64  `json:"evidence_at_unix"`
+	OutcomeId            string `json:"outcome_id"`
+	OutcomeSchemaVersion string `json:"outcome_schema_version"`
+	Payload              string `json:"payload"`
+	PayloadSha256        string `json:"payload_sha256"`
+	RoutingDecisionId    string `json:"routing_decision_id"`
+	SourceId             string `json:"source_id"`
+	SourceKind           string `json:"source_kind"`
+	WorkId               string `json:"work_id"`
+}
+
+// DeliveryPage defines model for DeliveryPage.
+type DeliveryPage struct {
+	Items         *[]DeliveryItem `json:"items"`
+	NextCursor    *string         `json:"next_cursor,omitempty"`
+	SchemaVersion string          `json:"schema_version"`
 }
 
 // Dep defines model for Dep.
@@ -10256,6 +10296,21 @@ type IngestRoutingDecisionParams struct {
 	IdempotencyKey string `json:"Idempotency-Key"`
 }
 
+// PostV0CityByCityNameRoutingDeliveryAckParams defines parameters for PostV0CityByCityNameRoutingDeliveryAck.
+type PostV0CityByCityNameRoutingDeliveryAckParams struct {
+	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+	XGCRequest string `json:"X-GC-Request"`
+}
+
+// GetV0CityByCityNameRoutingDeliveryPendingParams defines parameters for GetV0CityByCityNameRoutingDeliveryPending.
+type GetV0CityByCityNameRoutingDeliveryPendingParams struct {
+	// Limit Maximum pending delivery items to return.
+	Limit *int64 `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor Opaque delivery-ID keyset cursor.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
 // ListRoutingOutcomesParams defines parameters for ListRoutingOutcomes.
 type ListRoutingOutcomesParams struct {
 	// Limit Maximum claimed or terminal outcome records to return.
@@ -10654,6 +10709,9 @@ type PostV0CityByCityNameRoutingAdmitJSONRequestBody = LocalAdmissionRequest
 
 // IngestRoutingDecisionJSONRequestBody defines body for IngestRoutingDecision for application/json ContentType.
 type IngestRoutingDecisionJSONRequestBody = RoutingDecisionIngestBody
+
+// PostV0CityByCityNameRoutingDeliveryAckJSONRequestBody defines body for PostV0CityByCityNameRoutingDeliveryAck for application/json ContentType.
+type PostV0CityByCityNameRoutingDeliveryAckJSONRequestBody = DeliveryAckRequest
 
 // PatchV0CityByCityNameSessionByIdJSONRequestBody defines body for PatchV0CityByCityNameSessionById for application/json ContentType.
 type PatchV0CityByCityNameSessionByIdJSONRequestBody = SessionPatchBody
@@ -19980,6 +20038,14 @@ type ClientInterface interface {
 
 	IngestRoutingDecision(ctx context.Context, cityName string, params *IngestRoutingDecisionParams, body IngestRoutingDecisionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// PostV0CityByCityNameRoutingDeliveryAckWithBody request with any body
+	PostV0CityByCityNameRoutingDeliveryAckWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingDeliveryAckParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostV0CityByCityNameRoutingDeliveryAck(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingDeliveryAckParams, body PostV0CityByCityNameRoutingDeliveryAckJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetV0CityByCityNameRoutingDeliveryPending request
+	GetV0CityByCityNameRoutingDeliveryPending(ctx context.Context, cityName string, params *GetV0CityByCityNameRoutingDeliveryPendingParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetRoutingEligible request
 	GetRoutingEligible(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -22183,6 +22249,42 @@ func (c *Client) IngestRoutingDecisionWithBody(ctx context.Context, cityName str
 
 func (c *Client) IngestRoutingDecision(ctx context.Context, cityName string, params *IngestRoutingDecisionParams, body IngestRoutingDecisionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewIngestRoutingDecisionRequest(c.Server, cityName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameRoutingDeliveryAckWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingDeliveryAckParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameRoutingDeliveryAckRequestWithBody(c.Server, cityName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameRoutingDeliveryAck(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingDeliveryAckParams, body PostV0CityByCityNameRoutingDeliveryAckJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameRoutingDeliveryAckRequest(c.Server, cityName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetV0CityByCityNameRoutingDeliveryPending(ctx context.Context, cityName string, params *GetV0CityByCityNameRoutingDeliveryPendingParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetV0CityByCityNameRoutingDeliveryPendingRequest(c.Server, cityName, params)
 	if err != nil {
 		return nil, err
 	}
@@ -31256,6 +31358,138 @@ func NewIngestRoutingDecisionRequestWithBody(server string, cityName string, par
 	return req, nil
 }
 
+// NewPostV0CityByCityNameRoutingDeliveryAckRequest calls the generic PostV0CityByCityNameRoutingDeliveryAck builder with application/json body
+func NewPostV0CityByCityNameRoutingDeliveryAckRequest(server string, cityName string, params *PostV0CityByCityNameRoutingDeliveryAckParams, body PostV0CityByCityNameRoutingDeliveryAckJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostV0CityByCityNameRoutingDeliveryAckRequestWithBody(server, cityName, params, "application/json", bodyReader)
+}
+
+// NewPostV0CityByCityNameRoutingDeliveryAckRequestWithBody generates requests for PostV0CityByCityNameRoutingDeliveryAck with any type of body
+func NewPostV0CityByCityNameRoutingDeliveryAckRequestWithBody(server string, cityName string, params *PostV0CityByCityNameRoutingDeliveryAckParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/routing/delivery/ack", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Request", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewGetV0CityByCityNameRoutingDeliveryPendingRequest generates requests for GetV0CityByCityNameRoutingDeliveryPending
+func NewGetV0CityByCityNameRoutingDeliveryPendingRequest(server string, cityName string, params *GetV0CityByCityNameRoutingDeliveryPendingParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/routing/delivery/pending", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: "int64"}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetRoutingEligibleRequest generates requests for GetRoutingEligible
 func NewGetRoutingEligibleRequest(server string, cityName string) (*http.Request, error) {
 	var err error
@@ -34538,6 +34772,14 @@ type ClientWithResponsesInterface interface {
 	IngestRoutingDecisionWithBodyWithResponse(ctx context.Context, cityName string, params *IngestRoutingDecisionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*IngestRoutingDecisionResponse, error)
 
 	IngestRoutingDecisionWithResponse(ctx context.Context, cityName string, params *IngestRoutingDecisionParams, body IngestRoutingDecisionJSONRequestBody, reqEditors ...RequestEditorFn) (*IngestRoutingDecisionResponse, error)
+
+	// PostV0CityByCityNameRoutingDeliveryAckWithBodyWithResponse request with any body
+	PostV0CityByCityNameRoutingDeliveryAckWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingDeliveryAckParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameRoutingDeliveryAckResponse, error)
+
+	PostV0CityByCityNameRoutingDeliveryAckWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingDeliveryAckParams, body PostV0CityByCityNameRoutingDeliveryAckJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameRoutingDeliveryAckResponse, error)
+
+	// GetV0CityByCityNameRoutingDeliveryPendingWithResponse request
+	GetV0CityByCityNameRoutingDeliveryPendingWithResponse(ctx context.Context, cityName string, params *GetV0CityByCityNameRoutingDeliveryPendingParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameRoutingDeliveryPendingResponse, error)
 
 	// GetRoutingEligibleWithResponse request
 	GetRoutingEligibleWithResponse(ctx context.Context, cityName string, reqEditors ...RequestEditorFn) (*GetRoutingEligibleResponse, error)
@@ -38300,6 +38542,63 @@ func (r IngestRoutingDecisionResponse) StatusCode() int {
 	return 0
 }
 
+type PostV0CityByCityNameRoutingDeliveryAckResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *DeliveryAckResult
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON401 *ErrorModel
+	ApplicationproblemJSON403 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON409 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r PostV0CityByCityNameRoutingDeliveryAckResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostV0CityByCityNameRoutingDeliveryAckResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetV0CityByCityNameRoutingDeliveryPendingResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *DeliveryPage
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r GetV0CityByCityNameRoutingDeliveryPendingResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetV0CityByCityNameRoutingDeliveryPendingResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type GetRoutingEligibleResponse struct {
 	Body                      []byte
 	HTTPResponse              *http.Response
@@ -40985,6 +41284,32 @@ func (c *ClientWithResponses) IngestRoutingDecisionWithResponse(ctx context.Cont
 		return nil, err
 	}
 	return ParseIngestRoutingDecisionResponse(rsp)
+}
+
+// PostV0CityByCityNameRoutingDeliveryAckWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameRoutingDeliveryAckResponse
+func (c *ClientWithResponses) PostV0CityByCityNameRoutingDeliveryAckWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingDeliveryAckParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameRoutingDeliveryAckResponse, error) {
+	rsp, err := c.PostV0CityByCityNameRoutingDeliveryAckWithBody(ctx, cityName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameRoutingDeliveryAckResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostV0CityByCityNameRoutingDeliveryAckWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameRoutingDeliveryAckParams, body PostV0CityByCityNameRoutingDeliveryAckJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameRoutingDeliveryAckResponse, error) {
+	rsp, err := c.PostV0CityByCityNameRoutingDeliveryAck(ctx, cityName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameRoutingDeliveryAckResponse(rsp)
+}
+
+// GetV0CityByCityNameRoutingDeliveryPendingWithResponse request returning *GetV0CityByCityNameRoutingDeliveryPendingResponse
+func (c *ClientWithResponses) GetV0CityByCityNameRoutingDeliveryPendingWithResponse(ctx context.Context, cityName string, params *GetV0CityByCityNameRoutingDeliveryPendingParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameRoutingDeliveryPendingResponse, error) {
+	rsp, err := c.GetV0CityByCityNameRoutingDeliveryPending(ctx, cityName, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetV0CityByCityNameRoutingDeliveryPendingResponse(rsp)
 }
 
 // GetRoutingEligibleWithResponse request returning *GetRoutingEligibleResponse
@@ -49680,6 +50005,149 @@ func ParseIngestRoutingDecisionResponse(rsp *http.Response) (*IngestRoutingDecis
 			return nil, err
 		}
 		response.ApplicationproblemJSON413 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostV0CityByCityNameRoutingDeliveryAckResponse parses an HTTP response from a PostV0CityByCityNameRoutingDeliveryAckWithResponse call
+func ParsePostV0CityByCityNameRoutingDeliveryAckResponse(rsp *http.Response) (*PostV0CityByCityNameRoutingDeliveryAckResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostV0CityByCityNameRoutingDeliveryAckResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest DeliveryAckResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetV0CityByCityNameRoutingDeliveryPendingResponse parses an HTTP response from a GetV0CityByCityNameRoutingDeliveryPendingWithResponse call
+func ParseGetV0CityByCityNameRoutingDeliveryPendingResponse(rsp *http.Response) (*GetV0CityByCityNameRoutingDeliveryPendingResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetV0CityByCityNameRoutingDeliveryPendingResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest DeliveryPage
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest ErrorModel

@@ -246,6 +246,30 @@ func (service *cityRoutingDecisionService) Outcomes(ctx context.Context, opts ro
 	return page, nil
 }
 
+func (service *cityRoutingDecisionService) DeliveryPending(ctx context.Context, opts routingdecision.DeliveryListOptions) (routingdecision.DeliveryPage, error) {
+	if err := ctx.Err(); err != nil {
+		return routingdecision.DeliveryPage{}, err
+	}
+	service.mu.RLock()
+	defer service.mu.RUnlock()
+	if service.closed || service.status != routingdecision.AvailabilityReady || service.store == nil {
+		return routingdecision.DeliveryPage{}, errors.New("routing delivery ledger unavailable")
+	}
+	return service.store.ListPendingDeliveries(opts)
+}
+
+func (service *cityRoutingDecisionService) DeliveryAck(ctx context.Context, request routingdecision.DeliveryAckRequest) (routingdecision.DeliveryAckResult, error) {
+	if err := ctx.Err(); err != nil {
+		return routingdecision.DeliveryAckResult{}, err
+	}
+	service.mu.RLock()
+	defer service.mu.RUnlock()
+	if service.closed || service.status != routingdecision.AvailabilityReady || service.store == nil {
+		return routingdecision.DeliveryAckResult{}, errors.New("routing delivery ledger unavailable")
+	}
+	return service.store.AcknowledgeDelivery(request)
+}
+
 func (cr *CityRuntime) routingDecisionOutcomeWork(ctx context.Context, payload routingdecision.DecisionPayload) (routingdecision.OutcomeWorkSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return routingdecision.OutcomeWorkSnapshot{}, err
