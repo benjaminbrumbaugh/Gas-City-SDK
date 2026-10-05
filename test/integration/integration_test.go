@@ -326,9 +326,13 @@ func stopIntegrationSupervisorWithTimeout(timeout time.Duration) {
 		fmt.Fprintf(os.Stderr, "integration cleanup: supervisor stop timed out after %s; continuing cleanup\n%s", timeout, string(out)) //nolint:errcheck
 		return
 	}
-	if err != nil {
+	if err != nil && !supervisorStopAlreadyComplete(out) {
 		fmt.Fprintf(os.Stderr, "integration cleanup: supervisor stop failed: %v; continuing cleanup\n%s", err, string(out)) //nolint:errcheck
 	}
+}
+
+func supervisorStopAlreadyComplete(output []byte) bool {
+	return strings.Contains(strings.ToLower(string(output)), "supervisor is not running")
 }
 
 func TestIntegrationSupervisorStopHelperProcess(t *testing.T) {
@@ -366,6 +370,37 @@ func TestStopIntegrationSupervisorWithTimeoutReturnsAfterDeadline(t *testing.T) 
 	stopIntegrationSupervisorWithTimeout(10 * time.Millisecond)
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("stopIntegrationSupervisorWithTimeout took %s, want bounded return", elapsed)
+	}
+}
+
+func TestSupervisorStopAlreadyComplete(t *testing.T) {
+	tests := []struct {
+		name string
+		out  string
+		want bool
+	}{
+		{
+			name: "supervisor already stopped",
+			out:  "gc supervisor stop: supervisor is not running\n",
+			want: true,
+		},
+		{
+			name: "unrelated failure",
+			out:  "gc supervisor stop: no acknowledgment from supervisor\n",
+			want: false,
+		},
+		{
+			name: "empty output",
+			out:  "",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := supervisorStopAlreadyComplete([]byte(tt.out)); got != tt.want {
+				t.Fatalf("supervisorStopAlreadyComplete(%q) = %t, want %t", tt.out, got, tt.want)
+			}
+		})
 	}
 }
 
