@@ -3809,6 +3809,7 @@ gc routing
 |------------|-------------|
 | [gc routing admit](#gc-routing-admit) | Admit one SDK-validated local routing selection |
 | [gc routing decisions](#gc-routing-decisions) | List durable routing decisions |
+| [gc routing delivery](#gc-routing-delivery) | Drain and acknowledge immutable routing outcome deliveries |
 | [gc routing eligible](#gc-routing-eligible) | Show deterministic eligible work and target inputs |
 | [gc routing ingest](#gc-routing-ingest) | Ingest one externally signed routing decision |
 | [gc routing outcomes](#gc-routing-outcomes) | List authoritative redacted recommendation outcomes |
@@ -3844,6 +3845,48 @@ gc routing decisions [flags]
 | `--json` | bool |  | Output in JSON format |
 | `--limit` | int | `100` | Maximum rows to scan and return (1-256) |
 | `--state` | string |  | Filter by exact lifecycle state |
+
+## gc routing delivery
+
+Drain and acknowledge immutable routing outcome deliveries
+
+```
+gc routing delivery
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| [gc routing delivery ack](#gc-routing-delivery-ack) | Acknowledge one exact routing outcome delivery |
+| [gc routing delivery pending](#gc-routing-delivery-pending) | List unacknowledged routing outcome deliveries |
+
+## gc routing delivery ack
+
+Acknowledge one exact routing outcome delivery
+
+```
+gc routing delivery ack [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--delivery-id` | string |  | Immutable delivery ID |
+| `--json` | bool |  | Output in JSON format |
+| `--payload-sha256` | string |  | Exact payload digest |
+| `--write-grant-command` | string |  | Command that reads GrantBinding JSON on stdin and prints one city-write token |
+
+## gc routing delivery pending
+
+List unacknowledged routing outcome deliveries
+
+```
+gc routing delivery pending [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--cursor` | string |  | Opaque delivery-ID cursor |
+| `--json` | bool |  | Output in JSON format |
+| `--limit` | int | `100` | Maximum rows to return (1-100) |
 
 ## gc routing eligible
 
