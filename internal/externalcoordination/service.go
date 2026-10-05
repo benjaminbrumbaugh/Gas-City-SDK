@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/google/uuid"
@@ -23,6 +24,20 @@ const (
 	metadataError                = "external_coordination.error"
 	metadataResponseCommitment   = "external_coordination.response_commitment"
 	metadataResponseScrubPending = "external_coordination.response_scrub_pending"
+	metadataOutcome              = "external_coordination.outcome"
+	metadataClaimExpiresAt       = "external_coordination.claim_expires_at"
+	metadataRetryAt              = "external_coordination.retry_at"
+	metadataRetryClass           = "external_coordination.retry_class"
+	metadataUncertaintyClass     = "external_coordination.uncertainty_class"
+)
+
+const (
+	defaultClaimLease     = 5 * time.Minute
+	defaultMaxAttempts    = 3
+	defaultRetryBase      = time.Second
+	defaultRetryMax       = time.Minute
+	defaultRecoveryBatch  = 16
+	maxFailureClassLength = 128
 )
 
 var (
@@ -40,6 +55,12 @@ var (
 	ErrUnavailable = errors.New("external coordination adapter unavailable")
 	// ErrPrematureCompletion indicates a transport falsely claimed execution completion.
 	ErrPrematureCompletion = errors.New("external coordination adapter reported completion at delivery boundary")
+	// ErrAmbiguousDelivery indicates that a delivery may have reached the remote
+	// target and must be reconciled before any retry.
+	ErrAmbiguousDelivery = errors.New("external coordination delivery outcome is ambiguous")
+	// ErrRetryNotDue indicates that a queued request is waiting for its persisted
+	// retry deadline.
+	ErrRetryNotDue = errors.New("external coordination retry is not due")
 )
 
 // Enqueue persists one request. A repeated idempotency key returns the original
@@ -50,6 +71,9 @@ func (s *Service) Enqueue(ctx context.Context, input RequestInput) (RequestRecor
 	}
 	if s == nil || s.store == nil {
 		return RequestRecord{}, fmt.Errorf("%w: nil store", ErrInvalidInput)
+	}
+	if input.Now.IsZero() {
+		input.Now = s.nowTime()
 	}
 	request, err := normalizeRequest(input)
 	if err != nil {
@@ -67,7 +91,7 @@ func (s *Service) Enqueue(ctx context.Context, input RequestInput) (RequestRecor
 			if strings.TrimSpace(item.Metadata["external_coordination.idempotency_key"]) != request.IdempotencyKey {
 				continue
 			}
-			return decodeRecord(item)
+			return s.getAt(ctx, item.ID, s.nowTime())
 		}
 	}
 
@@ -98,8 +122,14 @@ func (s *Service) Enqueue(ctx context.Context, input RequestInput) (RequestRecor
 	return decodeRecord(created)
 }
 
-// Get loads one request and projects an expired queued request to expired.
+// Get loads one request and durably projects an expired queued or running
+// request to expired. The service clock is used so callers and tests observe
+// one authoritative instant for the read and transition.
 func (s *Service) Get(ctx context.Context, id string) (RequestRecord, error) {
+	return s.getAt(ctx, id, s.nowTime())
+}
+
+func (s *Service) getAt(ctx context.Context, id string, now time.Time) (RequestRecord, error) {
 	if err := checkContext(ctx); err != nil {
 		return RequestRecord{}, err
 	}
@@ -117,9 +147,26 @@ func (s *Service) Get(ctx context.Context, id string) (RequestRecord, error) {
 	if err != nil {
 		return RequestRecord{}, err
 	}
-	if record.State == StateQueued && !record.Request.ExpiresAt.After(time.Now()) {
-		_ = s.setState(record.ID, StateExpired, time.Now(), "request expired")
+	if now.IsZero() {
+		now = s.nowTime()
+	}
+	now = zeroTime(now)
+	if (record.State == StateQueued || record.State == StateRunning) && !record.Request.ExpiresAt.After(now) {
+		if err := s.updateRecordIfMatch(record, "closed", map[string]string{
+			metadataState:     string(StateExpired),
+			metadataOutcome:   string(ResponseOutcomeExpired),
+			metadataError:     "request expired",
+			metadataDelivered: now.UTC().Format(time.RFC3339Nano),
+		}, "expiry"); err != nil {
+			if beads.IsPreconditionFailed(err) {
+				return s.getAt(ctx, id, now)
+			}
+			return RequestRecord{}, fmt.Errorf("expire external coordination request %s: %w", id, err)
+		}
 		record.State = StateExpired
+		record.outcome = ResponseOutcomeExpired
+		record.Error = "request expired"
+		record.DeliveredAt = now
 	}
 	return record, nil
 }
@@ -139,11 +186,18 @@ func (s *Service) List(ctx context.Context, states ...DeliveryState) ([]RequestR
 	for _, state := range states {
 		wanted[state] = true
 	}
+	now := s.nowTime()
 	out := make([]RequestRecord, 0, len(items))
 	for _, item := range items {
 		record, decodeErr := decodeRecord(item)
 		if decodeErr != nil {
 			return nil, decodeErr
+		}
+		if (record.State == StateQueued || record.State == StateRunning) && !record.Request.ExpiresAt.After(now) {
+			record, decodeErr = s.getAt(ctx, record.ID, now)
+			if decodeErr != nil {
+				return nil, decodeErr
+			}
 		}
 		if len(wanted) > 0 && !wanted[record.State] {
 			continue
@@ -167,37 +221,68 @@ func (s *Service) Claim(ctx context.Context, id, worker string, now time.Time) (
 	s.claimMu.Lock()
 	defer s.claimMu.Unlock()
 
-	record, err := s.Get(ctx, id)
+	if now.IsZero() {
+		now = s.nowTime()
+	}
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
 	if err != nil {
 		return RequestRecord{}, err
+	}
+	if record.State == StateExpired && !record.Request.ExpiresAt.After(now) {
+		return RequestRecord{}, ErrExpired
 	}
 	if record.State != StateQueued {
 		return RequestRecord{}, fmt.Errorf("%w: %s is %s", ErrNotQueued, record.ID, record.State)
 	}
-	now = zeroTime(now)
+	if !record.retryAt.IsZero() && record.retryAt.After(now) {
+		return RequestRecord{}, fmt.Errorf("%w: retry at %s", ErrRetryNotDue, record.retryAt.UTC().Format(time.RFC3339Nano))
+	}
 	if !record.Request.ExpiresAt.After(now) {
-		_ = s.setState(record.ID, StateExpired, now, "request expired")
 		return RequestRecord{}, ErrExpired
+	}
+	if record.Attempt >= s.maxAttempts {
+		if err := s.updateRecordIfMatch(record, "closed", map[string]string{
+			metadataState:     string(StateFailed),
+			metadataError:     "maximum delivery attempts exhausted",
+			metadataDelivered: now.UTC().Format(time.RFC3339Nano),
+		}, "attempt limit"); err != nil {
+			return RequestRecord{}, fmt.Errorf("exhaust external coordination attempts %s: %w", id, err)
+		}
+		return RequestRecord{}, fmt.Errorf("%w: %s exceeded maximum attempts", ErrNotQueued, id)
 	}
 	record.Attempt++
 	record.Request.Attempt = record.Attempt
 	record.State = StateRunning
 	record.ClaimedBy = worker
 	record.ClaimedAt = now
+	record.claimExpiresAt = now.Add(s.claimLease)
 	payload, err := json.Marshal(record.Request)
 	if err != nil {
 		return RequestRecord{}, fmt.Errorf("encode claimed external coordination request %s: %w", record.ID, err)
 	}
-	if err := s.store.Update(record.ID, beads.UpdateOpts{
+	writer, ok := beads.ConditionalWriterFor(s.store)
+	if !ok {
+		return RequestRecord{}, fmt.Errorf("%w: conditional claim transition unavailable", ErrUnavailable)
+	}
+	if err := writer.UpdateIfMatch(record.ID, record.revision, beads.UpdateOpts{
 		Status: strPtr("in_progress"),
 		Metadata: map[string]string{
-			metadataRequest:   string(payload),
-			metadataState:     string(StateRunning),
-			metadataAttempt:   fmt.Sprintf("%d", record.Attempt),
-			metadataClaimedBy: worker,
-			metadataClaimedAt: now.UTC().Format(time.RFC3339Nano),
+			metadataRequest:          string(payload),
+			metadataState:            string(StateRunning),
+			metadataAttempt:          fmt.Sprintf("%d", record.Attempt),
+			metadataClaimedBy:        worker,
+			metadataClaimedAt:        now.UTC().Format(time.RFC3339Nano),
+			metadataClaimExpiresAt:   record.claimExpiresAt.UTC().Format(time.RFC3339Nano),
+			metadataError:            "",
+			metadataRetryAt:          "",
+			metadataRetryClass:       "",
+			metadataUncertaintyClass: "",
 		},
 	}); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			return RequestRecord{}, fmt.Errorf("%w: %s was claimed concurrently", ErrNotQueued, record.ID)
+		}
 		return RequestRecord{}, fmt.Errorf("claim external coordination request %s: %w", record.ID, err)
 	}
 	return record, nil
@@ -212,7 +297,11 @@ func (s *Service) Complete(ctx context.Context, id string, receipt DeliveryRecei
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("%w: request id mismatch", ErrInvalidInput)
 	}
-	record, err := s.Get(ctx, id)
+	if now.IsZero() {
+		now = s.nowTime()
+	}
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
 	if err != nil {
 		return err
 	}
@@ -228,7 +317,9 @@ func (s *Service) Complete(ctx context.Context, id string, receipt DeliveryRecei
 	if receipt.CorrelationID == "" || receipt.CorrelationID != record.Request.CorrelationID {
 		return fmt.Errorf("%w: receipt correlation_id does not match request", ErrInvalidInput)
 	}
-	now = zeroTime(now)
+	if !receipt.Accepted {
+		return fmt.Errorf("%w: delivery receipt does not confirm target acceptance", ErrInvalidInput)
+	}
 	state := receipt.State
 	if state == "" {
 		state = StateQueued
@@ -236,18 +327,24 @@ func (s *Service) Complete(ctx context.Context, id string, receipt DeliveryRecei
 	if state == StateCompleted {
 		return ErrPrematureCompletion
 	}
-	if state != StateQueued && state != StateRunning {
+	if state != StateAccepted && state != StateQueued && state != StateRunning {
 		return fmt.Errorf("%w: invalid delivery state %q", ErrInvalidInput, state)
 	}
 	status := "in_progress"
 	meta := map[string]string{
-		metadataState:     string(StateRunning),
-		metadataDelivered: now.UTC().Format(time.RFC3339Nano),
+		metadataState:          string(StateRunning),
+		metadataDelivered:      now.UTC().Format(time.RFC3339Nano),
+		metadataClaimExpiresAt: "",
+		metadataClaimedBy:      "",
+		metadataClaimedAt:      "",
 	}
 	if receipt.Error != "" {
-		meta[metadataError] = receipt.Error
+		meta[metadataError] = sanitizeFailureClass(receipt.Error)
 	}
-	if err := s.store.Update(id, beads.UpdateOpts{Status: &status, Metadata: meta}); err != nil {
+	if err := s.updateRecordIfMatch(record, status, meta, "delivery"); err != nil {
+		if beads.IsPreconditionFailed(err) {
+			return fmt.Errorf("%w: delivery for %s changed concurrently", ErrNotQueued, id)
+		}
 		return fmt.Errorf("record external coordination delivery %s: %w", id, err)
 	}
 	if record.Request.ContentRetention == RetentionEphemeral {
@@ -263,8 +360,21 @@ func (s *Service) RecordResponse(ctx context.Context, response Response) error {
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
+	if response.State == "" {
+		// Historical adapters omitted state; preserve that wire compatibility as
+		// the least surprising answer outcome while rejecting unknown labels.
+		response.State = ResponseOutcomeAnswered
+	}
+	if !response.State.valid() {
+		return fmt.Errorf("%w: invalid response outcome %q", ErrInvalidInput, response.State)
+	}
 	if strings.TrimSpace(response.RequestID) == "" {
 		return fmt.Errorf("%w: response request_id required", ErrInvalidInput)
+	}
+	receivedAt := response.ReceivedAt
+	if receivedAt.IsZero() {
+		receivedAt = s.nowTime()
+		response.ReceivedAt = receivedAt
 	}
 	record, err := s.findByRequestID(ctx, response.RequestID)
 	if err != nil {
@@ -276,7 +386,7 @@ func (s *Service) RecordResponse(ctx context.Context, response Response) error {
 	}
 	if record.State == StateCompleted && record.responseCommitment == commitment {
 		if record.responseScrubPending {
-			return s.scrubContent(record.ID, response.ReceivedAt)
+			return s.scrubContent(record.ID, receivedAt)
 		}
 		return nil
 	}
@@ -296,8 +406,9 @@ func (s *Service) RecordResponse(ctx context.Context, response Response) error {
 	status := "closed"
 	metadata := map[string]string{
 		metadataState:              string(StateCompleted),
-		metadataDelivered:          zeroTime(response.ReceivedAt).UTC().Format(time.RFC3339Nano),
+		metadataDelivered:          receivedAt.UTC().Format(time.RFC3339Nano),
 		metadataResponseCommitment: commitment,
+		metadataOutcome:            string(response.State),
 	}
 	if response.ResponseID != "" {
 		metadata["external_coordination.response_id"] = response.ResponseID
@@ -314,7 +425,7 @@ func (s *Service) RecordResponse(ctx context.Context, response Response) error {
 			}
 			if current.State == StateCompleted && current.responseCommitment == commitment {
 				if current.responseScrubPending {
-					return s.scrubContent(current.ID, response.ReceivedAt)
+					return s.scrubContent(current.ID, receivedAt)
 				}
 				return nil
 			}
@@ -323,7 +434,7 @@ func (s *Service) RecordResponse(ctx context.Context, response Response) error {
 		return fmt.Errorf("record external coordination response %s: %w", record.ID, err)
 	}
 	if mustScrub {
-		return s.scrubContent(record.ID, response.ReceivedAt)
+		return s.scrubContent(record.ID, receivedAt)
 	}
 	return nil
 }
@@ -362,6 +473,8 @@ func (s *Service) scrubContent(id string, now time.Time) error {
 func (s *Service) findByRequestID(ctx context.Context, requestID string) (RequestRecord, error) {
 	if record, err := s.Get(ctx, requestID); err == nil {
 		return record, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return RequestRecord{}, err
 	}
 	items, err := s.store.List(beads.ListQuery{Label: requestLabel, IncludeClosed: true, AllowScan: true})
 	if err != nil {
@@ -379,20 +492,189 @@ func (s *Service) findByRequestID(ctx context.Context, requestID string) (Reques
 	return RequestRecord{}, ErrNotFound
 }
 
+func (s *Service) updateRecordIfMatch(record RequestRecord, status string, metadata map[string]string, operation string) error {
+	writer, ok := beads.ConditionalWriterFor(s.store)
+	if !ok {
+		return fmt.Errorf("%w: conditional %s transition unavailable", ErrUnavailable, operation)
+	}
+	if err := writer.UpdateIfMatch(record.ID, record.revision, beads.UpdateOpts{Status: &status, Metadata: metadata}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RecoverAbandoned marks running claims whose durable lease expired. A claim
+// that might have reached the remote target becomes uncertain and is never
+// requeued automatically. A request whose own deadline passed becomes expired.
+// The optional limit bounds one recovery pass; the default is intentionally
+// small so a controller tick cannot be monopolized by old claims.
+func (s *Service) RecoverAbandoned(ctx context.Context, now time.Time, limits ...int) ([]RecoveryResult, error) {
+	if err := checkContext(ctx); err != nil {
+		return nil, err
+	}
+	if now.IsZero() {
+		now = s.nowTime()
+	}
+	now = zeroTime(now)
+	limit := s.recoveryBatch
+	if len(limits) > 0 && limits[0] > 0 {
+		limit = limits[0]
+	}
+	items, err := s.store.List(beads.ListQuery{Label: requestLabel, IncludeClosed: true, AllowScan: true})
+	if err != nil {
+		return nil, fmt.Errorf("list abandoned external coordination requests: %w", err)
+	}
+	results := make([]RecoveryResult, 0, limit)
+	for _, item := range items {
+		if len(results) >= limit {
+			break
+		}
+		record, decodeErr := decodeRecord(item)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		if record.State != StateRunning {
+			continue
+		}
+		lease := record.claimExpiresAt
+		if lease.IsZero() && !record.ClaimedAt.IsZero() {
+			lease = record.ClaimedAt.Add(s.claimLease)
+		}
+		requestExpired := !record.Request.ExpiresAt.After(now)
+		if !requestExpired && (lease.IsZero() || lease.After(now)) {
+			continue
+		}
+
+		state := StateUncertain
+		status := "in_progress"
+		metadata := map[string]string{
+			metadataState:            string(StateUncertain),
+			metadataUncertaintyClass: "claim_lease_expired",
+			metadataError:            "worker claim lease expired; remote acceptance requires reconciliation",
+			metadataClaimExpiresAt:   "",
+			metadataClaimedBy:        "",
+			metadataClaimedAt:        "",
+			metadataDelivered:        now.UTC().Format(time.RFC3339Nano),
+		}
+		action := RecoveryActionMarkedUncertain
+		if requestExpired {
+			state = StateExpired
+			status = "closed"
+			metadata[metadataState] = string(StateExpired)
+			metadata[metadataOutcome] = string(ResponseOutcomeExpired)
+			metadata[metadataError] = "request expired while claim was abandoned"
+			metadata[metadataDelivered] = now.UTC().Format(time.RFC3339Nano)
+			action = RecoveryActionExpired
+		}
+		if err := s.updateRecordIfMatch(record, status, metadata, "abandoned recovery"); err != nil {
+			if beads.IsPreconditionFailed(err) {
+				current, readErr := s.getAt(ctx, record.ID, now)
+				if readErr != nil {
+					return results, fmt.Errorf("re-read abandoned request %s after conflict: %w", record.ID, readErr)
+				}
+				if current.State != StateRunning {
+					continue
+				}
+			}
+			return results, fmt.Errorf("recover abandoned external coordination request %s: %w", record.ID, err)
+		}
+		updated, err := s.store.Get(record.ID)
+		if err != nil {
+			return results, fmt.Errorf("read recovered external coordination request %s: %w", record.ID, err)
+		}
+		updatedRecord, err := decodeRecord(updated)
+		if err != nil {
+			return results, err
+		}
+		if updatedRecord.State != state {
+			return results, fmt.Errorf("recover external coordination request %s: durable state %s, want %s", record.ID, updatedRecord.State, state)
+		}
+		results = append(results, RecoveryResult{Record: updatedRecord, Action: action})
+	}
+	return results, nil
+}
+
+// MarkUncertain records that a delivery attempt may have reached its target.
+// The original request identity remains durable, but the request is not
+// claimable again until a provider-aware owner reconciles that identity.
+func (s *Service) MarkUncertain(ctx context.Context, id, uncertaintyClass string, now time.Time) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	if now.IsZero() {
+		now = s.nowTime()
+	}
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
+	if err != nil {
+		return err
+	}
+	if record.State == StateUncertain {
+		return nil
+	}
+	if record.State != StateRunning {
+		return fmt.Errorf("%w: %s is %s", ErrNotQueued, id, record.State)
+	}
+	uncertaintyClass = sanitizeFailureClass(uncertaintyClass)
+	errText := "delivery outcome is ambiguous; reconcile before retry"
+	if uncertaintyClass != "delivery failure" {
+		errText = uncertaintyClass
+	}
+	err = s.updateRecordIfMatch(record, "in_progress", map[string]string{
+		metadataState:            string(StateUncertain),
+		metadataError:            errText,
+		metadataUncertaintyClass: uncertaintyClass,
+		metadataClaimExpiresAt:   "",
+		metadataClaimedBy:        "",
+		metadataClaimedAt:        "",
+		metadataDelivered:        now.UTC().Format(time.RFC3339Nano),
+	}, "ambiguous delivery")
+	if err == nil {
+		return nil
+	}
+	if beads.IsPreconditionFailed(err) {
+		current, readErr := s.getAt(ctx, id, now)
+		if readErr != nil {
+			return fmt.Errorf("re-read ambiguous external coordination request %s after conflict: %w", id, readErr)
+		}
+		switch current.State {
+		case StateUncertain, StateCompleted, StateExpired, StateFailed, StateCancelled:
+			return nil
+		}
+		return fmt.Errorf("%w: ambiguous delivery for %s changed to %s", ErrNotQueued, id, current.State)
+	}
+	return fmt.Errorf("mark external coordination request %s uncertain: %w", id, err)
+}
+
 // Fail records a failed delivery while keeping the request durable for
 // inspection and an explicit retry policy.
 func (s *Service) Fail(ctx context.Context, id string, cause error, now time.Time) error {
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	if _, err := s.Get(ctx, id); err != nil {
+	if now.IsZero() {
+		now = s.nowTime()
+	}
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
+	if err != nil {
 		return err
 	}
 	message := "delivery failed"
 	if cause != nil {
 		message = cause.Error()
 	}
-	return s.setState(id, StateFailed, zeroTime(now), message)
+	if err := s.updateRecordIfMatch(record, "closed", map[string]string{
+		metadataState:          string(StateFailed),
+		metadataError:          sanitizeFailureClass(message),
+		metadataDelivered:      now.UTC().Format(time.RFC3339Nano),
+		metadataClaimExpiresAt: "",
+		metadataClaimedBy:      "",
+		metadataClaimedAt:      "",
+	}, "failure"); err != nil {
+		return fmt.Errorf("fail external coordination request %s: %w", id, err)
+	}
+	return nil
 }
 
 // Requeue returns a claimed request to the queue after a retryable delivery
@@ -405,17 +687,69 @@ func (s *Service) Fail(ctx context.Context, id string, cause error, now time.Tim
 // attempt counter is NOT rewound: the try happened and the causal record keeps
 // saying so.
 func (s *Service) Requeue(ctx context.Context, id string, cause error, now time.Time) error {
+	_, err := s.requeueWithClass(ctx, id, cause, "unavailable", now)
+	return err
+}
+
+func (s *Service) requeueWithClass(ctx context.Context, id string, cause error, failureClass string, now time.Time) (time.Duration, error) {
 	if err := checkContext(ctx); err != nil {
-		return err
+		return 0, err
 	}
-	if _, err := s.Get(ctx, id); err != nil {
-		return err
+	if now.IsZero() {
+		now = s.nowTime()
+	}
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
+	if err != nil {
+		return 0, err
+	}
+	if record.State == StateUncertain {
+		return 0, fmt.Errorf("%w: %s must be reconciled before retry", ErrAmbiguousDelivery, id)
+	}
+	if record.State != StateRunning {
+		return 0, fmt.Errorf("%w: %s is %s", ErrNotQueued, id, record.State)
 	}
 	message := "delivery deferred"
 	if cause != nil {
-		message = cause.Error()
+		message = sanitizeFailureClass(cause.Error())
 	}
-	return s.setState(id, StateQueued, zeroTime(now), message)
+	if record.Attempt >= s.maxAttempts {
+		if err := s.updateRecordIfMatch(record, "closed", map[string]string{
+			metadataState:     string(StateFailed),
+			metadataError:     "maximum delivery attempts exhausted",
+			metadataDelivered: now.UTC().Format(time.RFC3339Nano),
+		}, "retry limit"); err != nil {
+			return 0, fmt.Errorf("exhaust external coordination retries %s: %w", id, err)
+		}
+		return 0, fmt.Errorf("%w: %s exceeded maximum attempts", ErrNotQueued, id)
+	}
+	delay := s.retryAfter(record.Attempt, failureClass)
+	next := now.Add(delay)
+	if !record.Request.ExpiresAt.After(next) {
+		if err := s.updateRecordIfMatch(record, "closed", map[string]string{
+			metadataState:     string(StateExpired),
+			metadataOutcome:   string(ResponseOutcomeExpired),
+			metadataError:     "request expired before retry",
+			metadataDelivered: now.UTC().Format(time.RFC3339Nano),
+		}, "retry expiry"); err != nil {
+			return 0, fmt.Errorf("expire external coordination retry %s: %w", id, err)
+		}
+		return 0, ErrExpired
+	}
+	status := "open"
+	if err := s.updateRecordIfMatch(record, status, map[string]string{
+		metadataState:            string(StateQueued),
+		metadataError:            message,
+		metadataRetryAt:          next.UTC().Format(time.RFC3339Nano),
+		metadataRetryClass:       sanitizeFailureClass(failureClass),
+		metadataClaimExpiresAt:   "",
+		metadataClaimedBy:        "",
+		metadataClaimedAt:        "",
+		metadataUncertaintyClass: "",
+	}, "requeue"); err != nil {
+		return 0, fmt.Errorf("requeue external coordination request %s: %w", id, err)
+	}
+	return delay, nil
 }
 
 // Cancel terminally cancels a request. It never deletes the causal record.
@@ -423,27 +757,23 @@ func (s *Service) Cancel(ctx context.Context, id string, now time.Time) error {
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	if _, err := s.Get(ctx, id); err != nil {
+	if now.IsZero() {
+		now = s.nowTime()
+	}
+	now = zeroTime(now)
+	record, err := s.getAt(ctx, id, now)
+	if err != nil {
 		return err
 	}
 	status := "closed"
-	return s.store.Update(id, beads.UpdateOpts{Status: &status, Metadata: map[string]string{
-		metadataState:     string(StateCancelled),
-		metadataError:     "cancelled by operator", //nolint:misspell // public wire spelling
-		metadataDelivered: zeroTime(now).UTC().Format(time.RFC3339Nano),
-	}})
-}
-
-func (s *Service) setState(id string, state DeliveryState, now time.Time, message string) error {
-	status := "open"
-	if state == StateExpired || state == StateCancelled || state == StateCompleted {
-		status = "closed"
-	}
-	return s.store.Update(id, beads.UpdateOpts{Status: &status, Metadata: map[string]string{
-		metadataState:     string(state),
-		metadataError:     message,
-		metadataDelivered: zeroTime(now).UTC().Format(time.RFC3339Nano),
-	}})
+	return s.updateRecordIfMatch(record, status, map[string]string{
+		metadataState:          string(StateCancelled),
+		metadataError:          "cancelled by operator", //nolint:misspell // public wire spelling
+		metadataDelivered:      zeroTime(now).UTC().Format(time.RFC3339Nano),
+		metadataClaimExpiresAt: "",
+		metadataClaimedBy:      "",
+		metadataClaimedAt:      "",
+	}, "cancel")
 }
 
 func normalizeRequest(input RequestInput) (Request, error) {
@@ -533,6 +863,10 @@ func decodeRecord(item beads.Bead) (RequestRecord, error) {
 		revision:             item.Revision,
 		responseCommitment:   item.Metadata[metadataResponseCommitment],
 		responseScrubPending: item.Metadata[metadataResponseScrubPending] == "true",
+		outcome:              ResponseOutcome(item.Metadata[metadataOutcome]),
+		claimExpiresAt:       parseTime(item.Metadata[metadataClaimExpiresAt]),
+		retryAt:              parseTime(item.Metadata[metadataRetryAt]),
+		uncertaintyClass:     item.Metadata[metadataUncertaintyClass],
 	}, nil
 }
 
@@ -560,6 +894,60 @@ func checkContext(ctx context.Context) error {
 func zeroTime(value time.Time) time.Time {
 	if value.IsZero() {
 		return time.Now().UTC()
+	}
+	return value
+}
+
+func (s *Service) retryAfter(attempt int, failureClass string) time.Duration {
+	base, maximum := s.retryBase, s.retryMax
+	if base <= 0 {
+		base = defaultRetryBase
+	}
+	if maximum < base {
+		maximum = defaultRetryMax
+		if maximum < base {
+			maximum = base
+		}
+	}
+	if attempt < 1 {
+		attempt = 1
+	}
+	failureClass = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(failureClass), "-", "_"))
+	if failureClass == "rate_limited" || failureClass == "timeout" {
+		if base <= maximum/2 {
+			base *= 2
+		} else {
+			base = maximum
+		}
+	}
+	delay := base
+	for step := 1; step < attempt && delay < maximum; step++ {
+		if delay > maximum/2 {
+			delay = maximum
+			break
+		}
+		delay *= 2
+	}
+	if delay > maximum {
+		return maximum
+	}
+	return delay
+}
+
+func sanitizeFailureClass(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	if value == "" {
+		return "delivery failure"
+	}
+	if len(value) > maxFailureClassLength {
+		return value[:maxFailureClassLength]
 	}
 	return value
 }
