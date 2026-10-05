@@ -77,6 +77,77 @@ type errLocker struct {
 func (l errLocker) Lock() error   { return l.lockErr }
 func (l errLocker) Unlock() error { return l.unlockErr }
 
+// TestFileStoreIDPrefix pins the multi-rig collision contract: a file store
+// opened with an explicit prefix mints under that prefix while the default
+// remains gc-N for callers that do not provide one.
+func TestFileStoreIDPrefix(t *testing.T) {
+	open := func(opts ...beads.FileStoreOption) *beads.FileStore {
+		path := filepath.Join(t.TempDir(), "beads.json")
+		store, err := beads.OpenFileStore(fsys.OSFS{}, path, opts...)
+		if err != nil {
+			t.Fatalf("OpenFileStore: %v", err)
+		}
+		return store
+	}
+
+	defaultStore := open()
+	defaultBead, err := defaultStore.Create(beads.Bead{Title: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaultBead.ID != "gc-1" {
+		t.Errorf("default prefix: got %q, want gc-1", defaultBead.ID)
+	}
+
+	rig0 := open(beads.WithFileStoreIDPrefix("r0"))
+	rig1 := open(beads.WithFileStoreIDPrefix("r1"))
+	bead0, err := rig0.Create(beads.Bead{Title: "rig 0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bead1, err := rig1.Create(beads.Bead{Title: "rig 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bead0.ID != "r0-1" || bead1.ID != "r1-1" {
+		t.Errorf("prefixed IDs = %q, %q; want r0-1 and r1-1", bead0.ID, bead1.ID)
+	}
+	if bead0.ID == bead1.ID {
+		t.Fatalf("distinct rig stores still collide on %q", bead0.ID)
+	}
+}
+
+// TestFileStoreIDPrefixOnExistingStore pins that prefix configuration applies
+// when an existing file is reopened: old IDs remain readable and the next ID
+// uses the configured scope prefix.
+func TestFileStoreIDPrefixOnExistingStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "beads.json")
+	initial, err := beads.OpenFileStore(fsys.OSFS{}, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if _, err := initial.Create(beads.Bead{Title: "old"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reopened, err := beads.OpenFileStore(fsys.OSFS{}, path, beads.WithFileStoreIDPrefix("r0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := reopened.Create(beads.Bead{Title: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.ID != "r0-4" {
+		t.Errorf("reopened store minted %q, want r0-4", next.ID)
+	}
+	if _, err := reopened.Get("gc-1"); err != nil {
+		t.Errorf("pre-existing gc-1 became unreadable: %v", err)
+	}
+}
+
 func TestFileStore(t *testing.T) {
 	factory := func() beads.Store {
 		path := filepath.Join(t.TempDir(), "beads.json")
