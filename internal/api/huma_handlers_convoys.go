@@ -10,6 +10,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
+	"github.com/gastownhall/gascity/internal/convoycallback"
 	"github.com/gastownhall/gascity/internal/sourceworkflow"
 )
 
@@ -221,7 +222,7 @@ func (s *Server) humaHandleConvoyGet(_ context.Context, input *ConvoyGetInput) (
 
 // humaHandleConvoyCreate is the Huma-typed handler for POST /v0/convoys.
 // Title required via struct tag on ConvoyCreateInput.
-func (s *Server) humaHandleConvoyCreate(_ context.Context, input *ConvoyCreateInput) (*IndexOutput[beads.Bead], error) {
+func (s *Server) humaHandleConvoyCreate(ctx context.Context, input *ConvoyCreateInput) (*IndexOutput[beads.Bead], error) {
 	// Idempotency: create at most once per Idempotency-Key. Item validation,
 	// the convoy bead create, and the link loop (with its rollback) all live in
 	// the closure so a failed create releases the reservation for retry.
@@ -265,6 +266,7 @@ func (s *Server) humaHandleConvoyCreate(_ context.Context, input *ConvoyCreateIn
 	if err != nil {
 		return nil, err
 	}
+	s.deliverConvoyLifecycleCallback(ctx, s.findStore(input.Body.Rig), convoy, convoycallback.EventConvoyCreated)
 
 	return &IndexOutput[beads.Bead]{
 		Index: s.latestIndex(),
@@ -462,7 +464,7 @@ func (s *Server) humaHandleConvoyCheck(_ context.Context, input *ConvoyCheckInpu
 }
 
 // humaHandleConvoyClose is the Huma-typed handler for POST /v0/convoy/{id}/close.
-func (s *Server) humaHandleConvoyClose(_ context.Context, input *ConvoyCloseInput) (*OKResponse, error) {
+func (s *Server) humaHandleConvoyClose(ctx context.Context, input *ConvoyCloseInput) (*OKResponse, error) {
 	id := input.ID
 	stores := s.state.BeadStores()
 
@@ -485,9 +487,10 @@ func (s *Server) humaHandleConvoyClose(_ context.Context, input *ConvoyCloseInpu
 			}
 			return nil, apierr.Internal.Msg(err.Error())
 		}
-		if err := convoycore.ConvoyClose(convoycore.ConvoyDeps{}, store, id); err != nil {
+		if err := convoycore.ConvoyClose(convoycore.ConvoyDeps{Recorder: s.state.EventProvider()}, store, id); err != nil {
 			return nil, apierr.Internal.Msg(err.Error())
 		}
+		s.deliverConvoyLifecycleCallback(ctx, store, b, convoycallback.EventConvoyClosed)
 		resp := &OKResponse{}
 		resp.Body.Status = "closed"
 		return resp, nil
