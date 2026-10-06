@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/pathutil"
 )
 
 // CodexQuotaProvider is the provider identity attached to Codex quota
@@ -76,12 +78,14 @@ type codexRateLimitWindow struct {
 // ExtractCodexTailQuotaFromSearchPaths reads quota evidence only from the
 // already-resolved managed Codex rollout at path. The path must be contained
 // by one of searchPaths and its rollout filename must carry context.SessionID;
-// this function does not discover other sessions or inspect credentials.
+// this function does not discover other sessions or inspect credentials. It
+// scans only the bounded tail window: a nil observation means no usable
+// snapshot was present in that window, not that older evidence is absent.
 func ExtractCodexTailQuotaFromSearchPaths(searchPaths []string, path string, context CodexQuotaContext) (*CodexQuotaObservation, error) {
 	if err := validateCodexQuotaContext(context); err != nil {
 		return nil, err
 	}
-	safePath, err := validateSearchPathFile(mergeCodexSearchPaths(searchPaths), path)
+	safePath, err := validateCodexQuotaSearchPathFile(mergeCodexSearchPaths(searchPaths), path)
 	if err != nil {
 		return nil, err
 	}
@@ -92,10 +96,31 @@ func ExtractCodexTailQuotaFromSearchPaths(searchPaths []string, path string, con
 	if !ok {
 		return nil, fmt.Errorf("resolved Codex rollout %q is missing valid session metadata", safePath)
 	}
-	if context.WorkDir != "" && candidate.WorkDir != context.WorkDir {
+	if context.WorkDir != "" && !pathutil.SamePath(candidate.WorkDir, context.WorkDir) {
 		return nil, fmt.Errorf("resolved Codex rollout %q does not match workdir %q", safePath, context.WorkDir)
 	}
 	return extractCodexTailQuota(safePath, context)
+}
+
+func validateCodexQuotaSearchPathFile(searchPaths []string, path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("empty session log path")
+	}
+	cleanPath, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", fmt.Errorf("resolving session log path: %w", err)
+	}
+	for _, root := range searchPaths {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		cleanRoot, err := filepath.Abs(filepath.Clean(root))
+		if err != nil || pathutil.SamePath(cleanRoot, cleanPath) || !pathutil.PathWithin(cleanRoot, cleanPath) {
+			continue
+		}
+		return cleanPath, nil
+	}
+	return "", fmt.Errorf("session log path is outside configured search paths")
 }
 
 func validateCodexQuotaContext(context CodexQuotaContext) error {
@@ -136,9 +161,8 @@ func extractCodexTailQuota(path string, context CodexQuotaContext) (*CodexQuotaO
 		}
 		switch entry.Type {
 		case "turn_context":
-			if payload.Model != "" {
-				model = payload.Model
-			}
+			model = payload.Model
+			effort = ""
 			if payload.Effort != "" {
 				effort = payload.Effort
 			} else if payload.ReasoningEffort != "" {
