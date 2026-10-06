@@ -123,22 +123,9 @@ func (store *Store) RecordExecutionLaunchAttempt(auth ExecutionSessionAuthorizat
 	}
 	var result ExecutionLaunchReceipt
 	err := store.db.Update(func(tx *bbolt.Tx) error {
-		if err := validateExecutionAuthorization(tx, auth); err != nil {
-			return err
-		}
-		sessions := tx.Bucket(bucketExecutionSessions)
-		if sessions == nil {
-			return ErrAuthorizationRequired
-		}
 		data, err := json.Marshal(auth)
 		if err != nil {
 			return err
-		}
-		if !bytes.Equal(sessions.Get([]byte(auth.SessionID)), data) {
-			successors := tx.Bucket(bucketExecutionSuccessors)
-			if successors == nil || !bytes.Equal(successors.Get(executionIncarnationKey(auth)), data) {
-				return ErrAuthorizationRequired
-			}
 		}
 		hash := sha256.Sum256(append(append([]byte("gascity.execution-launch.v3\x00"), data...), []byte("\x00"+attemptID)...))
 		id := "execution_" + hex.EncodeToString(hash[:])
@@ -150,7 +137,20 @@ func (store *Store) RecordExecutionLaunchAttempt(auth ExecutionSessionAuthorizat
 			if json.Unmarshal(prior, &result) != nil {
 				return ErrStoreCorrupt
 			}
-			return recordExecutionLaunchDeliveryTx(tx, result)
+			return nil
+		}
+		if err := validateExecutionAuthorization(tx, auth); err != nil {
+			return err
+		}
+		sessions := tx.Bucket(bucketExecutionSessions)
+		if sessions == nil {
+			return ErrAuthorizationRequired
+		}
+		if !bytes.Equal(sessions.Get([]byte(auth.SessionID)), data) {
+			successors := tx.Bucket(bucketExecutionSuccessors)
+			if successors == nil || !bytes.Equal(successors.Get(executionIncarnationKey(auth)), data) {
+				return ErrAuthorizationRequired
+			}
 		}
 		if err := checkExecutionIncarnationHead(tx, auth); err != nil {
 			return err
@@ -170,9 +170,12 @@ func (store *Store) RecordExecutionLaunchAttempt(auth ExecutionSessionAuthorizat
 		if err := launches.Put([]byte(id), encoded); err != nil {
 			return err
 		}
-		return recordExecutionLaunchDeliveryTx(tx, result)
+		return nil
 	})
-	return result, err
+	if err != nil {
+		return result, err
+	}
+	return result, store.recordExecutionLaunchDelivery(result)
 }
 
 // ExecutionLaunches reads durable runtime-start receipts for an exact decision.

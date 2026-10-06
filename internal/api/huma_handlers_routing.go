@@ -129,7 +129,7 @@ func (s *Server) humaHandleRoutingDeliveryAck(ctx context.Context, input *Routin
 	if err != nil {
 		switch {
 		case errors.Is(err, routingdecision.ErrDeliveryInvalid):
-			return nil, apierr.RoutingDecisionInvalid.Msg("routing delivery acknowledgement is malformed")
+			return nil, apierr.InvalidRequest.Msg("routing delivery acknowledgement is malformed")
 		case errors.Is(err, routingdecision.ErrDeliveryNotFound):
 			return nil, apierr.RoutingDeliveryNotFound.Msg("routing delivery item not found")
 		case errors.Is(err, routingdecision.ErrDeliveryAckConflict), errors.Is(err, routingdecision.ErrDeliveryConflict):

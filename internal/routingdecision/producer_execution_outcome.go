@@ -82,9 +82,9 @@ func ProjectProducerExecutionOutcome(item DecisionWithAudits, launches []Executi
 		row.ActualTargetID = optionalOutcomeOpaque(latest.Authorization.Execution.Target)
 		actualDigest := "sha256:" + latest.Authorization.Execution.ConfigDigest
 		row.ActualConfigDigest = &actualDigest
-		if latest.StartedAt.Unix() > row.ObservedAtUnix {
-			row.ObservedAtUnix = latest.StartedAt.Unix()
-		}
+		// Launch evidence is immutable. Do not let later lifecycle audits change
+		// the serialized outcome when a failed projection is retried.
+		row.ObservedAtUnix = latest.StartedAt.Unix()
 	}
 	// Reuse the existing confined opaque/digest redaction rules for wire strings.
 	for _, value := range []string{row.CorrelationID, row.RecommendationID, row.WorkID, row.RequestedTargetID, row.Provenance} {
