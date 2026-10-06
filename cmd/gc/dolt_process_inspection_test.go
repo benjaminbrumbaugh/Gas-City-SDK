@@ -72,14 +72,13 @@ func TestProcessCWDFromLsofParsesNameRecord(t *testing.T) {
 	if err := os.WriteFile(lsofPath, []byte("#!/bin/sh\nprintf 'p123\\nfcwd\\nn/private/var/folders/example/.beads/dolt\\n'\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile(lsof): %v", err)
 	}
-	t.Setenv("PATH", strings.Join([]string{binDir, os.Getenv("PATH")}, string(os.PathListSeparator)))
 
-	cwd, ok := processCWDFromLsof(123)
+	cwd, ok := processCWDFromLsofCommand(lsofPath, 123)
 	if !ok {
-		t.Fatal("processCWDFromLsof did not find cwd")
+		t.Fatal("processCWDFromLsofCommand did not find cwd")
 	}
 	if !samePath(cwd, "/var/folders/example/.beads/dolt") {
-		t.Fatalf("processCWDFromLsof = %q, want path equivalent to /var/folders/example/.beads/dolt", cwd)
+		t.Fatalf("processCWDFromLsofCommand = %q, want path equivalent to /var/folders/example/.beads/dolt", cwd)
 	}
 }
 

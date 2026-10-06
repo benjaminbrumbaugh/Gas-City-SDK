@@ -236,16 +236,21 @@ func normalizeLsofReportedPath(path string) string {
 }
 
 func processCWDFromLsof(pid int) (string, bool) {
-	if _, err := exec.LookPath("lsof"); err != nil {
+	command, err := exec.LookPath("lsof")
+	if err != nil {
 		return "", false
 	}
-	out, err := lsofOutput("-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn")
+	return processCWDFromLsofCommand(command, pid)
+}
+
+func processCWDFromLsofCommand(command string, pid int) (string, bool) {
+	out, err := lsofOutputWithCommand(lsofCommandTimeout, command, "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn")
 	if err == nil {
 		if cwd, ok := cwdFromFormattedLsofOutput(string(out)); ok {
 			return cwd, true
 		}
 	}
-	out, err = lsofOutput("-a", "-p", strconv.Itoa(pid), "-d", "cwd")
+	out, err = lsofOutputWithCommand(lsofCommandTimeout, command, "-a", "-p", strconv.Itoa(pid), "-d", "cwd")
 	if err != nil {
 		return "", false
 	}
@@ -338,9 +343,13 @@ func lsofOutput(args ...string) ([]byte, error) {
 // callers can distinguish a truncated listing from a complete one; whatever lsof
 // buffered before the kill is still returned alongside it.
 func lsofOutputWithTimeout(timeout time.Duration, args ...string) ([]byte, error) {
+	return lsofOutputWithCommand(timeout, "lsof", args...)
+}
+
+func lsofOutputWithCommand(timeout time.Duration, command string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "lsof", args...)
+	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.WaitDelay = 100 * time.Millisecond
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
