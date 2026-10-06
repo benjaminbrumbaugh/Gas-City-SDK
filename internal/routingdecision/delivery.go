@@ -31,6 +31,9 @@ var (
 	// ErrDeliveryAckConflict classifies an acknowledgement bound to a different
 	// payload digest than the durable item.
 	ErrDeliveryAckConflict = errors.New("routing outcome delivery acknowledgement conflict")
+	// ErrDeliveryProjection classifies a delivery projection that could not be
+	// materialized after its causal lifecycle fact was durably committed.
+	ErrDeliveryProjection = errors.New("routing outcome delivery projection failed")
 )
 
 // DeliveryItem is an immutable SDK-authored outcome payload awaiting transport
@@ -179,6 +182,47 @@ func recordExecutionLaunchDeliveryTx(tx *bbolt.Tx, receipt ExecutionLaunchReceip
 		return ErrStoreCorrupt
 	}
 	return recordDeliveryTx(tx, itemToStore, encoded, sourceKey)
+}
+
+func (store *Store) recordExecutionLaunchDelivery(receipt ExecutionLaunchReceipt) error {
+	err := store.db.Update(func(tx *bbolt.Tx) error {
+		return recordExecutionLaunchDeliveryTx(tx, receipt)
+	})
+	if errors.Is(err, ErrStoreCorrupt) || errors.Is(err, ErrDecisionNotFound) {
+		return classifyStoreError(err)
+	}
+	if err != nil {
+		return classifyStoreError(fmt.Errorf("%w: %w", ErrDeliveryProjection, err))
+	}
+	return nil
+}
+
+func (store *Store) recordNonAdmissionDelivery(decisionID string) error {
+	err := store.db.Update(func(tx *bbolt.Tx) error {
+		value := tx.Bucket(bucketDecisions).Get([]byte(decisionID))
+		if value == nil {
+			return ErrDecisionNotFound
+		}
+		var record Record
+		if err := decodeRecord(value, &record); err != nil {
+			return err
+		}
+		if !IsTerminalState(record.State) {
+			return nil
+		}
+		audit, err := latestAudit(tx, record)
+		if err != nil {
+			return err
+		}
+		return recordNonAdmissionDeliveryTx(tx, record, audit)
+	})
+	if errors.Is(err, ErrStoreCorrupt) || errors.Is(err, ErrDecisionNotFound) {
+		return classifyStoreError(err)
+	}
+	if err != nil {
+		return classifyStoreError(fmt.Errorf("%w: %w", ErrDeliveryProjection, err))
+	}
+	return nil
 }
 
 func recordNonAdmissionDeliveryTx(tx *bbolt.Tx, record Record, audit TransitionAudit) error {

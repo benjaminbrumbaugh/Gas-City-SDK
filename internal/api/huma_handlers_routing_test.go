@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,23 @@ type routingTestState struct {
 	targets    []routingdecision.TargetSnapshot
 	selection  routingdecision.SelectionSnapshot
 	localCalls int
+}
+
+type routingDeliveryErrorState struct {
+	*routingTestState
+	pendingErr error
+	ackErr     error
+}
+
+func (s *routingDeliveryErrorState) RoutingDeliveryPending(_ context.Context, _ routingdecision.DeliveryListOptions) (routingdecision.DeliveryPage, error) {
+	if s.pendingErr != nil {
+		return routingdecision.DeliveryPage{}, s.pendingErr
+	}
+	return routingdecision.DeliveryPage{}, nil
+}
+
+func (s *routingDeliveryErrorState) RoutingDeliveryAck(_ context.Context, _ routingdecision.DeliveryAckRequest) (routingdecision.DeliveryAckResult, error) {
+	return routingdecision.DeliveryAckResult{}, s.ackErr
 }
 
 func (s *routingTestState) RoutingDecisionStatus() routingdecision.LiveStatus {
@@ -575,6 +593,82 @@ func TestRoutingWireErrorsUseStableProblemCodes(t *testing.T) {
 	unavailable.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v0/city/test-city/routing/status", nil))
 	if rec.Code != http.StatusServiceUnavailable || decodeRoutingProblem(t, rec).Code != "routing-unavailable" {
 		t.Fatalf("missing routing capability = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRoutingDeliveryBoundaryErrorsUseStableStatuses(t *testing.T) {
+	now := time.Now().UTC().Round(0)
+	base, _ := newRoutingTestState(t, now)
+	writePublic, writePrivate := mustKeypair(t)
+	ackBody := routingdecision.DeliveryAckRequest{
+		DeliveryID:    "delivery-1",
+		PayloadSHA256: "sha256:" + strings.Repeat("a", 64),
+	}
+	encoded, err := json.Marshal(ackBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := cityURL(base, "/routing/delivery/ack")
+	grantSource := signingGrantSource(writePrivate, base.CityName())
+	newHandler := func(state State) http.Handler {
+		return NewSupervisorMux(&stateCityResolver{state: state}, nil, false, "test", "", now).
+			WithAllowedHosts([]string{"example.com"}).WithWriteAuth(realClockVerifier(t, writePublic)).Handler()
+	}
+	ack := func(t *testing.T, state State) *httptest.ResponseRecorder {
+		t.Helper()
+		binding := GrantBinding{
+			Method: http.MethodPost, Path: path,
+			BodySHA256: func() string {
+				sum := sha256.Sum256(encoded)
+				return hex.EncodeToString(sum[:])
+			}(),
+			ReqDigest: citywriteauth.ReqDigest(http.MethodPost, path, "", encoded),
+		}
+		token, err := grantSource(binding)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := newPostRequest(path, bytes.NewReader(encoded))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-GC-City-Write", token)
+		req.RemoteAddr = "127.0.0.1:9000"
+		rec := httptest.NewRecorder()
+		newHandler(state).ServeHTTP(rec, req)
+		return rec
+	}
+
+	pendingUnavailable := &routingDeliveryErrorState{routingTestState: base, pendingErr: errors.New("delivery store offline")}
+	pendingUnavailableResponse := newHandler(pendingUnavailable)
+	pendingUnavailableRec := httptest.NewRecorder()
+	pendingUnavailableResponse.ServeHTTP(pendingUnavailableRec, httptest.NewRequest(http.MethodGet, cityURL(pendingUnavailable, "/routing/delivery/pending?limit=1"), nil))
+	if pendingUnavailableRec.Code != http.StatusServiceUnavailable || decodeRoutingProblem(t, pendingUnavailableRec).Code != "routing-unavailable" {
+		t.Fatalf("pending unavailable = %d: %s", pendingUnavailableRec.Code, pendingUnavailableRec.Body.String())
+	}
+
+	pendingInvalidCursorRec := httptest.NewRecorder()
+	newHandler(base).ServeHTTP(pendingInvalidCursorRec, httptest.NewRequest(http.MethodGet, cityURL(base, "/routing/delivery/pending?limit=1&cursor=not-a-cursor"), nil))
+	if pendingInvalidCursorRec.Code != http.StatusBadRequest || decodeRoutingProblem(t, pendingInvalidCursorRec).Code != "invalid-cursor" {
+		t.Fatalf("pending invalid cursor = %d: %s", pendingInvalidCursorRec.Code, pendingInvalidCursorRec.Body.String())
+	}
+
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{name: "invalid", err: routingdecision.ErrDeliveryInvalid, status: http.StatusBadRequest, code: "invalid-request"},
+		{name: "not found", err: routingdecision.ErrDeliveryNotFound, status: http.StatusNotFound, code: "routing-delivery-not-found"},
+		{name: "conflict", err: routingdecision.ErrDeliveryAckConflict, status: http.StatusConflict, code: "routing-idempotency-conflict"},
+		{name: "unavailable", err: errors.New("delivery store offline"), status: http.StatusServiceUnavailable, code: "routing-unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := &routingDeliveryErrorState{routingTestState: base, ackErr: tc.err}
+			rec := ack(t, state)
+			if rec.Code != tc.status || decodeRoutingProblem(t, rec).Code != tc.code {
+				t.Fatalf("ack %s = %d: %s", tc.name, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

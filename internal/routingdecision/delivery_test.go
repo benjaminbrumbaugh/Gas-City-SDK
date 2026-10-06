@@ -125,6 +125,15 @@ func TestTerminalTransitionsPersistSchemaPreservingDelivery(t *testing.T) {
 			if err != nil || len(page.Items) != 1 || page.Items[0].OutcomeSchemaVersion != "routing/outcome/"+schema {
 				t.Fatalf("terminal delivery = %+v, err=%v", page, err)
 			}
+			exact := append([]byte(nil), page.Items[0].Payload...)
+			purged, err := store.PurgeTerminal(PurgeOptions{Now: time.Unix(1_700_000_000, 0).UTC().AddDate(1, 0, 0), Limit: 10})
+			if err != nil || purged.Deleted != 1 {
+				t.Fatalf("purge terminal decision = %+v, err=%v", purged, err)
+			}
+			afterPurge, err := store.ListPendingDeliveries(DeliveryListOptions{Limit: 10})
+			if err != nil || len(afterPurge.Items) != 1 || string(afterPurge.Items[0].Payload) != string(exact) {
+				t.Fatalf("historical delivery after purge = %+v, err=%v", afterPurge, err)
+			}
 		})
 	}
 }

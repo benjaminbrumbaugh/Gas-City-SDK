@@ -57,22 +57,26 @@ var (
 )
 
 var (
-	bucketMeta              = []byte("meta")
-	bucketDecisions         = []byte("decisions")
-	bucketStateExpiry       = []byte("state_expiry")
-	bucketStateCounts       = []byte("state_counts")
-	bucketIdempotency       = []byte("idempotency")
-	bucketReceiptByDecision = []byte("receipt_by_decision")
-	bucketTransitions       = []byte("transitions")
-	bucketImports           = []byte("imports")
-	bucketPurgedDecisions   = []byte("purged_decisions")
-	bucketDeliveryItems     = []byte("delivery_items_v1")
-	bucketDeliveryAcks      = []byte("delivery_acks_v1")
-	bucketDeliverySource    = []byte("delivery_source_v1")
-	keySchemaVersion        = []byte("schema_version")
-	keyStoreRevision        = []byte("store_revision")
-	keyReceiptIndexFloor    = []byte("receipt_index_floor_revision")
-	requiredBucketNames     = [][]byte{
+	bucketMeta                = []byte("meta")
+	bucketDecisions           = []byte("decisions")
+	bucketStateExpiry         = []byte("state_expiry")
+	bucketStateCounts         = []byte("state_counts")
+	bucketIdempotency         = []byte("idempotency")
+	bucketReceiptByDecision   = []byte("receipt_by_decision")
+	bucketTransitions         = []byte("transitions")
+	bucketImports             = []byte("imports")
+	bucketPurgedDecisions     = []byte("purged_decisions")
+	bucketDeliveryItems       = []byte("delivery_items_v1")
+	bucketDeliveryAcks        = []byte("delivery_acks_v1")
+	bucketDeliverySource      = []byte("delivery_source_v1")
+	keySchemaVersion          = []byte("schema_version")
+	keyStoreRevision          = []byte("store_revision")
+	keyReceiptIndexFloor      = []byte("receipt_index_floor_revision")
+	legacyRequiredBucketNames = [][]byte{
+		bucketMeta, bucketDecisions, bucketStateExpiry, bucketStateCounts, bucketIdempotency, bucketReceiptByDecision,
+		bucketTransitions, bucketImports, bucketPurgedDecisions,
+	}
+	requiredBucketNames = [][]byte{
 		bucketMeta, bucketDecisions, bucketStateExpiry, bucketStateCounts, bucketIdempotency, bucketReceiptByDecision,
 		bucketTransitions, bucketImports, bucketPurgedDecisions, bucketDeliveryItems, bucketDeliveryAcks, bucketDeliverySource,
 	}
@@ -709,14 +713,14 @@ func (store *Store) FinalAdmission(request FinalAdmissionRequest, verifier Verif
 		if err := putAudit(tx, audit); err != nil {
 			return err
 		}
-		if err := recordNonAdmissionDeliveryTx(tx, record, audit); err != nil {
-			return err
-		}
 		receipt = TransitionReceipt{DecisionID: record.Payload.DecisionID, State: record.State, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
 		idempotency := idempotencyRecord{Kind: "admission", Fingerprint: fingerprint, DecisionID: record.Payload.DecisionID, Transition: &receipt}
 		return putIdempotency(tx, request.IdempotencyToken, idempotency)
 	})
-	return receipt, classifyStoreError(err)
+	if err != nil {
+		return receipt, classifyStoreError(err)
+	}
+	return receipt, store.recordNonAdmissionDelivery(receipt.DecisionID)
 }
 
 // OpenStore opens or creates the fixed 0600 ledger with a bounded lock wait.
@@ -979,9 +983,6 @@ func (store *Store) AdmitLocal(payload DecisionPayload, token string, callback f
 		if err := putAudit(tx, audit); err != nil {
 			return err
 		}
-		if err := recordNonAdmissionDeliveryTx(tx, record, audit); err != nil {
-			return err
-		}
 		receipt := TransitionReceipt{DecisionID: payload.DecisionID, State: record.State, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
 		if err := putIdempotency(tx, token, idempotencyRecord{Kind: "local-admission", Fingerprint: fingerprint, DecisionID: payload.DecisionID, Transition: &receipt}); err != nil {
 			return err
@@ -989,7 +990,13 @@ func (store *Store) AdmitLocal(payload DecisionPayload, token string, callback f
 		result = LocalAdmissionResult{Record: record, Receipt: receipt}
 		return nil
 	})
-	return result, classifyStoreError(err)
+	if err != nil {
+		return result, classifyStoreError(err)
+	}
+	if result.Record.State == StateRefusedAfterRace || result.Record.State == StateExpired || result.Record.State == StateRevoked {
+		return result, store.recordNonAdmissionDelivery(result.Record.Payload.DecisionID)
+	}
+	return result, nil
 }
 
 // Get returns one decision by exact ID.
@@ -1013,7 +1020,13 @@ func (store *Store) Transition(request TransitionRequest, verifier Verifier) (Tr
 		receipt, err = store.transitionTx(tx, request, verifier)
 		return err
 	})
-	return receipt, classifyStoreError(err)
+	if err != nil {
+		return receipt, classifyStoreError(err)
+	}
+	if IsTerminalState(receipt.State) {
+		return receipt, store.recordNonAdmissionDelivery(receipt.DecisionID)
+	}
+	return receipt, nil
 }
 
 func (store *Store) transitionTx(tx *bbolt.Tx, request TransitionRequest, verifier Verifier) (TransitionReceipt, error) {
@@ -1080,9 +1093,6 @@ func (store *Store) transitionTx(tx *bbolt.Tx, request TransitionRequest, verifi
 	}
 	audit := TransitionAudit{DecisionID: record.Payload.DecisionID, From: request.From, To: request.To, At: store.now().UTC(), Reason: request.Reason, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
 	if err := putAudit(tx, audit); err != nil {
-		return TransitionReceipt{}, err
-	}
-	if err := recordNonAdmissionDeliveryTx(tx, record, audit); err != nil {
 		return TransitionReceipt{}, err
 	}
 	receipt := TransitionReceipt{DecisionID: record.Payload.DecisionID, State: record.State, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
@@ -1167,9 +1177,17 @@ func (store *Store) ExpireDue(now time.Time, limit int, tokenFor func(string) st
 		return 0, classifyStoreError(err)
 	}
 	expired := 0
+	var projectionErr error
 	for _, candidate := range candidates {
 		_, err := store.Transition(TransitionRequest{DecisionID: candidate.id, ExpectedRevision: candidate.revision, From: candidate.state, To: StateExpired, IdempotencyToken: tokenFor(candidate.id), Reason: "validity window elapsed"}, Verifier{})
 		if errors.Is(err, ErrStaleRevision) || errors.Is(err, ErrInvalidTransition) {
+			continue
+		}
+		if errors.Is(err, ErrDeliveryProjection) {
+			expired++
+			if projectionErr == nil {
+				projectionErr = err
+			}
 			continue
 		}
 		if err != nil {
@@ -1177,7 +1195,7 @@ func (store *Store) ExpireDue(now time.Time, limit int, tokenFor func(string) st
 		}
 		expired++
 	}
-	return expired, nil
+	return expired, projectionErr
 }
 
 func ingestFingerprint(payload DecisionPayload, approval ApprovalPayload, signature Signature) (string, error) {
@@ -1537,7 +1555,7 @@ func classifyStoreError(err error) error {
 	if err == nil {
 		return nil
 	}
-	for _, sentinel := range []error{ErrStoreLocked, ErrUnsupportedSchema, ErrStoreCorrupt, ErrDecisionNotFound, ErrDecisionExists, ErrStaleRevision, ErrInvalidTransition, ErrIdempotencyConflict, ErrAdmissionCallback, ErrAdmissionCommit, ErrInvalidDecision, ErrStoredDecisionInvalid, ErrAuthorizationRequired, ErrUnknownAuthority, ErrInvalidSignature, ErrDeliveryInvalid, ErrDeliveryConflict, ErrDeliveryNotFound, ErrDeliveryAckConflict} {
+	for _, sentinel := range []error{ErrStoreLocked, ErrUnsupportedSchema, ErrStoreCorrupt, ErrDecisionNotFound, ErrDecisionExists, ErrStaleRevision, ErrInvalidTransition, ErrIdempotencyConflict, ErrAdmissionCallback, ErrAdmissionCommit, ErrInvalidDecision, ErrStoredDecisionInvalid, ErrAuthorizationRequired, ErrUnknownAuthority, ErrInvalidSignature, ErrDeliveryInvalid, ErrDeliveryConflict, ErrDeliveryNotFound, ErrDeliveryAckConflict, ErrDeliveryProjection} {
 		if errors.Is(err, sentinel) {
 			return err
 		}
