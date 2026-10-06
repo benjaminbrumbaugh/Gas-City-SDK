@@ -27,7 +27,9 @@
 # arithmetic (clean division, the real
 # ga-04m84s repro numbers, job-count-exceeds-outer-jobs, the trivial 1x1
 # case, the GC_TEST_INNER_P override, a malformed GC_TEST_INNER_P failing by
-# name), and the test-local-parallel wiring described above.
+# name), the test-local-parallel wiring described above, and the cache-boundary
+# regression. The cache regression is a shell fixture because adding an
+# os/exec call to a Go test would change the checked resource census.
 
 set -uo pipefail
 
@@ -192,6 +194,27 @@ assert_true "inner_p.malformed_override_nonzero_exit" test "$MALFORMED_INNER_RC"
 assert_contains "inner_p.malformed_override_names_var" "$MALFORMED_INNER_OUT" "GC_TEST_INNER_P"
 
 # ============================================================
+# Part C — local parallel Go-cache process boundary
+# ============================================================
+
+# The cache fixture launches test-local-parallel recursively with a fake go.
+# The guard is propagated through the runner's env -i allowlist so the nested
+# invocation exercises all ordinary jobs without recursively launching this
+# fixture again.
+if [[ "${GC_TEST_LOCAL_PARALLEL_CACHE_SELFTEST:-}" != "1" ]]; then
+    CACHE_OUT="$("$TEST_DIR/test-local-parallel-cache.sh" 2>&1)"
+    CACHE_RC=$?
+    if [[ "$CACHE_RC" -eq 0 ]]; then
+        record_pass "cache.private_build_cache_survives_shared_clean"
+    else
+        printf '%s\n' "$CACHE_OUT"
+        record_fail "cache.private_build_cache_survives_shared_clean" "cache fixture exited $CACHE_RC"
+    fi
+else
+    echo "  skip cache.private_build_cache_survives_shared_clean — nested fixture invocation"
+fi
+
+# ============================================================
 # Static wiring assertions against scripts/test-local-parallel
 # ============================================================
 
@@ -199,6 +222,7 @@ assert_true "wiring.sources_inner_parallelism_lib" grep -q 'lib/inner-parallelis
 assert_true "wiring.calls_gc_inner_parallelism"     grep -q 'gc_inner_parallelism'     "$LOCAL_PARALLEL"
 assert_true "wiring.exports_goflags_dash_p"         grep -qE 'GOFLAGS=.*-p='           "$LOCAL_PARALLEL"
 assert_true "wiring.usage_mentions_inner_p_seam"    grep -q 'GC_TEST_INNER_P'          "$LOCAL_PARALLEL"
+assert_true "wiring.cache_fixture_guard_env"         grep -q 'GC_TEST_LOCAL_PARALLEL_CACHE_SELFTEST' "$LOCAL_PARALLEL"
 
 echo_line="$(grep -n '^echo "Running' "$LOCAL_PARALLEL" | head -1 | cut -d: -f1)"
 if [[ -n "$echo_line" ]]; then
