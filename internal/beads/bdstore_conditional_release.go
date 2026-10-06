@@ -3,9 +3,10 @@ package beads
 import (
 	"errors"
 	"fmt"
-	"github.com/gastownhall/gascity/internal/beadmeta"
 	"os/exec"
 	"strings"
+
+	"github.com/gastownhall/gascity/internal/beadmeta"
 )
 
 // This file consumes bd's native conditional-release verb, which is what the
