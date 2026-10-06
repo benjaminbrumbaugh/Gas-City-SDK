@@ -25,8 +25,8 @@ func (cr *CityRuntime) reconcileRecoveryResponder(ctx context.Context, now time.
 	cfg := cr.cfg.RecoveryResponder
 	advisor, advisorErr := recoveryAdvisorForConfig(cr.cityPath, cfg, cr.cfg)
 	if advisorErr != nil {
-		// Advisory failure is fail-open by design: configured target order remains
-		// the deterministic recovery path.
+		// Keep the configured advisory path present so the worker holds rather
+		// than guessing from target order when setup is unavailable.
 		fmt.Fprintf(cr.stderr, "%s: recovery responder: Wayfinder advisory disabled: %v\n", cr.logPrefix, advisorErr) //nolint:errcheck
 	}
 	responder := worker.NewRecoveryResponder(
@@ -54,11 +54,12 @@ func recoveryAdvisorForConfig(cityPath string, cfg *config.RecoveryResponderConf
 	}
 	accountRefs := installedRecoveryAccountRefs(cityCfg)
 	if len(accountRefs) == 0 {
-		return nil, fmt.Errorf("no configured Wayfinder account resolves to a same-named installed executable")
+		err := fmt.Errorf("no configured Wayfinder account resolves to a same-named installed executable")
+		return unavailableRecoveryAdvisor{err: err}, err
 	}
 	_, _, _, err := recoveryWayfinderRequestCandidate(cityPath, cfg.WayfinderRequestFile)
 	if err != nil {
-		return nil, err
+		return unavailableRecoveryAdvisor{err: err}, err
 	}
 	return fileRecoveryAdvisor{
 		baseURL:               cfg.WayfinderURL,
@@ -66,6 +67,23 @@ func recoveryAdvisorForConfig(cityPath string, cfg *config.RecoveryResponderConf
 		configuredRequestPath: cfg.WayfinderRequestFile,
 		accountRefs:           accountRefs,
 	}, nil
+}
+
+// unavailableRecoveryAdvisor keeps an explicitly configured but unusable
+// advisory path fail-closed. Configured target order is reserved for the
+// deliberate no-advisor policy, not for a failed advisory dependency.
+type unavailableRecoveryAdvisor struct {
+	err error
+}
+
+func (a unavailableRecoveryAdvisor) Recommend(ctx context.Context, _ worker.RecoveryRequest) (worker.RecoveryAdvice, error) {
+	if err := ctx.Err(); err != nil {
+		return worker.RecoveryAdvice{Outcome: worker.RecoveryAdviceUnavailable}, err
+	}
+	if a.err != nil {
+		return worker.RecoveryAdvice{Outcome: worker.RecoveryAdviceUnavailable}, a.err
+	}
+	return worker.RecoveryAdvice{Outcome: worker.RecoveryAdviceUnavailable}, fmt.Errorf("recovery advisor is unavailable")
 }
 
 // installedRecoveryAccountRefs admits only explicit catalog identities backed
@@ -107,31 +125,31 @@ type fileRecoveryAdvisor struct {
 	accountRefs           []string
 }
 
-func (a fileRecoveryAdvisor) Recommend(ctx context.Context, request worker.RecoveryRequest) (string, error) {
+func (a fileRecoveryAdvisor) Recommend(ctx context.Context, request worker.RecoveryRequest) (worker.RecoveryAdvice, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return worker.RecoveryAdvice{Outcome: worker.RecoveryAdviceUnavailable}, err
 	}
 	root, requestPath, raw, err := recoveryWayfinderRequestCandidate(a.cityPath, a.configuredRequestPath)
 	if err != nil {
-		return "", err
+		return worker.RecoveryAdvice{Outcome: worker.RecoveryAdviceUnavailable}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return worker.RecoveryAdvice{Outcome: worker.RecoveryAdviceUnavailable}, err
 	}
 	relativePath, err := filepath.Rel(root, requestPath)
 	if err != nil {
-		return "", fmt.Errorf("relativize Wayfinder request template %q: %w", raw, err)
+		return worker.RecoveryAdvice{Outcome: worker.RecoveryAdviceUnavailable}, fmt.Errorf("relativize Wayfinder request template %q: %w", raw, err)
 	}
 	template, err := readRecoveryWayfinderTemplateAt(root, relativePath)
 	if err != nil {
-		return "", fmt.Errorf("read Wayfinder request template %q: %w", raw, err)
+		return worker.RecoveryAdvice{Outcome: worker.RecoveryAdviceUnavailable}, fmt.Errorf("read Wayfinder request template %q: %w", raw, err)
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return worker.RecoveryAdvice{Outcome: worker.RecoveryAdviceUnavailable}, err
 	}
 	advisor, err := worker.NewWayfinderRecoveryAdvisor(a.baseURL, template, a.accountRefs)
 	if err != nil {
-		return "", err
+		return worker.RecoveryAdvice{Outcome: worker.RecoveryAdviceUnavailable}, err
 	}
 	return advisor.Recommend(ctx, request)
 }

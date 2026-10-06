@@ -89,8 +89,8 @@ func TestWayfinderRecoveryAdvisorSubmitsCanonicalBoundRoutingV3Request(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target != "rig/second" {
-		t.Fatalf("target = %q", target)
+	if target.Outcome != RecoveryAdviceSelected || target.Target != "rig/second" {
+		t.Fatalf("advice = %+v", target)
 	}
 
 	want, err := decodeWayfinderEvaluateTemplate(template)
@@ -166,8 +166,8 @@ func TestWayfinderRecoveryAdvisorNarrowsCandidatesTargetsAndEvidenceTogether(t *
 		CorrelationID: "incident-1",
 		Now:           time.Unix(150, 0),
 		Targets:       []string{"rig/first", "rig/unconfigured"},
-	}); err != nil || target != "rig/first" {
-		t.Fatalf("Recommend() = %q, %v", target, err)
+	}); err != nil || target.Outcome != RecoveryAdviceSelected || target.Target != "rig/first" {
+		t.Fatalf("Recommend() = %+v, %v", target, err)
 	}
 }
 
@@ -826,8 +826,8 @@ func TestWayfinderRecoveryAdvisorAcceptsCrossDomainEvidenceIDCollision(t *testin
 		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(encodedResult))}, nil
 	})
 	advisor.now = func() time.Time { return time.Unix(151, 0) }
-	if got, err := advisor.Recommend(context.Background(), recoveryRequest()); err != nil || got != "rig/first" {
-		t.Fatalf("Recommend() = %q, %v; want rig/first with colliding cross-domain IDs", got, err)
+	if got, err := advisor.Recommend(context.Background(), recoveryRequest()); err != nil || got.Outcome != RecoveryAdviceSelected || got.Target != "rig/first" {
+		t.Fatalf("Recommend() = %+v, %v; want selected rig/first with colliding cross-domain IDs", got, err)
 	}
 }
 
@@ -1025,8 +1025,8 @@ func TestWayfinderRecoveryAdvisorAcceptsLiteralProducerResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target != result.Recommendation.ExecutionTarget.TargetID {
-		t.Fatalf("target = %q, want %q", target, result.Recommendation.ExecutionTarget.TargetID)
+	if target.Outcome != RecoveryAdviceSelected || target.Target != result.Recommendation.ExecutionTarget.TargetID {
+		t.Fatalf("advice = %+v, want selected %q", target, result.Recommendation.ExecutionTarget.TargetID)
 	}
 }
 

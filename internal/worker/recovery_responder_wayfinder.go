@@ -411,26 +411,26 @@ func NewWayfinderRecoveryAdvisor(baseURL string, template []byte, allowedAccount
 
 // Recommend submits the canonical operator packet after narrowing it to
 // configured, not-yet-attempted recovery targets. Callers own lifecycle actions.
-func (a *WayfinderRecoveryAdvisor) Recommend(ctx context.Context, request RecoveryRequest) (string, error) {
+func (a *WayfinderRecoveryAdvisor) Recommend(ctx context.Context, request RecoveryRequest) (RecoveryAdvice, error) {
 	if a == nil || a.endpoint == "" || a.client == nil || a.now == nil {
-		return "", fmt.Errorf("wayfinder endpoint is unavailable")
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("wayfinder endpoint is unavailable")
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, err
 	}
 	correlationID := strings.TrimSpace(request.CorrelationID)
 	if !wayfinderSafeString(correlationID) || request.Now.IsZero() {
-		return "", fmt.Errorf("wayfinder recovery request requires a safe correlation id and current time")
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("wayfinder recovery request requires a safe correlation id and current time")
 	}
 	if len(request.Targets) > maximumWayfinderRecords {
-		return "", fmt.Errorf("wayfinder recovery request exceeds %d targets", maximumWayfinderRecords)
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("wayfinder recovery request exceeds %d targets", maximumWayfinderRecords)
 	}
 	remaining := uniqueRecoveryTargets(request.Targets)
 	if len(remaining) == 0 || !wayfinderUniqueSafe(remaining) {
-		return "", fmt.Errorf("wayfinder recovery request has no safe remaining targets")
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("wayfinder recovery request has no safe remaining targets")
 	}
 	if len(remaining) > maximumWayfinderRecords {
-		return "", fmt.Errorf("wayfinder recovery request exceeds %d remaining targets", maximumWayfinderRecords)
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("wayfinder recovery request exceeds %d remaining targets", maximumWayfinderRecords)
 	}
 	remainingSet := make(map[string]struct{}, len(remaining))
 	for _, target := range remaining {
@@ -439,7 +439,7 @@ func (a *WayfinderRecoveryAdvisor) Recommend(ctx context.Context, request Recove
 
 	packet, err := cloneWayfinderRequest(a.template)
 	if err != nil {
-		return "", fmt.Errorf("clone wayfinder routing/v3 request: %w", err)
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("clone wayfinder routing/v3 request: %w", err)
 	}
 	packet.CorrelationID = correlationID
 	packet.NowUnix = request.Now.Unix()
@@ -450,26 +450,26 @@ func (a *WayfinderRecoveryAdvisor) Recommend(ctx context.Context, request Recove
 		}
 	}
 	if len(packet.Candidates) == 0 {
-		return "", fmt.Errorf("wayfinder request template has no candidate for remaining recovery targets")
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("wayfinder request template has no candidate for remaining recovery targets")
 	}
 	narrowWayfinderRequest(&packet, remaining)
 	if err := validateWayfinderRequest(&packet); err != nil {
-		return "", fmt.Errorf("build wayfinder routing/v3 request: %w", err)
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("build wayfinder routing/v3 request: %w", err)
 	}
 	if err := validateWayfinderAccountRefs(packet, a.allowedAccountRefs); err != nil {
-		return "", fmt.Errorf("build Wayfinder account identity: %w", err)
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("build Wayfinder account identity: %w", err)
 	}
 	canonicalizeWayfinderRequest(&packet)
 	body, err := json.Marshal(packet)
 	if err != nil {
-		return "", fmt.Errorf("encode wayfinder routing/v3 request: %w", err)
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("encode wayfinder routing/v3 request: %w", err)
 	}
 	if len(body) > maximumWayfinderPacketBytes {
-		return "", fmt.Errorf("wayfinder routing/v3 request exceeds %d bytes", maximumWayfinderPacketBytes)
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("wayfinder routing/v3 request exceeds %d bytes", maximumWayfinderPacketBytes)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("build wayfinder routing/v3 request: %w", err)
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("build wayfinder routing/v3 request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -477,58 +477,58 @@ func (a *WayfinderRecoveryAdvisor) Recommend(ctx context.Context, request Recove
 	response, err := a.client.Do(req)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
-			return "", contextErr
+			return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, contextErr
 		}
-		return "", fmt.Errorf("call wayfinder routing/v3 evaluate: %w", err)
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("call wayfinder routing/v3 evaluate: %w", err)
 	}
 	if contextErr := ctx.Err(); contextErr != nil {
 		_ = response.Body.Close()
-		return "", contextErr
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, contextErr
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
 		closeErr := response.Body.Close()
 		if contextErr := ctx.Err(); contextErr != nil {
-			return "", contextErr
+			return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, contextErr
 		}
 		if readErr != nil || closeErr != nil {
-			return "", wayfinderResponseIOError("read error response", readErr, closeErr)
+			return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, wayfinderResponseIOError("read error response", readErr, closeErr)
 		}
-		return "", fmt.Errorf("wayfinder routing/v3 evaluate returned %s", response.Status)
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("wayfinder routing/v3 evaluate returned %s", response.Status)
 	}
 	responseBody, readErr := readBoundedWayfinderPacket(response.Body)
 	closeErr := response.Body.Close()
 	if contextErr := ctx.Err(); contextErr != nil {
-		return "", contextErr
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, contextErr
 	}
 	if readErr != nil || closeErr != nil {
-		return "", wayfinderResponseIOError("read response", readErr, closeErr)
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, wayfinderResponseIOError("read response", readErr, closeErr)
 	}
 	var result wayfinderEvaluateResult
 	if err := decodeSingleJSON(responseBody, &result); err != nil {
-		return "", fmt.Errorf("decode wayfinder routing/v3 response: %w", err)
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("decode wayfinder routing/v3 response: %w", err)
 	}
 	if contextErr := ctx.Err(); contextErr != nil {
-		return "", contextErr
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, contextErr
 	}
 	if err := validateWayfinderResponseAccountRefs(result, a.allowedAccountRefs); err != nil {
-		return "", err
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, err
 	}
-	validationErr := validateWayfinderResult(result, packet, remainingSet)
+	advice, validationErr := classifyWayfinderResult(result, packet, remainingSet)
 	if contextErr := ctx.Err(); contextErr != nil {
-		return "", contextErr
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, contextErr
 	}
 	if validationErr != nil {
-		return "", validationErr
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, validationErr
 	}
 	postResponseNow := a.now().Unix()
 	if contextErr := ctx.Err(); contextErr != nil {
-		return "", contextErr
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, contextErr
 	}
 	if result.ExpiresAtUnix <= postResponseNow || result.Reevaluation.ReevaluateAtUnix <= postResponseNow {
-		return "", fmt.Errorf("wayfinder response fresh advisory validity window expired")
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, fmt.Errorf("wayfinder response fresh advisory validity window expired")
 	}
-	return result.Recommendation.ExecutionTarget.TargetID, nil
+	return advice, nil
 }
 
 func narrowWayfinderRequest(request *wayfinderEvaluateRequest, remainingTargets []string) {
@@ -943,32 +943,40 @@ func validateWayfinderCapacity(capacity wayfinderCapacity) error {
 }
 
 func validateWayfinderResult(result wayfinderEvaluateResult, request wayfinderEvaluateRequest, remaining map[string]struct{}) error {
+	_, err := classifyWayfinderResult(result, request, remaining)
+	return err
+}
+
+func classifyWayfinderResult(result wayfinderEvaluateResult, request wayfinderEvaluateRequest, remaining map[string]struct{}) (RecoveryAdvice, error) {
 	if result.SchemaVersion != "routing/v3" || result.CorrelationID != request.CorrelationID || !reflect.DeepEqual(result.Request, request) {
-		return fmt.Errorf("wayfinder response does not echo the exact canonical request")
+		return RecoveryAdvice{}, fmt.Errorf("wayfinder response does not echo the exact canonical request")
 	}
 	expectedFingerprints := wayfinderRequestFingerprints(request)
 	if !reflect.DeepEqual(result.Fingerprints, expectedFingerprints) || result.DecisionID != wayfinderDecisionID(expectedFingerprints) || result.PolicyVersion != request.PolicyVersion || result.IssuedAtUnix != request.NowUnix {
-		return fmt.Errorf("wayfinder response is not bound to the submitted request, policy, and fingerprints")
+		return RecoveryAdvice{}, fmt.Errorf("wayfinder response is not bound to the submitted request, policy, and fingerprints")
 	}
 	if result.ExpiresAtUnix < result.IssuedAtUnix || !result.Reevaluation.RequiresNewRequest || result.Reevaluation.ReevaluateAtUnix < result.IssuedAtUnix {
-		return fmt.Errorf("wayfinder response identity or fresh advisory validity window is invalid")
+		return RecoveryAdvice{}, fmt.Errorf("wayfinder response identity or fresh advisory validity window is invalid")
 	}
-	if result.Disposition != "selected" || result.Recommendation == nil || result.ExpiresAtUnix <= result.IssuedAtUnix || result.Reevaluation.Reason != "evidence_expiry" {
-		return fmt.Errorf("wayfinder response has no selected recommendation")
+	if result.Disposition != "selected" && result.Disposition != "no_eligible" {
+		return RecoveryAdvice{}, fmt.Errorf("wayfinder response has unknown disposition %q", result.Disposition)
+	}
+	if result.ExpiresAtUnix <= result.IssuedAtUnix || result.Reevaluation.Reason != "evidence_expiry" {
+		return RecoveryAdvice{}, fmt.Errorf("wayfinder response has no fresh advisory disposition")
 	}
 	if len(result.Candidates) != len(request.Candidates) {
-		return fmt.Errorf("wayfinder response does not bind every submitted candidate")
+		return RecoveryAdvice{}, fmt.Errorf("wayfinder response does not bind every submitted candidate")
 	}
 	selected := -1
 	evidenceExpiry := int64(0)
 	for i, disposition := range result.Candidates {
 		candidate := request.Candidates[i]
 		if disposition.CandidateID != candidate.CandidateID || !reflect.DeepEqual(disposition.Model, candidate.Model) || !reflect.DeepEqual(disposition.ExecutionTarget, candidate.ExecutionTarget) || !wayfinderOneOf(disposition.Disposition, "selected", "eligible_not_selected", "rejected") || len(disposition.GateResults) == 0 {
-			return fmt.Errorf("wayfinder candidate disposition is not bound to submitted candidate %q", candidate.CandidateID)
+			return RecoveryAdvice{}, fmt.Errorf("wayfinder candidate disposition is not bound to submitted candidate %q", candidate.CandidateID)
 		}
 		expectedEvidence := wayfinderExpectedEvidenceRefs(request, candidate)
 		if err := validateWayfinderDisposition(disposition, expectedEvidence); err != nil {
-			return fmt.Errorf("invalid wayfinder candidate disposition: %w", err)
+			return RecoveryAdvice{}, fmt.Errorf("invalid wayfinder candidate disposition: %w", err)
 		}
 		for _, evidence := range expectedEvidence {
 			if evidenceExpiry == 0 || evidence.ExpiresAtUnix < evidenceExpiry {
@@ -977,41 +985,47 @@ func validateWayfinderResult(result wayfinderEvaluateResult, request wayfinderEv
 		}
 		if disposition.Disposition == "selected" {
 			if selected >= 0 {
-				return fmt.Errorf("wayfinder response selects more than one candidate")
+				return RecoveryAdvice{}, fmt.Errorf("wayfinder response selects more than one candidate")
 			}
 			selected = i
 		}
 	}
-	if selected < 0 {
-		return fmt.Errorf("wayfinder response has no selected candidate disposition")
-	}
 	if evidenceExpiry == 0 || result.ExpiresAtUnix > evidenceExpiry || result.Reevaluation.ReevaluateAtUnix > result.ExpiresAtUnix {
-		return fmt.Errorf("wayfinder response validity is not bounded by submitted evidence")
+		return RecoveryAdvice{}, fmt.Errorf("wayfinder response validity is not bounded by submitted evidence")
+	}
+	if result.Disposition == "no_eligible" {
+		if result.Recommendation != nil || selected >= 0 {
+			return RecoveryAdvice{}, fmt.Errorf("wayfinder no-eligible response contains a selected recommendation")
+		}
+		return RecoveryAdvice{Outcome: RecoveryAdviceNoEligible}, nil
+	}
+	if result.Recommendation == nil || selected < 0 {
+		return RecoveryAdvice{}, fmt.Errorf("wayfinder response has no selected recommendation")
 	}
 	candidate := request.Candidates[selected]
 	disposition := result.Candidates[selected]
 	recommendation := result.Recommendation
 	if err := validateWayfinderSelectedEligibility(request, candidate, disposition); err != nil {
-		return fmt.Errorf("wayfinder selected candidate is not eligible: %w", err)
+		return RecoveryAdvice{}, fmt.Errorf("wayfinder selected candidate is not eligible: %w", err)
 	}
 	wantModel := wayfinderSelectedModel{CanonicalModel: candidate.Model.CanonicalModel, ServeAs: candidate.Model.ServeAs, ReasoningEffort: candidate.Model.ReasoningEffort}
 	wantTarget := wayfinderSelectedTarget{TargetID: candidate.ExecutionTarget.TargetID, ConfigDigest: candidate.ExecutionTarget.ConfigDigest, AdapterID: candidate.ExecutionTarget.AdapterID, AdapterDigest: candidate.ExecutionTarget.AdapterDigest}
 	if recommendation.CandidateID != candidate.CandidateID || !reflect.DeepEqual(recommendation.Model, wantModel) || !reflect.DeepEqual(recommendation.ExecutionTarget, wantTarget) || disposition.RankComponents == nil || !reflect.DeepEqual(recommendation.RankComponents, *disposition.RankComponents) {
-		return fmt.Errorf("wayfinder recommendation does not match the selected submitted candidate")
+		return RecoveryAdvice{}, fmt.Errorf("wayfinder recommendation does not match the selected submitted candidate")
 	}
 	matchedProvider := request.Preferences.PreferredProviderID != nil && *request.Preferences.PreferredProviderID == candidate.ExecutionTarget.ProviderID
 	matchedModel := request.Preferences.PreferredModelID != nil && *request.Preferences.PreferredModelID == candidate.Model.CanonicalModel
 	if recommendation.RankComponents.MatchedPreferredProvider != matchedProvider || recommendation.RankComponents.MatchedPreferredModel != matchedModel {
-		return fmt.Errorf("wayfinder recommendation preference matches are not bound to the submitted request")
+		return RecoveryAdvice{}, fmt.Errorf("wayfinder recommendation preference matches are not bound to the submitted request")
 	}
 	if _, ok := remaining[recommendation.ExecutionTarget.TargetID]; !ok {
-		return fmt.Errorf("wayfinder selected target %q outside remaining recovery targets", recommendation.ExecutionTarget.TargetID)
+		return RecoveryAdvice{}, fmt.Errorf("wayfinder selected target %q outside remaining recovery targets", recommendation.ExecutionTarget.TargetID)
 	}
 	entitlement, ok := wayfinderEntitlementFor(request.Entitlements, candidate.EntitlementRef)
 	if !ok || recommendation.BillingMode != entitlement.BillingMode || !wayfinderOneOf(recommendation.BillingMode, "subscription", "prepaid", "pay_as_you_go", "allocation") {
-		return fmt.Errorf("wayfinder recommendation billing mode is not bound to candidate entitlement")
+		return RecoveryAdvice{}, fmt.Errorf("wayfinder recommendation billing mode is not bound to candidate entitlement")
 	}
-	return nil
+	return RecoveryAdvice{Outcome: RecoveryAdviceSelected, Target: recommendation.ExecutionTarget.TargetID}, nil
 }
 
 func validateWayfinderSelectedEligibility(request wayfinderEvaluateRequest, candidate wayfinderCandidate, disposition wayfinderCandidateDisposition) error {
