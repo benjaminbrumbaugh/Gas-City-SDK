@@ -29,10 +29,29 @@ const (
 	recoveryCreationLease      = 30 * time.Second
 )
 
+// RecoveryAdviceOutcome describes the typed result of one advisory decision.
+type RecoveryAdviceOutcome string
+
+const (
+	// RecoveryAdviceSelected identifies a validated candidate selection.
+	RecoveryAdviceSelected RecoveryAdviceOutcome = "selected"
+	// RecoveryAdviceNoEligible identifies a valid decision with no eligible candidate.
+	RecoveryAdviceNoEligible RecoveryAdviceOutcome = "no_eligible"
+	// RecoveryAdviceUnavailable identifies an advisory result that cannot be used.
+	RecoveryAdviceUnavailable RecoveryAdviceOutcome = "unavailable"
+)
+
+// RecoveryAdvice is the typed result of an advisory routing decision.
+// It is advisory only: the responder validates selected targets and owns writes.
+type RecoveryAdvice struct {
+	Outcome RecoveryAdviceOutcome
+	Target  string
+}
+
 // RecoveryAdvisor may recommend one of the candidates supplied in the request.
 // It is advisory only: the responder validates its answer and owns all writes.
 type RecoveryAdvisor interface {
-	Recommend(context.Context, RecoveryRequest) (string, error)
+	Recommend(context.Context, RecoveryRequest) (RecoveryAdvice, error)
 }
 
 // RecoveryRequest identifies the remaining configured targets. The Wayfinder
@@ -370,14 +389,35 @@ func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.
 		}
 		nextAttempt = attempt + 1
 		attemptIdentity = deterministicRecoveryAttemptID(state.IncidentID, nextAttempt)
-		target = r.recommend(ctx, RecoveryRequest{
-			CorrelationID: attemptIdentity,
-			Now:           now,
-			Targets:       append([]string(nil), candidates...),
-		})
-		advised = r.options.Advisor != nil
-		if !containsRecoveryTarget(candidates, target) {
+		if r.options.Advisor == nil {
+			// An absent advisor is the explicit configured-order GC policy. Once an
+			// advisor is configured, its unavailable or no-eligible result is a
+			// hold, not permission to guess from this list.
 			target = candidates[0]
+		} else {
+			advised = true
+			advice := r.recommend(ctx, RecoveryRequest{
+				CorrelationID: attemptIdentity,
+				Now:           now,
+				Targets:       append([]string(nil), candidates...),
+			})
+			switch advice.Outcome {
+			case RecoveryAdviceNoEligible, RecoveryAdviceUnavailable:
+				if strings.TrimSpace(advice.Target) != "" {
+					return report, advised, fmt.Errorf("recovery advisor returned %s with target %q", advice.Outcome, advice.Target)
+				}
+				return report, advised, nil
+			case RecoveryAdviceSelected:
+				target = strings.TrimSpace(advice.Target)
+				if target == "" {
+					return report, advised, errors.New("recovery advisor selected an empty target")
+				}
+			default:
+				return report, advised, fmt.Errorf("recovery advisor returned unknown outcome %q", advice.Outcome)
+			}
+			if !containsRecoveryTarget(candidates, target) {
+				return report, advised, fmt.Errorf("recovery advisor selected target %q outside remaining configured targets", target)
+			}
 		}
 		// Persist the immutable attempt tuple before the cross-store create. A
 		// successor that fences this lease must reuse this exact attempt/target,
@@ -564,31 +604,32 @@ func recoveryFenceLost(err error) bool {
 	return beads.IsPreconditionFailed(err) || errors.Is(err, session.ErrRecoveryResponderLeaseLost)
 }
 
-func (r *RecoveryResponder) recommend(ctx context.Context, request RecoveryRequest) string {
+func (r *RecoveryResponder) recommend(ctx context.Context, request RecoveryRequest) RecoveryAdvice {
 	if r.options.Advisor == nil {
-		return ""
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}
 	}
 	adviceCtx, cancel := context.WithTimeout(ctx, r.options.AdvisoryTimeout)
 	defer cancel()
 	type result struct {
-		target string
+		advice RecoveryAdvice
 		err    error
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		target, err := r.options.Advisor.Recommend(adviceCtx, request)
-		resultCh <- result{target: strings.TrimSpace(target), err: err}
+		advice, err := r.options.Advisor.Recommend(adviceCtx, request)
+		advice.Target = strings.TrimSpace(advice.Target)
+		resultCh <- result{advice: advice, err: err}
 	}()
 	select {
 	case <-adviceCtx.Done():
-		return ""
+		return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}
 	case result := <-resultCh:
 		// If completion and timeout become ready together, the deadline owns the
 		// result deterministically rather than scheduler select order.
 		if adviceCtx.Err() != nil || result.err != nil {
-			return ""
+			return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}
 		}
-		return result.target
+		return result.advice
 	}
 }
 

@@ -13,9 +13,9 @@ import (
 	"github.com/gastownhall/gascity/internal/session"
 )
 
-type recoveryAdvisorFunc func(context.Context, RecoveryRequest) (string, error)
+type recoveryAdvisorFunc func(context.Context, RecoveryRequest) (RecoveryAdvice, error)
 
-func (f recoveryAdvisorFunc) Recommend(ctx context.Context, req RecoveryRequest) (string, error) {
+func (f recoveryAdvisorFunc) Recommend(ctx context.Context, req RecoveryRequest) (RecoveryAdvice, error) {
 	return f(ctx, req)
 }
 
@@ -138,7 +138,7 @@ func TestRecoveryResponderUsesValidWayfinderRecommendationAndPersistsIncident(t 
 	store := recoveryTestStore(t, "quota_exceeded")
 	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
 	called := 0
-	advisor := recoveryAdvisorFunc(func(ctx context.Context, req RecoveryRequest) (string, error) {
+	advisor := recoveryAdvisorFunc(func(ctx context.Context, req RecoveryRequest) (RecoveryAdvice, error) {
 		called++
 		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 2100*time.Millisecond {
 			t.Errorf("advisor deadline = %v, want bounded by 2s", deadline)
@@ -149,7 +149,7 @@ func TestRecoveryResponderUsesValidWayfinderRecommendationAndPersistsIncident(t 
 		if !strings.HasPrefix(req.CorrelationID, "recovery-attempt-") {
 			t.Fatalf("correlation id = %q, want deterministic attempt identity", req.CorrelationID)
 		}
-		return "rig/second", nil
+		return RecoveryAdvice{Outcome: RecoveryAdviceSelected, Target: "rig/second"}, nil
 	})
 	responder := NewRecoveryResponder(session.NewStore(beads.SessionStore{Store: store}), store, RecoveryResponderOptions{
 		Targets: []string{"rig/first", "rig/second"}, HoldDuration: 20 * time.Minute,
@@ -208,9 +208,9 @@ func TestRecoveryResponderRunsAtMostOneAdvisoryActionPerTick(t *testing.T) {
 		{ID: "session-2", Type: session.BeadType, Status: "open", Labels: []string{session.LabelSession}, Metadata: metadata("runtime-2")},
 	}, nil)
 	calls := 0
-	advisor := recoveryAdvisorFunc(func(context.Context, RecoveryRequest) (string, error) {
+	advisor := recoveryAdvisorFunc(func(context.Context, RecoveryRequest) (RecoveryAdvice, error) {
 		calls++
-		return "rig/first", nil
+		return RecoveryAdvice{Outcome: RecoveryAdviceSelected, Target: "rig/first"}, nil
 	})
 	responder := NewRecoveryResponder(session.NewStore(beads.SessionStore{Store: store}), store, RecoveryResponderOptions{
 		Targets: []string{"rig/first"}, HoldDuration: time.Hour, Cooldown: time.Minute, Advisor: advisor,
@@ -233,14 +233,21 @@ func TestRecoveryResponderRunsAtMostOneAdvisoryActionPerTick(t *testing.T) {
 	}
 }
 
-func TestRecoveryResponderInvalidOrUnavailableAdviceFallsBackInOrder(t *testing.T) {
+func TestRecoveryResponderInvalidOrUnavailableAdviceDoesNotGuessTarget(t *testing.T) {
 	tests := []struct {
-		name    string
-		advisor RecoveryAdvisor
+		name       string
+		advisor    RecoveryAdvisor
+		wantErr    bool
+		wantWork   int
+		wantTarget string
 	}{
-		{name: "invalid", advisor: recoveryAdvisorFunc(func(context.Context, RecoveryRequest) (string, error) { return "rig/not-configured", nil })},
-		{name: "unavailable", advisor: recoveryAdvisorFunc(func(context.Context, RecoveryRequest) (string, error) { return "", errors.New("down") })},
-		{name: "nil"},
+		{name: "invalid selected target", advisor: recoveryAdvisorFunc(func(context.Context, RecoveryRequest) (RecoveryAdvice, error) {
+			return RecoveryAdvice{Outcome: RecoveryAdviceSelected, Target: "rig/not-configured"}, nil
+		}), wantErr: true},
+		{name: "unavailable", advisor: recoveryAdvisorFunc(func(context.Context, RecoveryRequest) (RecoveryAdvice, error) {
+			return RecoveryAdvice{Outcome: RecoveryAdviceUnavailable}, errors.New("down")
+		}), wantWork: 0},
+		{name: "no advisor configured", wantWork: 1, wantTarget: "rig/first"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -249,11 +256,16 @@ func TestRecoveryResponderInvalidOrUnavailableAdviceFallsBackInOrder(t *testing.
 				Targets: []string{"rig/first", "rig/second"}, HoldDuration: time.Hour,
 				AdvisoryTimeout: time.Second, Cooldown: time.Minute, MaxAttempts: 2, Advisor: tt.advisor,
 			})
-			if _, err := responder.Reconcile(context.Background(), time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)); err != nil {
-				t.Fatal(err)
+			_, err := responder.Reconcile(context.Background(), time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Reconcile error = %v, want error=%v", err, tt.wantErr)
 			}
-			if got := onlyRecoveryWork(t, store).Metadata[beadmeta.RoutedToMetadataKey]; got != "rig/first" {
-				t.Fatalf("fallback target = %q", got)
+			works := allRecoveryWork(t, store)
+			if len(works) != tt.wantWork {
+				t.Fatalf("recovery work count = %d, want %d", len(works), tt.wantWork)
+			}
+			if tt.wantTarget != "" && works[0].Metadata[beadmeta.RoutedToMetadataKey] != tt.wantTarget {
+				t.Fatalf("configured-only target = %q, want %q", works[0].Metadata[beadmeta.RoutedToMetadataKey], tt.wantTarget)
 			}
 		})
 	}
@@ -816,7 +828,7 @@ func TestRecoveryResponderLeaseTakeoverDuringDecisionCreatesOneAttempt(t *testin
 	resumeFirst := make(chan struct{})
 	var advisorCalls int
 	var advisorMu sync.Mutex
-	advisor := recoveryAdvisorFunc(func(context.Context, RecoveryRequest) (string, error) {
+	advisor := recoveryAdvisorFunc(func(context.Context, RecoveryRequest) (RecoveryAdvice, error) {
 		advisorMu.Lock()
 		advisorCalls++
 		call := advisorCalls
@@ -825,7 +837,7 @@ func TestRecoveryResponderLeaseTakeoverDuringDecisionCreatesOneAttempt(t *testin
 			close(firstAdvising)
 			<-resumeFirst
 		}
-		return "rig/first", nil
+		return RecoveryAdvice{Outcome: RecoveryAdviceSelected, Target: "rig/first"}, nil
 	})
 	options := RecoveryResponderOptions{
 		Targets: []string{"rig/first"}, HoldDuration: time.Hour,
@@ -894,12 +906,12 @@ func TestRecoveryResponderLeaseTakeoverAfterPlanReusesBoundAttemptTuple(t *testi
 		firstCreate:                make(chan struct{}), resumeFirst: make(chan struct{}),
 	}
 	advisorCalls := 0
-	advisor := recoveryAdvisorFunc(func(context.Context, RecoveryRequest) (string, error) {
+	advisor := recoveryAdvisorFunc(func(context.Context, RecoveryRequest) (RecoveryAdvice, error) {
 		advisorCalls++
 		if advisorCalls == 1 {
-			return "rig/first", nil
+			return RecoveryAdvice{Outcome: RecoveryAdviceSelected, Target: "rig/first"}, nil
 		}
-		return "rig/second", nil
+		return RecoveryAdvice{Outcome: RecoveryAdviceSelected, Target: "rig/second"}, nil
 	})
 	options := RecoveryResponderOptions{
 		Targets: []string{"rig/first", "rig/second"}, HoldDuration: time.Hour,

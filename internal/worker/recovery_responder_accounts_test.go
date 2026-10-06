@@ -113,8 +113,8 @@ func TestWayfinderRecoveryAcceptsLegitimateAccountBindings(t *testing.T) {
 				}
 				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body)), Header: make(http.Header)}, nil
 			})
-			if got, err := advisor.Recommend(context.Background(), recoveryRequest()); err != nil || got != "rig/first" {
-				t.Fatalf("Recommend = %q, %v", got, err)
+			if got, err := advisor.Recommend(context.Background(), recoveryRequest()); err != nil || got.Outcome != RecoveryAdviceSelected || got.Target != "rig/first" {
+				t.Fatalf("Recommend = %+v, %v", got, err)
 			}
 		})
 	}

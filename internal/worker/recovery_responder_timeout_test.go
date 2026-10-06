@@ -6,22 +6,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/session"
 )
 
-func TestRecoveryResponderAdvisoryTimeoutFallsBackOnceInConfiguredOrder(t *testing.T) {
+func TestRecoveryResponderAdvisoryTimeoutHoldsWithoutConfiguredFallback(t *testing.T) {
 	store := recoveryTestStore(t, "quota_exceeded")
 	started := make(chan struct{})
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	var calls atomic.Int32
-	advisor := recoveryAdvisorFunc(func(context.Context, RecoveryRequest) (string, error) {
+	advisor := recoveryAdvisorFunc(func(context.Context, RecoveryRequest) (RecoveryAdvice, error) {
 		calls.Add(1)
 		close(started)
 		<-release
-		return "rig/second", nil
+		return RecoveryAdvice{Outcome: RecoveryAdviceSelected, Target: "rig/second"}, nil
 	})
 	const advisoryTimeout = 25 * time.Millisecond
 	responder := NewRecoveryResponder(session.NewStore(beads.SessionStore{Store: store}), store, RecoveryResponderOptions{
@@ -50,8 +49,8 @@ func TestRecoveryResponderAdvisoryTimeoutFallsBackOnceInConfiguredOrder(t *testi
 		if got.err != nil {
 			t.Fatal(got.err)
 		}
-		if got.report.Created != 1 {
-			t.Fatalf("report = %+v, want one fallback work item", got.report)
+		if got.report != (RecoveryReport{}) {
+			t.Fatalf("report = %+v, want no work while advice is unavailable", got.report)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Reconcile did not return within the bounded advisory timeout")
@@ -62,8 +61,7 @@ func TestRecoveryResponderAdvisoryTimeoutFallsBackOnceInConfiguredOrder(t *testi
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("advisor calls = %d, want 1", got)
 	}
-	work := onlyRecoveryWork(t, store)
-	if got := work.Metadata[beadmeta.RecoveryTargetMetadataKey]; got != "rig/first" {
-		t.Fatalf("fallback target = %q, want first configured target", got)
+	if works := allRecoveryWork(t, store); len(works) != 0 {
+		t.Fatalf("recovery work = %+v, want no configured-order fallback", works)
 	}
 }

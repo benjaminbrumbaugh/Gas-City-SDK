@@ -102,7 +102,7 @@ func TestInstalledRecoveryAccountRefsRejectsPathCheckOnlyInstallation(t *testing
 	}
 }
 
-func TestCityRuntimeRecoveryResponderMissingAccountsFallsBack(t *testing.T) {
+func TestCityRuntimeRecoveryResponderMissingAccountsHolds(t *testing.T) {
 	store := recoveryControllerStore()
 	var stderr bytes.Buffer
 	cr := &CityRuntime{
@@ -114,12 +114,12 @@ func TestCityRuntimeRecoveryResponderMissingAccountsFallsBack(t *testing.T) {
 		stderr:              &stderr,
 	}
 	fields := cr.reconcileRecoveryResponder(context.Background(), time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC))
-	if fields["created"] != 1 || !strings.Contains(stderr.String(), "same-named installed executable") {
-		t.Fatalf("fallback fields = %#v, stderr = %q", fields, stderr.String())
+	if fields["created"] != 0 || !strings.Contains(stderr.String(), "same-named installed executable") {
+		t.Fatalf("unavailable-advisor fields = %#v, stderr = %q", fields, stderr.String())
 	}
 	works, err := store.List(beads.ListQuery{Label: worker.RecoveryWorkLabel, IncludeClosed: true})
-	if err != nil || len(works) != 1 || works[0].Metadata[beadmeta.RoutedToMetadataKey] != "rig/responder" {
-		t.Fatalf("fallback work = %+v, error = %v", works, err)
+	if err != nil || len(works) != 0 {
+		t.Fatalf("unavailable-advisor work = %+v, error = %v", works, err)
 	}
 }
 
@@ -138,23 +138,23 @@ func TestCityRuntimeRecoveryResponderLoadsContainedWayfinderTemplate(t *testing.
 		cityPath: cityPath,
 		cfg: &config.City{Providers: recoveryControllerProviders(t), RecoveryResponder: &config.RecoveryResponderConfig{
 			// The contained template is valid but has no candidate for the only
-			// configured target. This proves file-backed advisor construction and
-			// deterministic fallback without opening a listener.
+			// configured target. This proves the file-backed advisor holds instead
+			// of guessing from configured order.
 			Targets: []string{"rig/fallback"}, WayfinderURL: "http://127.0.0.1:1",
 			WayfinderRequestFile: ".gc/wayfinder-recovery.json", MaxAttempts: 1,
 		}},
 		standaloneCityStore: store, stderr: &stderr,
 	}
 	fields := cr.reconcileRecoveryResponder(context.Background(), time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC))
-	if fields["created"] != 1 || stderr.Len() != 0 {
+	if fields["created"] != 0 || stderr.Len() != 0 {
 		t.Fatalf("fields=%#v stderr=%q", fields, stderr.String())
 	}
 	works, err := store.List(beads.ListQuery{Label: worker.RecoveryWorkLabel, IncludeClosed: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(works) != 1 || works[0].Metadata[beadmeta.RoutedToMetadataKey] != "rig/fallback" {
-		t.Fatalf("malformed advisory did not fall back: %+v", works)
+	if len(works) != 0 {
+		t.Fatalf("malformed advisory guessed a target: %+v", works)
 	}
 }
 
@@ -168,7 +168,7 @@ func TestReadRecoveryWayfinderTemplateRejectsOversizedFile(t *testing.T) {
 	}
 }
 
-func TestCityRuntimeRecoveryResponderRejectsTemplateTraversalAndFallsBack(t *testing.T) {
+func TestCityRuntimeRecoveryResponderRejectsTemplateTraversalAndHolds(t *testing.T) {
 	cityPath := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.json")
 	if err := os.WriteFile(outside, []byte(`{}`), 0o600); err != nil {
@@ -189,8 +189,8 @@ func TestCityRuntimeRecoveryResponderRejectsTemplateTraversalAndFallsBack(t *tes
 		standaloneCityStore: store, stderr: &stderr,
 	}
 	fields := cr.reconcileRecoveryResponder(context.Background(), time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC))
-	if fields["created"] != 1 {
-		t.Fatalf("fallback fields = %#v", fields)
+	if fields["created"] != 0 {
+		t.Fatalf("unavailable-advisor fields = %#v", fields)
 	}
 	if !strings.Contains(stderr.String(), "outside city root") {
 		t.Fatalf("stderr = %q", stderr.String())
@@ -199,8 +199,8 @@ func TestCityRuntimeRecoveryResponderRejectsTemplateTraversalAndFallsBack(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(works) != 1 || works[0].Metadata[beadmeta.RoutedToMetadataKey] != "rig/responder" {
-		t.Fatalf("fallback work = %+v", works)
+	if len(works) != 0 {
+		t.Fatalf("unavailable-advisor guessed a target: %+v", works)
 	}
 }
 
