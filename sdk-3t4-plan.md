@@ -1,6 +1,6 @@
 # sdk-3t4 plan
 
-counter=0
+counter=3
 
 ## Initial full plan (counter 0)
 
@@ -336,3 +336,14 @@ the exact temporary-path census if mechanically required.
 
 The three passes retain all required information and converge on the same
 small boundary. Proceed with the approved execution order.
+
+## Rejection recovery pass (counter 3)
+
+The preserved implementation initially added the cache regression as a Go
+subprocess test. The refinery's full fast baseline correctly rejected that
+shape because it raised the checked resource census by one call and one file.
+The implementation itself remains valid; the regression now lives in the
+existing shell self-test boundary, launches the real parallel runner with a
+fake Go command, and leaves the ledger unchanged. The runner propagates a
+narrow guard through its child environment so nested fixture execution cannot
+recurse. Focused shell, scripts-package, and resource-census checks pass.
