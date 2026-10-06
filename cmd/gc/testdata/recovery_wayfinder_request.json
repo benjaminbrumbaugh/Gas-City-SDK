@@ -2,7 +2,6 @@
   "schema_version": "routing/v3",
   "correlation_id": "bead-42",
   "workload": {
-    "profile_source": "caller",
     "operation": "generate",
     "artifact": "code",
     "complexity": "medium",

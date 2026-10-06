@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -26,7 +27,7 @@ func TestWayfinderFingerprintsMatchCanonicalAccountFixture(t *testing.T) {
 	}
 	canonicalizeWayfinderRequest(&request)
 	want := wayfinderFingerprints{
-		Request:         "sha256:c7d0999e640bb12d9cd0ea3e52592a149111f01702eab5447632f15a8d71e586",
+		Request:         "sha256:f9fdcb1b2af41be9da6e018a9dc2c76f9eb4ba394339606085f4e2dceb6bae0a",
 		Inventory:       "sha256:dd5a1db1e58c742da7a4855b702cb6da01123480291f163f462ac9ce1971c5bc",
 		ModelAssessment: "sha256:f63fbfc6a1e858704e12a54ce386e0e9755118df62940e793a361801ebcbe14f",
 		AccountScope:    "sha256:25e698fbf67a707a66fae0c86beaf62247edfe6185e1402b7c1806473ec0bb19",
@@ -37,7 +38,7 @@ func TestWayfinderFingerprintsMatchCanonicalAccountFixture(t *testing.T) {
 	if got := wayfinderRequestFingerprints(request); !reflect.DeepEqual(got, want) {
 		t.Fatalf("fingerprints = %+v, want canonical account fixture %+v", got, want)
 	}
-	if got := wayfinderDecisionID(want); got != "routing/v3:b25651106515cb0c2817f2a03db39b984b02634304d2e852c59eabb10f72d9e4" {
+	if got := wayfinderDecisionID(want); got != "routing/v3:68d59d398f00ab466894023bbc3ac677236dfa196ea3d577e9cae3ad7eede6b3" {
 		t.Fatalf("decision id = %q", got)
 	}
 }
@@ -500,7 +501,8 @@ func TestWayfinderRecoveryAdvisorRejectsDuplicateAndCaseVariantKeys(t *testing.T
 	templates := []string{
 		strings.Replace(valid, `"schema_version":"routing/v3"`, `"schema_version":"routing/v3","schema_version":"routing/v3"`, 1),
 		strings.Replace(valid, `"schema_version":"routing/v3"`, `"SchemaVersion":"routing/v3","schema_version":"routing/v3"`, 1),
-		strings.Replace(valid, `"profile_source":"caller"`, `"profile_source":"caller","Profile_Source":"caller"`, 1),
+		strings.Replace(valid, `"operation":"execute"`, `"profile_source":"caller","operation":"execute"`, 1),
+		strings.Replace(valid, `"operation":"execute"`, `"operation":"execute","Operation":"execute"`, 1),
 	}
 	for _, template := range templates {
 		if _, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", []byte(template), testWayfinderAccountRefs()); err == nil {
@@ -552,12 +554,10 @@ func TestWayfinderRecoveryAdvisorVerifiesRoutingV3Bindings(t *testing.T) {
 			result.Recommendation.ExecutionTarget.AdapterDigest = wayfinderDigest("other-adapter")
 		}},
 		{name: "fabricated preferred provider match", mutate: func(result *wayfinderEvaluateResult) {
-			result.Recommendation.MatchedPreferredProvider = true
 			result.Recommendation.RankComponents.MatchedPreferredProvider = true
 			result.Candidates[0].RankComponents.MatchedPreferredProvider = true
 		}},
 		{name: "fabricated preferred model match", mutate: func(result *wayfinderEvaluateResult) {
-			result.Recommendation.MatchedPreferredModel = true
 			result.Recommendation.RankComponents.MatchedPreferredModel = true
 			result.Candidates[0].RankComponents.MatchedPreferredModel = true
 		}},
@@ -979,13 +979,156 @@ func TestWayfinderRecoveryAdvisorRejectsMalformedTemplateAndResponse(t *testing.
 	}
 }
 
+// TestWayfinderRecoveryAdvisorAcceptsLiteralProducerResult exercises the
+// adapter's HTTP and strict-decoding boundary with bytes emitted by the
+// accepted Wayfinder producer (3b709cab4298403534a85561714b3f473924d806),
+// rather than a response assembled from SDK DTOs.
+func TestWayfinderRecoveryAdvisorAcceptsLiteralProducerResult(t *testing.T) {
+	response := acceptedWayfinderResultFixture(t)
+	var result wayfinderEvaluateResult
+	if err := decodeSingleJSON(response, &result); err != nil {
+		t.Fatalf("producer fixture: %v", err)
+	}
+	template, err := json.Marshal(result.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", template, []string{"claude-personal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	advisor.now = func() time.Time { return time.Unix(result.IssuedAtUnix+1, 0) }
+	advisor.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		var request wayfinderEvaluateRequest
+		if err := decodeSingleJSON(body, &request); err != nil {
+			return nil, err
+		}
+		if !reflect.DeepEqual(request, result.Request) {
+			return nil, fmt.Errorf("adapter request differs from producer fixture")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(response)),
+		}, nil
+	})
+	target, err := advisor.Recommend(context.Background(), RecoveryRequest{
+		CorrelationID: result.CorrelationID,
+		Now:           time.Unix(result.IssuedAtUnix, 0),
+		Targets:       []string{result.Recommendation.ExecutionTarget.TargetID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != result.Recommendation.ExecutionTarget.TargetID {
+		t.Fatalf("target = %q, want %q", target, result.Recommendation.ExecutionTarget.TargetID)
+	}
+}
+
+func TestWayfinderRecoveryAdvisorRejectsRemovedEvaluateResultFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "advisory_only", mutate: func(result map[string]any) {
+			result["advisory_only"] = true
+		}},
+		{name: "no_active_migration", mutate: func(result map[string]any) {
+			result["no_active_migration"] = true
+		}},
+		{name: "alternatives_advisory_only", mutate: func(result map[string]any) {
+			result["alternatives_advisory_only"] = true
+		}},
+		{name: "recommendation_matched_preferred_provider", mutate: func(result map[string]any) {
+			result["recommendation"].(map[string]any)["matched_preferred_provider"] = false
+		}},
+		{name: "recommendation_matched_preferred_model", mutate: func(result map[string]any) {
+			result["recommendation"].(map[string]any)["matched_preferred_model"] = false
+		}},
+		{name: "reevaluation_no_paid_probe", mutate: func(result map[string]any) {
+			result["reevaluation"].(map[string]any)["no_paid_probe"] = true
+		}},
+		{name: "reevaluation_no_active_migration", mutate: func(result map[string]any) {
+			result["reevaluation"].(map[string]any)["no_active_migration"] = true
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := acceptedWayfinderResultFixture(t)
+			var result wayfinderEvaluateResult
+			if err := decodeSingleJSON(response, &result); err != nil {
+				t.Fatal(err)
+			}
+			template, err := json.Marshal(result.Request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", template, []string{"claude-personal"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			advisor.now = func() time.Time { return time.Unix(result.IssuedAtUnix+1, 0) }
+			advisor.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					return nil, err
+				}
+				var request wayfinderEvaluateRequest
+				if err := decodeSingleJSON(body, &request); err != nil {
+					return nil, err
+				}
+				if !reflect.DeepEqual(request, result.Request) {
+					return nil, fmt.Errorf("adapter request differs from producer fixture")
+				}
+				var result map[string]any
+				if err := json.Unmarshal(response, &result); err != nil {
+					return nil, err
+				}
+				tt.mutate(result)
+				encoded, err := json.Marshal(result)
+				if err != nil {
+					return nil, err
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     make(http.Header),
+					Body:       io.NopCloser(bytes.NewReader(encoded)),
+				}, nil
+			})
+			_, err = advisor.Recommend(context.Background(), RecoveryRequest{
+				CorrelationID: result.CorrelationID,
+				Now:           time.Unix(result.IssuedAtUnix, 0),
+				Targets:       []string{result.Recommendation.ExecutionTarget.TargetID},
+			})
+			if err == nil || !strings.Contains(err.Error(), "decode wayfinder routing/v3 response") {
+				t.Fatalf("Recommend() error = %v, want strict response decoding failure", err)
+			}
+		})
+	}
+}
+
+func acceptedWayfinderResultFixture(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile("testdata/wayfinder-routing-v3-evaluate-result.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func recoveryWayfinderTemplate(t *testing.T, targets ...string) []byte {
 	t.Helper()
 	packet := wayfinderEvaluateRequest{
 		SchemaVersion: "routing/v3",
 		CorrelationID: "operator-placeholder",
 		Workload: wayfinderWorkloadProfile{
-			ProfileSource: "caller", Operation: "execute", Artifact: "code", Complexity: "high", Consequence: "high",
+			Operation: "execute", Artifact: "code", Complexity: "high", Consequence: "high",
 			ExecutionShape: "iterative", ReasoningRequirement: "high", MinimumContextTokens: 1024,
 			ExpectedInputTokens: 512, ExpectedOutputTokens: 512, RequiredTools: []string{"shell"},
 			StructuredOutput: "none", RequiredInputModalities: []string{"text"}, RequiredOutputModalities: []string{"text"},
@@ -1066,8 +1209,8 @@ func validWayfinderResult(request wayfinderEvaluateRequest, target string) wayfi
 	result := wayfinderEvaluateResult{
 		SchemaVersion: "routing/v3", CorrelationID: request.CorrelationID, DecisionID: wayfinderDecisionID(fingerprints), Request: request,
 		Disposition: "selected", Fingerprints: fingerprints, PolicyVersion: request.PolicyVersion, IssuedAtUnix: request.NowUnix,
-		ExpiresAtUnix: 300, AdvisoryOnly: true, NoActiveMigration: true, AlternativesAdvisoryOnly: true,
-		Reevaluation: wayfinderReevaluation{ReevaluateAtUnix: 300, Reason: "evidence_expiry", RequiresNewRequest: true, NoPaidProbe: true, NoActiveMigration: true},
+		ExpiresAtUnix: 300,
+		Reevaluation:  wayfinderReevaluation{ReevaluateAtUnix: 300, Reason: "evidence_expiry", RequiresNewRequest: true},
 	}
 	for _, candidate := range request.Candidates {
 		rank := &wayfinderRankComponents{QualityScore: 90, LatencyScore: 100, CostScore: 100, WeightedScore: 9000, CostBasis: "subscription", UnknownInputs: []string{}}

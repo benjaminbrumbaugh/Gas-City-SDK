@@ -67,7 +67,6 @@ type wayfinderEvaluateRequest struct {
 }
 
 type wayfinderWorkloadProfile struct {
-	ProfileSource            string   `json:"profile_source"`
 	Operation                string   `json:"operation"`
 	Artifact                 string   `json:"artifact"`
 	Complexity               string   `json:"complexity"`
@@ -296,21 +295,18 @@ type wayfinderObservation struct {
 }
 
 type wayfinderEvaluateResult struct {
-	SchemaVersion            string                          `json:"schema_version"`
-	CorrelationID            string                          `json:"correlation_id"`
-	DecisionID               string                          `json:"decision_id"`
-	Request                  wayfinderEvaluateRequest        `json:"request"`
-	Disposition              string                          `json:"disposition"`
-	Recommendation           *wayfinderRecommendation        `json:"recommendation"`
-	Candidates               []wayfinderCandidateDisposition `json:"candidates"`
-	Fingerprints             wayfinderFingerprints           `json:"fingerprints"`
-	PolicyVersion            string                          `json:"policy_version"`
-	IssuedAtUnix             int64                           `json:"issued_at_unix"`
-	ExpiresAtUnix            int64                           `json:"expires_at_unix"`
-	AdvisoryOnly             bool                            `json:"advisory_only"`
-	NoActiveMigration        bool                            `json:"no_active_migration"`
-	AlternativesAdvisoryOnly bool                            `json:"alternatives_advisory_only"`
-	Reevaluation             wayfinderReevaluation           `json:"reevaluation"`
+	SchemaVersion  string                          `json:"schema_version"`
+	CorrelationID  string                          `json:"correlation_id"`
+	DecisionID     string                          `json:"decision_id"`
+	Request        wayfinderEvaluateRequest        `json:"request"`
+	Disposition    string                          `json:"disposition"`
+	Recommendation *wayfinderRecommendation        `json:"recommendation"`
+	Candidates     []wayfinderCandidateDisposition `json:"candidates"`
+	Fingerprints   wayfinderFingerprints           `json:"fingerprints"`
+	PolicyVersion  string                          `json:"policy_version"`
+	IssuedAtUnix   int64                           `json:"issued_at_unix"`
+	ExpiresAtUnix  int64                           `json:"expires_at_unix"`
+	Reevaluation   wayfinderReevaluation           `json:"reevaluation"`
 }
 
 type wayfinderFingerprints struct {
@@ -324,13 +320,11 @@ type wayfinderFingerprints struct {
 }
 
 type wayfinderRecommendation struct {
-	CandidateID              string                  `json:"candidate_id"`
-	Model                    wayfinderSelectedModel  `json:"model"`
-	ExecutionTarget          wayfinderSelectedTarget `json:"execution_target"`
-	BillingMode              string                  `json:"billing_mode"`
-	MatchedPreferredProvider bool                    `json:"matched_preferred_provider"`
-	MatchedPreferredModel    bool                    `json:"matched_preferred_model"`
-	RankComponents           wayfinderRankComponents `json:"rank_components"`
+	CandidateID     string                  `json:"candidate_id"`
+	Model           wayfinderSelectedModel  `json:"model"`
+	ExecutionTarget wayfinderSelectedTarget `json:"execution_target"`
+	BillingMode     string                  `json:"billing_mode"`
+	RankComponents  wayfinderRankComponents `json:"rank_components"`
 }
 
 type wayfinderSelectedModel struct {
@@ -383,8 +377,6 @@ type wayfinderReevaluation struct {
 	ReevaluateAtUnix   int64  `json:"re_evaluate_at_unix"`
 	Reason             string `json:"reason"`
 	RequiresNewRequest bool   `json:"requires_new_request"`
-	NoPaidProbe        bool   `json:"no_paid_probe"`
-	NoActiveMigration  bool   `json:"no_active_migration"`
 }
 
 // NewWayfinderRecoveryAdvisor validates a loopback base URL and a complete,
@@ -724,11 +716,7 @@ func validateWayfinderRequest(request *wayfinderEvaluateRequest) error {
 		return fmt.Errorf("invalid routing/v3 request envelope")
 	}
 	workload := request.Workload
-	// The public evaluate endpoint rejects bootstrap profiles; accepting one
-	// here would make a structurally valid local template fail every advisory
-	// call and silently degrade to fallback routing.
-	if !wayfinderOneOf(workload.ProfileSource, "caller", "inferred") ||
-		!wayfinderOneOf(workload.Operation, "coordinate", "plan", "generate", "transform", "review", "reconcile", "execute") ||
+	if !wayfinderOneOf(workload.Operation, "coordinate", "plan", "generate", "transform", "review", "reconcile", "execute") ||
 		!wayfinderOneOf(workload.Artifact, "code", "tests", "plan", "merge", "text", "structured_data", "other") ||
 		!wayfinderOneOf(workload.Complexity, "low", "medium", "high") || !wayfinderOneOf(workload.Consequence, "low", "medium", "high") ||
 		!wayfinderOneOf(workload.ExecutionShape, "one_shot", "iterative", "long_running", "singleton") ||
@@ -962,7 +950,7 @@ func validateWayfinderResult(result wayfinderEvaluateResult, request wayfinderEv
 	if !reflect.DeepEqual(result.Fingerprints, expectedFingerprints) || result.DecisionID != wayfinderDecisionID(expectedFingerprints) || result.PolicyVersion != request.PolicyVersion || result.IssuedAtUnix != request.NowUnix {
 		return fmt.Errorf("wayfinder response is not bound to the submitted request, policy, and fingerprints")
 	}
-	if result.ExpiresAtUnix < result.IssuedAtUnix || !result.AdvisoryOnly || !result.NoActiveMigration || !result.AlternativesAdvisoryOnly || !result.Reevaluation.RequiresNewRequest || !result.Reevaluation.NoPaidProbe || !result.Reevaluation.NoActiveMigration || result.Reevaluation.ReevaluateAtUnix < result.IssuedAtUnix {
+	if result.ExpiresAtUnix < result.IssuedAtUnix || !result.Reevaluation.RequiresNewRequest || result.Reevaluation.ReevaluateAtUnix < result.IssuedAtUnix {
 		return fmt.Errorf("wayfinder response identity or fresh advisory validity window is invalid")
 	}
 	if result.Disposition != "selected" || result.Recommendation == nil || result.ExpiresAtUnix <= result.IssuedAtUnix || result.Reevaluation.Reason != "evidence_expiry" {
@@ -1013,8 +1001,7 @@ func validateWayfinderResult(result wayfinderEvaluateResult, request wayfinderEv
 	}
 	matchedProvider := request.Preferences.PreferredProviderID != nil && *request.Preferences.PreferredProviderID == candidate.ExecutionTarget.ProviderID
 	matchedModel := request.Preferences.PreferredModelID != nil && *request.Preferences.PreferredModelID == candidate.Model.CanonicalModel
-	if recommendation.MatchedPreferredProvider != matchedProvider || recommendation.MatchedPreferredModel != matchedModel ||
-		recommendation.RankComponents.MatchedPreferredProvider != matchedProvider || recommendation.RankComponents.MatchedPreferredModel != matchedModel {
+	if recommendation.RankComponents.MatchedPreferredProvider != matchedProvider || recommendation.RankComponents.MatchedPreferredModel != matchedModel {
 		return fmt.Errorf("wayfinder recommendation preference matches are not bound to the submitted request")
 	}
 	if _, ok := remaining[recommendation.ExecutionTarget.TargetID]; !ok {
