@@ -154,7 +154,17 @@ func recordExecutionLaunchDeliveryTx(tx *bbolt.Tx, receipt ExecutionLaunchReceip
 	if err != nil {
 		return err
 	}
-	row, available, err := ProjectProducerExecutionOutcome(item, launches)
+	var durableReceipt ExecutionLaunchReceipt
+	for _, launch := range launches {
+		if launch.ExecutionID == receipt.ExecutionID {
+			durableReceipt = launch
+			break
+		}
+	}
+	if durableReceipt.ExecutionID == "" {
+		return ErrStoreCorrupt
+	}
+	row, available, err := ProjectProducerExecutionOutcome(item, []ExecutionLaunchReceipt{durableReceipt})
 	if err != nil {
 		return err
 	}
@@ -474,7 +484,11 @@ func validatePayloadDigest(value string, payload []byte) error {
 	if !strings.HasPrefix(value, "sha256:") || len(value) != len("sha256:")+64 {
 		return fmt.Errorf("%w: invalid payload digest", ErrDeliveryInvalid)
 	}
-	decoded, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
+	digest := strings.TrimPrefix(value, "sha256:")
+	if !validDigest(digest) {
+		return fmt.Errorf("%w: invalid payload digest", ErrDeliveryInvalid)
+	}
+	decoded, err := hex.DecodeString(digest)
 	if err != nil || len(decoded) != sha256.Size {
 		return fmt.Errorf("%w: invalid payload digest", ErrDeliveryInvalid)
 	}
@@ -510,6 +524,10 @@ func validProducerDeliveryOutcome(outcome ProducerExecutionOutcome) bool {
 		return false
 	}
 	if _, err := hex.DecodeString(strings.TrimPrefix(outcome.OutcomeID, "outcome_")); err != nil {
+		return false
+	}
+	canonicalID, err := producerExecutionOutcomeID(outcome)
+	if err != nil || canonicalID != outcome.OutcomeID {
 		return false
 	}
 	for name, value := range map[string]string{
