@@ -133,6 +133,8 @@ func TestLaunchReceiptSurvivesDeliveryProjectionFailure(t *testing.T) {
 func TestLaunchDeliveryBindsProjectedOutcomeToReceipt(t *testing.T) {
 	now := time.Date(2026, 10, 7, 15, 0, 0, 0, time.UTC)
 	store := openTestStore(t, now)
+	clock := now
+	store.now = func() time.Time { return clock }
 	payload := testExecutionPayload(t)
 	payload.DecisionID = "decision-two-launches"
 	payload.WorkBeadID = "work-two-launches"
@@ -160,24 +162,37 @@ func TestLaunchDeliveryBindsProjectedOutcomeToReceipt(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	receiptA := ExecutionLaunchReceipt{
-		ExecutionID: "execution-a", Authorization: authA, StartedAt: now.Add(time.Second), AttemptID: "attempt-a",
+	receiptA, err := store.RecordExecutionLaunchAttempt(authA, "attempt-a")
+	if err != nil {
+		t.Fatalf("record launch A: %v", err)
 	}
-	receiptB := ExecutionLaunchReceipt{
-		ExecutionID: "execution-b", Authorization: authB, StartedAt: now.Add(2 * time.Second), AttemptID: "attempt-b",
+	clock = now.Add(time.Second)
+	receiptB, err := store.RecordExecutionLaunchAttempt(authB, "attempt-b")
+	if err != nil {
+		t.Fatalf("record launch B: %v", err)
 	}
+	if !receiptB.StartedAt.After(receiptA.StartedAt) {
+		t.Fatalf("launch timestamps = (%s, %s), want B after A", receiptA.StartedAt, receiptB.StartedAt)
+	}
+	// Remove the first projections only to arrange the inter-transaction window
+	// in which both already-committed launch receipts exist before A retries.
 	if err := store.db.Update(func(tx *bbolt.Tx) error {
-		launches, err := tx.CreateBucketIfNotExists(bucketExecutionLaunches)
-		if err != nil {
-			return err
-		}
-		for _, receipt := range []ExecutionLaunchReceipt{receiptA, receiptB} {
-			encoded, err := json.Marshal(receipt)
-			if err != nil {
+		for _, name := range [][]byte{bucketDeliveryItems, bucketDeliverySource, bucketDeliveryAcks} {
+			bucket := tx.Bucket(name)
+			if bucket == nil {
+				continue
+			}
+			var keys [][]byte
+			if err := bucket.ForEach(func(key, _ []byte) error {
+				keys = append(keys, append([]byte(nil), key...))
+				return nil
+			}); err != nil {
 				return err
 			}
-			if err := launches.Put([]byte(receipt.ExecutionID), encoded); err != nil {
-				return err
+			for _, key := range keys {
+				if err := bucket.Delete(key); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
