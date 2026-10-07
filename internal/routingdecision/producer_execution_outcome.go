@@ -95,11 +95,21 @@ func ProjectProducerExecutionOutcome(item DecisionWithAudits, launches []Executi
 	if row.RoutingDecisionID == nil || row.ObservedAtUnix <= 0 {
 		return row, false, invalidf("outcome evidence unavailable")
 	}
-	data, err := json.Marshal(row)
+	outcomeID, err := producerExecutionOutcomeID(row)
 	if err != nil {
 		return row, false, err
 	}
-	digest := sha256.Sum256(append([]byte("gascity.producer-outcome.v3\x00"), data...))
-	row.OutcomeID = "outcome_" + hex.EncodeToString(digest[:])
+	row.OutcomeID = outcomeID
 	return row, true, nil
+}
+
+func producerExecutionOutcomeID(outcome ProducerExecutionOutcome) (string, error) {
+	canonical := outcome
+	canonical.OutcomeID = ""
+	data, err := json.Marshal(canonical)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(append([]byte("gascity.producer-outcome.v3\x00"), data...))
+	return "outcome_" + hex.EncodeToString(digest[:]), nil
 }
