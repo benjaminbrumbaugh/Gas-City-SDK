@@ -322,11 +322,7 @@ func TestExtractCodexTailQuotaKeepsValidatedDescriptorAfterPathSwap(t *testing.T
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	candidate, ok := codexSessionCandidateFromFile(file, safePath)
-	if !ok || candidate.sessionID != "session-1" {
-		t.Fatalf("candidate after path swap = (%+v, %v), want session-1 metadata from validated descriptor", candidate, ok)
-	}
-	observation, err := extractCodexTailQuotaFromFile(file, validCodexQuotaContext())
+	observation, err := extractCodexTailQuotaFromValidatedFile(file, safePath, validCodexQuotaContext())
 	if err != nil {
 		t.Fatalf("extractCodexTailQuotaFromFile: %v", err)
 	}

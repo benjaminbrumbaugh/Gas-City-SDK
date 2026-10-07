@@ -93,6 +93,10 @@ func ExtractCodexTailQuotaFromSearchPaths(searchPaths []string, path string, con
 	if sessionID, ok := codexRolloutFilenameSessionID(filepath.Base(safePath)); !ok || sessionID != context.SessionID {
 		return nil, fmt.Errorf("resolved Codex rollout %q does not match session %q", safePath, context.SessionID)
 	}
+	return extractCodexTailQuotaFromValidatedFile(file, safePath, context)
+}
+
+func extractCodexTailQuotaFromValidatedFile(file *os.File, safePath string, context CodexQuotaContext) (*CodexQuotaObservation, error) {
 	candidate, ok := codexSessionCandidateFromFile(file, safePath)
 	if !ok {
 		return nil, fmt.Errorf("resolved Codex rollout %q is missing valid session metadata", safePath)
