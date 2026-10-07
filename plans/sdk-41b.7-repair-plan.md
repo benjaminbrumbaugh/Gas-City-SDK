@@ -108,6 +108,8 @@ Added direct regressions for both cases. The parser now carries the metadata
 ID to the quota boundary, which rejects a missing or mismatched ID before
 tail extraction. A subsequent review also identified a check-then-reopen
 symlink race; quota parsing now retains the validated file descriptor for
-metadata and tail reads, with a path-swap regression. This remains a
-source-only `internal/sessionlog` repair; no provider lifecycle, probing,
-policy, or orchestration behavior is added.
+metadata and tail reads, and containment compares the descriptor's stable
+physical path rather than re-stat-ing the mutable path. Path-swap and
+escaping-symlink regressions cover both boundaries. This remains a source-only
+`internal/sessionlog` repair; no provider lifecycle, probing, policy, or
+orchestration behavior is added.
