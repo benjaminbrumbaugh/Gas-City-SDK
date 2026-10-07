@@ -330,8 +330,8 @@ func TestExtractCodexTailQuotaRejectsEachIsolationGuard(t *testing.T) {
 	}
 }
 
-func TestValidateCodexQuotaContextRejectsPathLikeSessionIDs(t *testing.T) {
-	for _, sessionID := range []string{"session..one", "session/one", `session\\one`} {
+func TestValidateCodexQuotaContextRejectsMissingOrPathLikeSessionIDs(t *testing.T) {
+	for _, sessionID := range []string{"", "session..one", "session/one", `session\\one`} {
 		t.Run(sessionID, func(t *testing.T) {
 			if err := validateCodexQuotaContext(CodexQuotaContext{
 				Provider:  CodexQuotaProvider,
