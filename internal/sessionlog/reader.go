@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1023,6 +1024,7 @@ func startOfLocalDay(t time.Time) time.Time {
 type CodexSessionCandidate struct {
 	Path      string
 	WorkDir   string
+	sessionID string
 	StartedAt time.Time
 	ModTime   time.Time
 }
@@ -1340,6 +1342,10 @@ func codexSessionCandidate(path string) (CodexSessionCandidate, bool) {
 	return candidate, ok
 }
 
+func codexSessionCandidateFromFile(f *os.File, path string) (CodexSessionCandidate, bool) {
+	return codexSessionCandidateFromFileScan(f, path)
+}
+
 // codexSessionCandidateScan is codexSessionCandidate with a clean-scan signal.
 // clean is false ONLY when opening path failed with a non-ENOENT IO fault
 // (EMFILE/ESTALE/EACCES and similar transient/resource errors), so a caller
@@ -1352,27 +1358,35 @@ func codexSessionCandidateScan(path string) (candidate CodexSessionCandidate, ok
 		return CodexSessionCandidate{}, false, os.IsNotExist(err)
 	}
 	defer f.Close() //nolint:errcheck // read-only
+	candidate, ok = codexSessionCandidateFromFileScan(f, path)
+	return candidate, ok, true
+}
 
+func codexSessionCandidateFromFileScan(f *os.File, path string) (candidate CodexSessionCandidate, ok bool) {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return CodexSessionCandidate{}, false
+	}
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	if !scanner.Scan() {
-		return CodexSessionCandidate{}, false, true
+		return CodexSessionCandidate{}, false
 	}
 	var meta struct {
 		Type      string `json:"type"`
 		Timestamp string `json:"timestamp"`
 		Payload   struct {
+			ID        string `json:"id"`
 			CWD       string `json:"cwd"`
 			Timestamp string `json:"timestamp"`
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(scanner.Bytes(), &meta); err != nil {
-		return CodexSessionCandidate{}, false, true
+		return CodexSessionCandidate{}, false
 	}
 	if meta.Type != "session_meta" {
-		return CodexSessionCandidate{}, false, true
+		return CodexSessionCandidate{}, false
 	}
-	info, _ := os.Stat(path)
+	info, _ := f.Stat()
 	var modTime time.Time
 	if info != nil {
 		modTime = info.ModTime()
@@ -1384,9 +1398,10 @@ func codexSessionCandidateScan(path string) (candidate CodexSessionCandidate, ok
 	return CodexSessionCandidate{
 		Path:      path,
 		WorkDir:   meta.Payload.CWD,
+		sessionID: meta.Payload.ID,
 		StartedAt: startedAt,
 		ModTime:   modTime,
-	}, true, true
+	}, true
 }
 
 func parseCodexSessionTime(raw string) time.Time {
