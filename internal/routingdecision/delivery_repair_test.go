@@ -1,6 +1,7 @@
 package routingdecision
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -126,6 +127,117 @@ func TestLaunchReceiptSurvivesDeliveryProjectionFailure(t *testing.T) {
 	}
 	if len(launches) != 1 || launches[0] != receipt {
 		t.Fatalf("launch receipts = %+v, want committed receipt %+v", launches, receipt)
+	}
+}
+
+func TestLaunchDeliveryBindsProjectedOutcomeToReceipt(t *testing.T) {
+	now := time.Date(2026, 10, 7, 15, 0, 0, 0, time.UTC)
+	store := openTestStore(t, now)
+	payload := testExecutionPayload(t)
+	payload.DecisionID = "decision-two-launches"
+	payload.WorkBeadID = "work-two-launches"
+	payload.Target = "demo/code-reviewer"
+	payload.RecommendationID = "routing/v3:" + strings.Repeat("e", 64)
+	payload.CreatedAt = now.Add(-time.Hour)
+	payload.ExpiresAt = now.Add(time.Hour)
+	payload.Execution.Target = payload.Target
+	payload.BindingID = BindingID(payload)
+	if _, err := store.AdmitLocal(payload, "admit-two-launches", func(Record) (AdmissionCallbackResult, error) {
+		return AdmissionCallbackResult{State: StateAdmitted, Reason: "two launch delivery regression"}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	authA := ExecutionSessionAuthorization{
+		DecisionID: payload.DecisionID, BindingID: payload.BindingID, SessionID: "session-a",
+		Generation: "1", InstanceToken: "instance-a", WorkID: payload.WorkBeadID,
+		ClaimFence: payload.ClaimFence, Execution: *payload.Execution,
+	}
+	authB := authA
+	authB.SessionID = "session-b"
+	authB.InstanceToken = "instance-b"
+	for _, auth := range []ExecutionSessionAuthorization{authA, authB} {
+		if err := store.BindExecutionSession(auth); err != nil {
+			t.Fatal(err)
+		}
+	}
+	receiptA := ExecutionLaunchReceipt{
+		ExecutionID: "execution-a", Authorization: authA, StartedAt: now.Add(time.Second), AttemptID: "attempt-a",
+	}
+	receiptB := ExecutionLaunchReceipt{
+		ExecutionID: "execution-b", Authorization: authB, StartedAt: now.Add(2 * time.Second), AttemptID: "attempt-b",
+	}
+	if err := store.db.Update(func(tx *bbolt.Tx) error {
+		launches, err := tx.CreateBucketIfNotExists(bucketExecutionLaunches)
+		if err != nil {
+			return err
+		}
+		for _, receipt := range []ExecutionLaunchReceipt{receiptA, receiptB} {
+			encoded, err := json.Marshal(receipt)
+			if err != nil {
+				return err
+			}
+			if err := launches.Put([]byte(receipt.ExecutionID), encoded); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.recordExecutionLaunchDelivery(receiptA); err != nil {
+		t.Fatalf("record launch A delivery: %v", err)
+	}
+	page, err := store.ListPendingDeliveries(DeliveryListOptions{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].SourceID != receiptA.ExecutionID {
+		t.Fatalf("pending deliveries = %+v, want one item sourced by launch A", page.Items)
+	}
+	var outcome ProducerExecutionOutcome
+	if err := json.Unmarshal(page.Items[0].Payload, &outcome); err != nil {
+		t.Fatal(err)
+	}
+	if outcome.ExecutionID == nil || *outcome.ExecutionID != receiptA.ExecutionID || outcome.SessionID == nil || *outcome.SessionID != authA.SessionID {
+		t.Fatalf("launch A delivery projected another receipt: source=%q outcome=%+v", page.Items[0].SourceID, outcome)
+	}
+}
+
+func TestV3DeliveryValidationRecomputesOutcomeID(t *testing.T) {
+	payload := testExecutionPayload(t)
+	item := DecisionWithAudits{Record: Record{Payload: payload, State: StateClaimed}, AdmissionReceiptID: "admission-real"}
+	auth := ExecutionSessionAuthorization{
+		DecisionID: payload.DecisionID, BindingID: payload.BindingID, SessionID: "session-id",
+		Generation: "1", InstanceToken: "instance-token", WorkID: payload.WorkBeadID,
+		ClaimFence: payload.ClaimFence, Execution: *payload.Execution,
+	}
+	receipt := ExecutionLaunchReceipt{ExecutionID: "execution-id", Authorization: auth, StartedAt: payload.CreatedAt.Add(time.Second)}
+	outcome, available, err := ProjectProducerExecutionOutcome(item, []ExecutionLaunchReceipt{receipt})
+	if err != nil || !available {
+		t.Fatalf("project outcome: available=%v err=%v", available, err)
+	}
+	outcome.Status = "succeeded"
+	encoded, err := json.Marshal(outcome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivery := DeliveryItem{
+		SourceKind: "execution-launch", SourceID: receipt.ExecutionID,
+		OutcomeSchemaVersion: outcome.SchemaVersion, OutcomeID: outcome.OutcomeID,
+		RoutingDecisionID: *outcome.RoutingDecisionID, WorkID: outcome.WorkID,
+		Payload: encoded, PayloadSHA256: payloadDigest(encoded), EvidenceAtUnix: outcome.ObservedAtUnix,
+	}
+	delivery.DeliveryID = DeliveryIDFor(delivery.SourceKind, delivery.SourceID, delivery.OutcomeSchemaVersion, delivery.OutcomeID)
+	if err := validateDeliveryItem(delivery); !errors.Is(err, ErrDeliveryInvalid) {
+		t.Fatalf("shape-valid but recomputed-invalid v3 outcome accepted: %v", err)
+	}
+}
+
+func TestDeliveryValidationRejectsUppercasePayloadDigest(t *testing.T) {
+	item := testDeliveryItem(t, "uppercase-digest", "work-1")
+	item.PayloadSHA256 = "sha256:" + strings.ToUpper(strings.TrimPrefix(item.PayloadSHA256, "sha256:"))
+	if err := validateDeliveryItem(item); !errors.Is(err, ErrDeliveryInvalid) {
+		t.Fatalf("uppercase payload digest accepted: %v", err)
 	}
 }
 
