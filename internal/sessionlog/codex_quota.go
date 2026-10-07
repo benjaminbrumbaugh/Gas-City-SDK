@@ -122,26 +122,34 @@ func openValidatedCodexQuotaFile(searchPaths []string, path string) (string, *os
 	if err != nil {
 		return "", nil, err
 	}
-	fileInfo, err := file.Stat()
+	descriptorPath, err := codexQuotaDescriptorPath(file)
 	if err != nil {
 		file.Close() //nolint:errcheck // best-effort cleanup on validation failure
-		return "", nil, fmt.Errorf("stating session log path: %w", err)
+		return "", nil, err
 	}
 	for _, root := range searchPaths {
 		if strings.TrimSpace(root) == "" {
 			continue
 		}
 		cleanRoot, err := filepath.Abs(filepath.Clean(root))
-		if err != nil || pathutil.SamePath(cleanRoot, cleanPath) || !pathutil.PathWithin(cleanRoot, cleanPath) {
+		if err != nil {
 			continue
 		}
-		pathInfo, err := os.Stat(cleanPath)
-		if err == nil && os.SameFile(fileInfo, pathInfo) {
-			return cleanPath, file, nil
+		resolvedRoot := pathutil.NormalizePathForCompare(cleanRoot)
+		if codexQuotaPathWithin(resolvedRoot, descriptorPath) {
+			return descriptorPath, file, nil
 		}
 	}
 	file.Close() //nolint:errcheck // best-effort cleanup on validation failure
 	return "", nil, fmt.Errorf("session log path is outside configured search paths")
+}
+
+func codexQuotaPathWithin(root, candidate string) bool {
+	if root == "" || candidate == "" || root == candidate {
+		return false
+	}
+	rel, err := filepath.Rel(root, candidate)
+	return err == nil && !filepath.IsAbs(rel) && !pathutil.IsOutsideDir(rel)
 }
 
 func validateCodexQuotaContext(context CodexQuotaContext) error {
