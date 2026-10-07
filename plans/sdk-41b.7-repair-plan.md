@@ -106,5 +106,8 @@ the provider rejection was not exercised with otherwise-valid evidence, and
 `session_meta.payload.id` was not bound to the filename/session identity.
 Added direct regressions for both cases. The parser now carries the metadata
 ID to the quota boundary, which rejects a missing or mismatched ID before
-tail extraction. This remains a source-only `internal/sessionlog` repair; no
-provider lifecycle, probing, policy, or orchestration behavior is added.
+tail extraction. A subsequent review also identified a check-then-reopen
+symlink race; quota parsing now retains the validated file descriptor for
+metadata and tail reads, with a path-swap regression. This remains a
+source-only `internal/sessionlog` repair; no provider lifecycle, probing,
+policy, or orchestration behavior is added.

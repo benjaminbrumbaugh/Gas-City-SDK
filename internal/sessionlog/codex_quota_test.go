@@ -295,6 +295,46 @@ func TestExtractCodexTailQuotaAcceptsSymlinkedSearchRoot(t *testing.T) {
 	}
 }
 
+func TestExtractCodexTailQuotaKeepsValidatedDescriptorAfterPathSwap(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-10-05T12-00-00-session-1.jsonl")
+	outside := filepath.Join(t.TempDir(), "outside.jsonl")
+	writeCodexUsageLines(t, path, []string{
+		codexQuotaSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
+		codexTokenCountLine("2026-10-05T18:58:02Z", 42, 42, 0, 0, 0),
+	})
+	writeCodexUsageLines(t, outside, []string{
+		`{"timestamp":"2026-10-05T18:58:00Z","type":"session_meta","payload":{"id":"session-2","timestamp":"2026-10-05T18:58:00Z","cwd":"/work/dir"}}`,
+		codexTokenCountLine("2026-10-05T19:00:02Z", 7, 7, 0, 0, 0),
+	})
+
+	safePath, file, err := openValidatedCodexQuotaFile([]string{root}, path)
+	if err != nil {
+		t.Fatalf("openValidatedCodexQuotaFile: %v", err)
+	}
+	defer file.Close() //nolint:errcheck // test cleanup
+
+	moved := filepath.Join(root, "moved.jsonl")
+	if err := os.Rename(path, moved); err != nil {
+		t.Fatalf("rename validated rollout: %v", err)
+	}
+	if err := os.Symlink(outside, path); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	candidate, ok := codexSessionCandidateFromFile(file, safePath)
+	if !ok || candidate.sessionID != "session-1" {
+		t.Fatalf("candidate after path swap = (%+v, %v), want session-1 metadata from validated descriptor", candidate, ok)
+	}
+	observation, err := extractCodexTailQuotaFromFile(file, validCodexQuotaContext())
+	if err != nil {
+		t.Fatalf("extractCodexTailQuotaFromFile: %v", err)
+	}
+	if observation == nil || !observation.ObservedAt.Equal(time.Date(2026, 10, 5, 18, 58, 2, 0, time.UTC)) {
+		t.Fatalf("observation after path swap = %#v, want descriptor timestamp", observation)
+	}
+}
+
 func TestExtractCodexTailQuotaRejectsEachIsolationGuard(t *testing.T) {
 	root := t.TempDir()
 	validContent := []string{

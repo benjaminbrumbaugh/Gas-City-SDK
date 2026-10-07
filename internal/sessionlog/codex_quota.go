@@ -85,14 +85,15 @@ func ExtractCodexTailQuotaFromSearchPaths(searchPaths []string, path string, con
 	if err := validateCodexQuotaContext(context); err != nil {
 		return nil, err
 	}
-	safePath, err := validateCodexQuotaSearchPathFile(mergeCodexSearchPaths(searchPaths), path)
+	safePath, file, err := openValidatedCodexQuotaFile(mergeCodexSearchPaths(searchPaths), path)
 	if err != nil {
 		return nil, err
 	}
+	defer file.Close() //nolint:errcheck // best-effort close on read-only file
 	if sessionID, ok := codexRolloutFilenameSessionID(filepath.Base(safePath)); !ok || sessionID != context.SessionID {
 		return nil, fmt.Errorf("resolved Codex rollout %q does not match session %q", safePath, context.SessionID)
 	}
-	candidate, ok := codexSessionCandidate(safePath)
+	candidate, ok := codexSessionCandidateFromFile(file, safePath)
 	if !ok {
 		return nil, fmt.Errorf("resolved Codex rollout %q is missing valid session metadata", safePath)
 	}
@@ -102,16 +103,25 @@ func ExtractCodexTailQuotaFromSearchPaths(searchPaths []string, path string, con
 	if context.WorkDir != "" && !pathutil.SamePath(candidate.WorkDir, context.WorkDir) {
 		return nil, fmt.Errorf("resolved Codex rollout %q does not match workdir %q", safePath, context.WorkDir)
 	}
-	return extractCodexTailQuota(safePath, context)
+	return extractCodexTailQuotaFromFile(file, context)
 }
 
-func validateCodexQuotaSearchPathFile(searchPaths []string, path string) (string, error) {
+func openValidatedCodexQuotaFile(searchPaths []string, path string) (string, *os.File, error) {
 	if strings.TrimSpace(path) == "" {
-		return "", fmt.Errorf("empty session log path")
+		return "", nil, fmt.Errorf("empty session log path")
 	}
 	cleanPath, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
-		return "", fmt.Errorf("resolving session log path: %w", err)
+		return "", nil, fmt.Errorf("resolving session log path: %w", err)
+	}
+	file, err := os.Open(cleanPath)
+	if err != nil {
+		return "", nil, err
+	}
+	fileInfo, err := file.Stat()
+	if err != nil {
+		file.Close() //nolint:errcheck // best-effort cleanup on validation failure
+		return "", nil, fmt.Errorf("stating session log path: %w", err)
 	}
 	for _, root := range searchPaths {
 		if strings.TrimSpace(root) == "" {
@@ -121,9 +131,13 @@ func validateCodexQuotaSearchPathFile(searchPaths []string, path string) (string
 		if err != nil || pathutil.SamePath(cleanRoot, cleanPath) || !pathutil.PathWithin(cleanRoot, cleanPath) {
 			continue
 		}
-		return cleanPath, nil
+		pathInfo, err := os.Stat(cleanPath)
+		if err == nil && os.SameFile(fileInfo, pathInfo) {
+			return cleanPath, file, nil
+		}
 	}
-	return "", fmt.Errorf("session log path is outside configured search paths")
+	file.Close() //nolint:errcheck // best-effort cleanup on validation failure
+	return "", nil, fmt.Errorf("session log path is outside configured search paths")
 }
 
 func validateCodexQuotaContext(context CodexQuotaContext) error {
@@ -139,13 +153,7 @@ func validateCodexQuotaContext(context CodexQuotaContext) error {
 	return nil
 }
 
-func extractCodexTailQuota(path string, context CodexQuotaContext) (*CodexQuotaObservation, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close() //nolint:errcheck // best-effort close on read-only file
-
+func extractCodexTailQuotaFromFile(f *os.File, context CodexQuotaContext) (*CodexQuotaObservation, error) {
 	data, _, _, err := readTailWindow(f, tailChunkSize)
 	if err != nil {
 		return nil, err
