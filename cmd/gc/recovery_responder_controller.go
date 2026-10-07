@@ -36,6 +36,9 @@ func (cr *CityRuntime) reconcileRecoveryResponder(ctx context.Context, now time.
 			Targets: cfg.Targets, HoldDuration: cfg.HoldDuration(),
 			AdvisoryTimeout: cfg.AdvisoryTimeoutDuration(), Cooldown: cfg.CooldownDuration(),
 			MaxAttempts: cfg.MaxAttempts, Advisor: advisor,
+			QuotaObserver: func(_ context.Context, info sessionpkg.Info, observedAt time.Time) (*worker.QuotaObservation, error) {
+				return worker.ObserveCodexQuota(info, nil, observedAt)
+			},
 		},
 	)
 	report, err := responder.Reconcile(ctx, now)

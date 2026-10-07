@@ -291,15 +291,16 @@ func (s *Store) RecordRecoveryStateIfCurrent(snapshot RecoverySnapshot, state Re
 		return RecoverySnapshot{}, beads.ErrConditionalWriteUnsupported
 	}
 	patch := MetadataPatch{
-		"recovery_incident_id":       state.IncidentID,
-		"recovery_impairment":        state.Impairment,
-		"recovery_detected_at":       formatRecoveryTime(state.DetectedAt),
-		"recovery_hold_until":        formatRecoveryTime(state.HoldUntil),
-		"recovery_attempt":           strconv.Itoa(state.Attempt),
-		"recovery_attempted_targets": strings.Join(state.AttemptedTargets, "\n"),
-		"recovery_cooldown_until":    formatRecoveryTime(state.CooldownUntil),
-		"recovery_outcome":           state.Outcome,
-		"recovery_work_id":           state.WorkID,
+		"recovery_incident_id":              state.IncidentID,
+		"recovery_impairment":               state.Impairment,
+		"recovery_detected_at":              formatRecoveryTime(state.DetectedAt),
+		"recovery_hold_until":               formatRecoveryTime(state.HoldUntil),
+		"recovery_attempt":                  strconv.Itoa(state.Attempt),
+		"recovery_attempted_targets":        strings.Join(state.AttemptedTargets, "\n"),
+		"recovery_cooldown_until":           formatRecoveryTime(state.CooldownUntil),
+		"recovery_outcome":                  state.Outcome,
+		"recovery_work_id":                  state.WorkID,
+		RecoveryQuotaObservationMetadataKey: state.QuotaObservation,
 	}
 	fresh := snapshot.Info
 	if strings.TrimSpace(state.Outcome) == "verified" {
@@ -384,6 +385,7 @@ type RecoveryState struct {
 	CooldownUntil    time.Time
 	Outcome          string
 	WorkID           string
+	QuotaObservation string
 }
 
 func formatRecoveryTime(value time.Time) string {

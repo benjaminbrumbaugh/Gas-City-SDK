@@ -113,6 +113,50 @@ func TestWayfinderRecoveryAdvisorSubmitsCanonicalBoundRoutingV3Request(t *testin
 	}
 }
 
+func TestWayfinderRecoveryAdvisorOverlaysFreshHardQuotaOnMatchingTarget(t *testing.T) {
+	template := recoveryWayfinderTemplate(t, "rig/first")
+	advisor, err := NewWayfinderRecoveryAdvisor("http://127.0.0.1:1234", template, testWayfinderAccountRefs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	advisor.now = func() time.Time { return time.Unix(150, 0).UTC() }
+	var got wayfinderEvaluateRequest
+	advisor.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		if err := decodeSingleJSON(body, &got); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Status:     "503 Service Unavailable",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("unavailable")),
+		}, nil
+	})
+	now := time.Unix(150, 0).UTC()
+	reached := true
+	if _, err := advisor.Recommend(context.Background(), RecoveryRequest{
+		CorrelationID: "incident-quota",
+		Now:           now,
+		Targets:       []string{"rig/first"},
+		QuotaObservation: &QuotaObservation{
+			AccountRef: "claude-personal",
+			Model:      "model/operator",
+			ObservedAt: now.Add(-time.Minute),
+			ExpiresAt:  now.Add(time.Minute),
+			Primary:    &QuotaWindow{Reached: &reached},
+		},
+	}); err == nil {
+		t.Fatal("Recommend() succeeded on intentionally unavailable test endpoint")
+	}
+	if len(got.Observations) != 1 || !got.Observations[0].Throttle.Known || got.Observations[0].Throttle.Value == nil || *got.Observations[0].Throttle.Value != "upstream" {
+		t.Fatalf("observations = %+v, want matching target marked upstream-throttled", got.Observations)
+	}
+}
+
 func TestWayfinderRecoveryAdvisorNarrowsCandidatesTargetsAndEvidenceTogether(t *testing.T) {
 	var template wayfinderEvaluateRequest
 	if err := json.Unmarshal(recoveryWayfinderTemplate(t, "rig/first", "rig/second"), &template); err != nil {
