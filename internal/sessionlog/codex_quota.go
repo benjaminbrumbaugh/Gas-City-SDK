@@ -96,6 +96,9 @@ func ExtractCodexTailQuotaFromSearchPaths(searchPaths []string, path string, con
 	if !ok {
 		return nil, fmt.Errorf("resolved Codex rollout %q is missing valid session metadata", safePath)
 	}
+	if candidate.sessionID == "" || candidate.sessionID != context.SessionID {
+		return nil, fmt.Errorf("resolved Codex rollout %q metadata does not match session %q", safePath, context.SessionID)
+	}
 	if context.WorkDir != "" && !pathutil.SamePath(candidate.WorkDir, context.WorkDir) {
 		return nil, fmt.Errorf("resolved Codex rollout %q does not match workdir %q", safePath, context.WorkDir)
 	}

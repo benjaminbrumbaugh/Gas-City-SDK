@@ -1023,6 +1023,7 @@ func startOfLocalDay(t time.Time) time.Time {
 type CodexSessionCandidate struct {
 	Path      string
 	WorkDir   string
+	sessionID string
 	StartedAt time.Time
 	ModTime   time.Time
 }
@@ -1362,6 +1363,7 @@ func codexSessionCandidateScan(path string) (candidate CodexSessionCandidate, ok
 		Type      string `json:"type"`
 		Timestamp string `json:"timestamp"`
 		Payload   struct {
+			ID        string `json:"id"`
 			CWD       string `json:"cwd"`
 			Timestamp string `json:"timestamp"`
 		} `json:"payload"`
@@ -1384,6 +1386,7 @@ func codexSessionCandidateScan(path string) (candidate CodexSessionCandidate, ok
 	return CodexSessionCandidate{
 		Path:      path,
 		WorkDir:   meta.Payload.CWD,
+		sessionID: meta.Payload.ID,
 		StartedAt: startedAt,
 		ModTime:   modTime,
 	}, true, true

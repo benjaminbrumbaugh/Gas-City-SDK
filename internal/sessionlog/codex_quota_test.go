@@ -1,6 +1,7 @@
 package sessionlog
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -81,7 +82,7 @@ func TestExtractCodexTailQuotaReminderOnlyReturnsNoEvidence(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "rollout-2026-10-05T12-00-00-session-1.jsonl")
 	writeCodexUsageLines(t, path, []string{
-		codexSessionMetaLine("2026-10-05T18:59:00Z", "/work/dir"),
+		codexQuotaSessionMetaLine("2026-10-05T18:59:00Z", "/work/dir"),
 		`{"timestamp":"2026-10-05T18:59:01Z","type":"event_msg","payload":{"type":"agent_message","message":"You have 2 usage limit resets available. Run /usage to use one."}}`,
 	})
 
@@ -98,7 +99,7 @@ func TestExtractCodexTailQuotaUsesLatestValidSnapshotAfterMalformedInput(t *test
 	root := t.TempDir()
 	path := filepath.Join(root, "rollout-2026-10-05T12-00-00-session-1.jsonl")
 	writeCodexUsageLines(t, path, []string{
-		codexSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
+		codexQuotaSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
 		codexTurnContextLine("2026-10-05T18:58:01Z", "gpt-5.5"),
 		`{"timestamp":"2026-10-05T18:58:02Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex","primary":{"used_percent":11,"window_minutes":300,"resets_at":1776394093,"reached":false}}}}`,
 		`{"timestamp":"2026-10-05T18:58:03Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex","primary":{"used_percent":22,"window_minutes":300,"resets_at":1776394094,"reached":false}}}}`,
@@ -125,7 +126,7 @@ func TestExtractCodexTailQuotaPreservesStaleObservationTimestamp(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "rollout-2026-10-05T12-00-00-session-1.jsonl")
 	writeCodexUsageLines(t, path, []string{
-		codexSessionMetaLine("2024-01-01T00:00:00Z", "/work/dir"),
+		codexQuotaSessionMetaLine("2024-01-01T00:00:00Z", "/work/dir"),
 		`{"timestamp":"2024-01-01T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex","primary":{"used_percent":100,"window_minutes":300,"resets_at":1704067200,"reached":true}}}}`,
 	})
 
@@ -145,7 +146,7 @@ func TestExtractCodexTailQuotaLeavesUnknownContextEmpty(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "rollout-2026-10-05T12-00-00-session-1.jsonl")
 	writeCodexUsageLines(t, path, []string{
-		codexSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
+		codexQuotaSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
 		`{"timestamp":"2026-10-05T18:58:02Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex","primary":{"used_percent":null,"window_minutes":null,"resets_at":null,"reached":null}}}}`,
 	})
 
@@ -193,6 +194,32 @@ func TestExtractCodexTailQuotaRequiresVerifiedContextAndContainedPath(t *testing
 	}
 }
 
+func TestExtractCodexTailQuotaRejectsWrongProviderWithValidEvidence(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-10-05T12-00-00-session-1.jsonl")
+	writeCodexUsageLines(t, path, []string{
+		codexQuotaSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
+		codexTokenCountLine("2026-10-05T18:58:02Z", 42, 42, 0, 0, 0),
+	})
+	context := validCodexQuotaContext()
+	context.Provider = "other"
+	if _, err := ExtractCodexTailQuotaFromSearchPaths([]string{root}, path, context); err == nil {
+		t.Fatal("wrong provider must be rejected with otherwise-valid session evidence")
+	}
+}
+
+func TestExtractCodexTailQuotaRejectsSessionMetaIDMismatch(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-10-05T12-00-00-session-1.jsonl")
+	writeCodexUsageLines(t, path, []string{
+		`{"timestamp":"2026-10-05T18:58:00Z","type":"session_meta","payload":{"id":"session-2","cwd":"/work/dir"}}`,
+		codexTokenCountLine("2026-10-05T18:58:02Z", 42, 42, 0, 0, 0),
+	})
+	if _, err := ExtractCodexTailQuotaFromSearchPaths([]string{root}, path, validCodexQuotaContext()); err == nil {
+		t.Fatal("session_meta ID mismatch must be rejected")
+	}
+}
+
 func TestExtractCodexTailQuotaUsesCanonicalWorkDirBinding(t *testing.T) {
 	root := t.TempDir()
 	realWorkDir := filepath.Join(root, "workspace")
@@ -205,7 +232,7 @@ func TestExtractCodexTailQuotaUsesCanonicalWorkDirBinding(t *testing.T) {
 	}
 	path := filepath.Join(root, "rollout-2026-10-05T12-00-00-session-1.jsonl")
 	writeCodexUsageLines(t, path, []string{
-		codexSessionMetaLine("2026-10-05T18:58:00Z", realWorkDir),
+		codexQuotaSessionMetaLine("2026-10-05T18:58:00Z", realWorkDir),
 		codexTurnContextLine("2026-10-05T18:58:01Z", "model-a"),
 		codexTokenCountLine("2026-10-05T18:58:02Z", 42, 42, 0, 0, 0),
 	})
@@ -241,7 +268,7 @@ func TestExtractCodexTailQuotaRejectsSymlinkEscape(t *testing.T) {
 	}
 	path := filepath.Join(link, "rollout-2026-10-05T12-00-00-session-1.jsonl")
 	writeCodexUsageLines(t, path, []string{
-		codexSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
+		codexQuotaSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
 		codexTokenCountLine("2026-10-05T18:58:02Z", 42, 42, 0, 0, 0),
 	})
 
@@ -259,7 +286,7 @@ func TestExtractCodexTailQuotaAcceptsSymlinkedSearchRoot(t *testing.T) {
 	}
 	path := filepath.Join(linkedRoot, "rollout-2026-10-05T12-00-00-session-1.jsonl")
 	writeCodexUsageLines(t, path, []string{
-		codexSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
+		codexQuotaSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
 		codexTokenCountLine("2026-10-05T18:58:02Z", 42, 42, 0, 0, 0),
 	})
 
@@ -271,7 +298,7 @@ func TestExtractCodexTailQuotaAcceptsSymlinkedSearchRoot(t *testing.T) {
 func TestExtractCodexTailQuotaRejectsEachIsolationGuard(t *testing.T) {
 	root := t.TempDir()
 	validContent := []string{
-		codexSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
+		codexQuotaSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
 		codexTurnContextLine("2026-10-05T18:58:01Z", "model-a"),
 		codexTokenCountLine("2026-10-05T18:58:02Z", 42, 42, 0, 0, 0),
 	}
@@ -311,7 +338,7 @@ func TestExtractCodexTailQuotaRejectsEachIsolationGuard(t *testing.T) {
 			name: "workdir mismatch",
 			path: filepath.Join(root, "rollout-2026-10-05T12-00-00-session-1.jsonl"),
 			content: []string{
-				codexSessionMetaLine("2026-10-05T18:58:00Z", "/other/workdir"),
+				codexQuotaSessionMetaLine("2026-10-05T18:58:00Z", "/other/workdir"),
 				codexTurnContextLine("2026-10-05T18:58:01Z", "model-a"),
 				codexTokenCountLine("2026-10-05T18:58:02Z", 42, 42, 0, 0, 0),
 			},
@@ -347,7 +374,7 @@ func TestExtractCodexTailQuotaResetsTurnEffort(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "rollout-2026-10-05T12-00-00-session-1.jsonl")
 	writeCodexUsageLines(t, path, []string{
-		codexSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
+		codexQuotaSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
 		`{"timestamp":"2026-10-05T18:58:01Z","type":"turn_context","payload":{"model":"model-a","effort":"xhigh"}}`,
 		codexTokenCountLine("2026-10-05T18:58:02Z", 42, 42, 0, 0, 0),
 		`{"timestamp":"2026-10-05T18:58:03Z","type":"turn_context","payload":{"model":"model-b"}}`,
@@ -373,7 +400,7 @@ func TestExtractCodexTailQuotaUsesReasoningEffortFallback(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "rollout-2026-10-05T12-00-00-session-1.jsonl")
 	writeCodexUsageLines(t, path, []string{
-		codexSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
+		codexQuotaSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
 		`{"timestamp":"2026-10-05T18:58:01Z","type":"turn_context","payload":{"model":"model-c","reasoning_effort":"medium"}}`,
 		codexTokenCountLine("2026-10-05T18:58:02Z", 42, 42, 0, 0, 0),
 	})
@@ -391,7 +418,7 @@ func TestExtractCodexTailQuotaReportsBoundedTailAbsenceAsUnknown(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "rollout-2026-10-05T12-00-00-session-1.jsonl")
 	lines := []string{
-		codexSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
+		codexQuotaSessionMetaLine("2026-10-05T18:58:00Z", "/work/dir"),
 		codexTokenCountLine("2026-10-05T18:58:02Z", 42, 42, 0, 0, 0),
 	}
 	for len(strings.Join(lines, "\n")) <= int(tailChunkSize)+1024 {
@@ -410,6 +437,10 @@ func TestExtractCodexTailQuotaReportsBoundedTailAbsenceAsUnknown(t *testing.T) {
 
 func validCodexQuotaContext() CodexQuotaContext {
 	return CodexQuotaContext{Provider: CodexQuotaProvider, SessionID: "session-1", WorkDir: "/work/dir"}
+}
+
+func codexQuotaSessionMetaLine(ts, cwd string) string {
+	return fmt.Sprintf(`{"timestamp":%q,"type":"session_meta","payload":{"id":"session-1","timestamp":%q,"cwd":%q,"originator":"codex-tui","cli_version":"0.121.0","source":"cli","model_provider":"openai"}}`, ts, ts, cwd)
 }
 
 func validCodexQuotaContextWithoutWorkDir() CodexQuotaContext {

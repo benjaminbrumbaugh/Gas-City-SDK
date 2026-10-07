@@ -98,3 +98,13 @@ evidence. No lifecycle wiring, recovery policy, inference, credential/account
 mutation, mandatory crypto, registry/outbox/event framework, deployment, or
 unrelated cleanup will be added. No additional planning rounds are needed for
 this rejected-branch repair.
+
+## Independent review follow-up
+
+The exact-byte review of the first published repair found two evidence gaps:
+the provider rejection was not exercised with otherwise-valid evidence, and
+`session_meta.payload.id` was not bound to the filename/session identity.
+Added direct regressions for both cases. The parser now carries the metadata
+ID to the quota boundary, which rejects a missing or mismatched ID before
+tail extraction. This remains a source-only `internal/sessionlog` repair; no
+provider lifecycle, probing, policy, or orchestration behavior is added.
