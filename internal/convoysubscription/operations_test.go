@@ -269,6 +269,71 @@ func TestServiceRefusesLateSubscriptionWhenConvoyIsTerminal(t *testing.T) {
 	}
 }
 
+func TestServiceRefusesSubscriptionThatBecomesTerminalAfterCreate(t *testing.T) {
+	store := beads.NewMemStore()
+	owner := mustSession(t, store, "own-session")
+	lookupCalls := 0
+	service := NewService(store, store, func(context.Context, string) (bool, error) {
+		lookupCalls++
+		return lookupCalls == 2, nil
+	})
+
+	result, err := service.Subscribe(context.Background(), validSubscribeRequest("own-session"))
+	if !errors.Is(err, ErrTerminalState) {
+		t.Fatalf("terminal transition subscribe error = %v, want ErrTerminalState", err)
+	}
+	if lookupCalls != 2 {
+		t.Fatalf("terminal lookup calls = %d, want pre- and post-create checks", lookupCalls)
+	}
+	if result.Status != StatusTerminalRefused || result.Acknowledged || result.Owner.SessionID != owner.ID || result.Refusal == nil {
+		t.Fatalf("terminal transition result = %#v, want explicit refusal for %q", result, owner.ID)
+	}
+
+	listed, err := service.List(context.Background(), ListRequest{
+		SchemaVersion:  ContractVersion,
+		OwnerSessionID: owner.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Subscriptions) != 1 {
+		t.Fatalf("durable subscriptions = %#v, want one retired audit record", listed.Subscriptions)
+	}
+	if listed.Subscriptions[0].State != convoy.SubscriptionUnregistered {
+		t.Fatalf("durable subscription state = %q, want %q", listed.Subscriptions[0].State, convoy.SubscriptionUnregistered)
+	}
+}
+
+func TestServiceRetiresSubscriptionWhenPostCreateTerminalLookupFails(t *testing.T) {
+	store := beads.NewMemStore()
+	owner := mustSession(t, store, "own-session")
+	lookupErr := errors.New("terminal state store unavailable")
+	lookupCalls := 0
+	service := NewService(store, store, func(context.Context, string) (bool, error) {
+		lookupCalls++
+		if lookupCalls == 2 {
+			return false, lookupErr
+		}
+		return false, nil
+	})
+
+	_, err := service.Subscribe(context.Background(), validSubscribeRequest("own-session"))
+	if !errors.Is(err, lookupErr) {
+		t.Fatalf("post-create terminal lookup error = %v, want %v", err, lookupErr)
+	}
+
+	listed, err := service.List(context.Background(), ListRequest{
+		SchemaVersion:  ContractVersion,
+		OwnerSessionID: owner.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Subscriptions) != 1 || listed.Subscriptions[0].State != convoy.SubscriptionUnregistered {
+		t.Fatalf("durable subscriptions after lookup failure = %#v, want one retired audit record", listed.Subscriptions)
+	}
+}
+
 func TestServiceRefusesConvoySubscriptionWithoutTerminalAuthority(t *testing.T) {
 	store := beads.NewMemStore()
 	mustSession(t, store, "own-session")
