@@ -26,8 +26,9 @@ import (
 const (
 	// ContractVersion identifies the pinned operation/result contract consumed
 	// by a local client or an existing external binding.
-	ContractVersion = "convoy-subscription.v1"
-	maxOpaqueLength = 256
+	ContractVersion          = "convoy-subscription.v1"
+	maxOpaqueLength          = 256
+	terminalTransitionReason = "convoy became terminal during subscription"
 )
 
 var (
@@ -340,7 +341,38 @@ func (s *Service) Subscribe(ctx context.Context, request SubscribeRequest) (Resu
 	if err != nil {
 		return Result{}, err
 	}
+	if request.Scope.ConvoyID != "" {
+		terminal, lookupErr := s.terminal(ctx, request.Scope.ConvoyID)
+		if lookupErr != nil {
+			retireErr := s.retireCreatedSubscription(ctx, owner, record, now)
+			lookupFailure := fmt.Errorf("re-check terminal convoy %q: %w", request.Scope.ConvoyID, lookupErr)
+			if retireErr != nil {
+				return Result{}, errors.Join(lookupFailure, fmt.Errorf("retire subscription after terminal-state lookup failure: %w", retireErr))
+			}
+			return Result{}, lookupFailure
+		}
+		if terminal {
+			if err := s.retireCreatedSubscription(ctx, owner, record, now); err != nil {
+				return Result{}, fmt.Errorf("retire subscription for terminal convoy %q: %w", request.Scope.ConvoyID, err)
+			}
+			return Result{
+				SchemaVersion: ContractVersion,
+				Operation:     OperationSubscribe,
+				Status:        StatusTerminalRefused,
+				Owner:         owner,
+				Refusal:       &TerminalRefusal{ConvoyID: request.Scope.ConvoyID, Reason: terminalTransitionReason},
+			}, ErrTerminalState
+		}
+	}
 	return resultFromRecord(OperationSubscribe, StatusSubscribed, owner, record), nil
+}
+
+func (s *Service) retireCreatedSubscription(ctx context.Context, owner Owner, record convoy.SubscriptionRecord, now time.Time) error {
+	_, err := s.subscriptions.Unregister(ctx, owner.SessionID, record.ID, convoy.RegistrationFence{
+		RegistrationID: record.RegistrationID,
+		Generation:     record.Generation,
+	}, terminalTransitionReason, now)
+	return err
 }
 
 // List returns every durable registration, including terminal records, for an
