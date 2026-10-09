@@ -80,11 +80,11 @@ func (c *ResponseComposer) Record(ctx context.Context, response Response) (Respo
 }
 
 func (c *ResponseComposer) enqueueHandoff(ctx context.Context, request RequestRecord, response Response) (ResponseHandoffRecord, error) {
+	handoffRequest, err := normalizeHandoffRequest(request.Request)
+	if err != nil {
+		return ResponseHandoffRecord{}, err
+	}
 	if request.State == StateCompleted {
-		handoffRequest, err := normalizeHandoffRequest(request.Request)
-		if err != nil {
-			return ResponseHandoffRecord{}, err
-		}
 		commitment, err := responseCommitment(response)
 		if err != nil {
 			return ResponseHandoffRecord{}, err
@@ -98,21 +98,21 @@ func (c *ResponseComposer) enqueueHandoff(ctx context.Context, request RequestRe
 		}
 		return c.handoff.Get(ctx, existing.ID)
 	}
-	return c.handoff.Enqueue(ctx, request.Request, response)
+	return c.handoff.enqueueNormalized(ctx, handoffRequest, response)
 }
 
 func normalizeComposedResponse(response Response, request RequestRecord) (Response, error) {
 	response.RequestID = request.Request.RequestID
 	response.CorrelationID = strings.TrimSpace(response.CorrelationID)
 	response.ResponseID = strings.TrimSpace(response.ResponseID)
-	response.State = strings.ToLower(strings.TrimSpace(response.State))
+	response.State = ResponseOutcome(strings.ToLower(strings.TrimSpace(string(response.State))))
 	if response.State == "" {
-		response.State = "answered"
+		response.State = ResponseOutcomeAnswered
 	}
 	switch response.State {
-	case "answered", "refused", "failed", "expired":
+	case ResponseOutcomeAnswered, ResponseOutcomeRefused, ResponseOutcomeFailed, ResponseOutcomeExpired:
 	default:
-		return Response{}, fmt.Errorf("%w: invalid response outcome %q", ErrInvalidInput, response.State)
+		return Response{}, fmt.Errorf("%w: invalid response outcome %q", ErrInvalidInput, string(response.State))
 	}
 	if request.Attempt <= 0 || response.Attempt != request.Attempt {
 		return Response{}, fmt.Errorf("%w: response attempt does not match current claim", ErrInvalidInput)
@@ -123,8 +123,8 @@ func normalizeComposedResponse(response Response, request RequestRecord) (Respon
 	if response.ContentRetention != "" && response.ContentRetention != RetentionDurable && response.ContentRetention != RetentionEphemeral {
 		return Response{}, fmt.Errorf("%w: invalid response content_retention %q", ErrInvalidInput, response.ContentRetention)
 	}
-	if response.State == "failed" || response.State == "expired" {
-		response.Summary = sanitizeOutcomeSummary(response.State, response.Summary)
+	if response.State == ResponseOutcomeFailed || response.State == ResponseOutcomeExpired {
+		response.Summary = sanitizeOutcomeSummary(string(response.State), response.Summary)
 	}
 	if response.ReceivedAt.IsZero() {
 		response.ReceivedAt = request.Request.CreatedAt
