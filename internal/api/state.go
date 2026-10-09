@@ -38,6 +38,14 @@ type RoutingDecisionProvider interface {
 	RoutingDecisionAdmitLocal(context.Context, routingdecision.LocalAdmissionRequest, string) (routingdecision.LocalAdmissionResult, error)
 }
 
+// RoutingDeliveryProvider is the additive transport-delivery capability. It
+// keeps existing routing providers source-compatible while exposing only
+// bounded pending reads and exact-digest acknowledgements.
+type RoutingDeliveryProvider interface {
+	RoutingDeliveryPending(context.Context, routingdecision.DeliveryListOptions) (routingdecision.DeliveryPage, error)
+	RoutingDeliveryAck(context.Context, routingdecision.DeliveryAckRequest) (routingdecision.DeliveryAckResult, error)
+}
+
 // MaintenanceProvider is the subset of supervisor.StoreMaintenanceLoop that
 // the API layer consumes. Defining it here keeps handlers from importing
 // the full supervisor runtime and lets tests substitute a fake without

@@ -424,6 +424,22 @@ export const zCycle = z.object({
     trigger_detail: z.string().optional()
 });
 
+export const zDeliveryAck = z.object({
+    acknowledged_at_unix: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    delivery_id: z.string(),
+    payload_sha256: z.string()
+});
+
+export const zDeliveryAckRequest = z.object({
+    delivery_id: z.string(),
+    payload_sha256: z.string()
+});
+
+export const zDeliveryAckResult = z.object({
+    ack: zDeliveryAck,
+    replay: z.boolean()
+});
+
 export const zDeliveryContextRecord = z.object({
     BindingGeneration: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
     Conversation: zConversationRef,
@@ -434,6 +450,25 @@ export const zDeliveryContextRecord = z.object({
     SchemaVersion: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
     SessionID: z.string(),
     SourceSessionID: z.string()
+});
+
+export const zDeliveryItem = z.object({
+    delivery_id: z.string(),
+    evidence_at_unix: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    outcome_id: z.string(),
+    outcome_schema_version: z.string(),
+    payload: z.string(),
+    payload_sha256: z.string(),
+    routing_decision_id: z.string(),
+    source_id: z.string(),
+    source_kind: z.string(),
+    work_id: z.string()
+});
+
+export const zDeliveryPage = z.object({
+    items: z.array(zDeliveryItem).nullable(),
+    next_cursor: z.string().optional(),
+    schema_version: z.string()
 });
 
 export const zDep = z.object({
@@ -10080,6 +10115,35 @@ export const zIngestRoutingDecisionPath = z.object({
  * Created
  */
 export const zIngestRoutingDecisionResponse = zRoutingDecisionIngestResult;
+
+export const zPostV0CityByCityNameRoutingDeliveryAckBody = zDeliveryAckRequest;
+
+export const zPostV0CityByCityNameRoutingDeliveryAckHeaders = z.object({
+    'X-GC-Request': z.string().min(1)
+});
+
+export const zPostV0CityByCityNameRoutingDeliveryAckPath = z.object({
+    cityName: z.string().min(1).regex(/\S/)
+});
+
+/**
+ * OK
+ */
+export const zPostV0CityByCityNameRoutingDeliveryAckResponse = zDeliveryAckResult;
+
+export const zGetV0CityByCityNameRoutingDeliveryPendingPath = z.object({
+    cityName: z.string().min(1).regex(/\S/)
+});
+
+export const zGetV0CityByCityNameRoutingDeliveryPendingQuery = z.object({
+    limit: z.coerce.bigint().gte(BigInt(1)).lte(BigInt(100)).optional().default(BigInt(100)),
+    cursor: z.string().optional()
+});
+
+/**
+ * OK
+ */
+export const zGetV0CityByCityNameRoutingDeliveryPendingResponse = zDeliveryPage;
 
 export const zGetRoutingEligiblePath = z.object({
     cityName: z.string().min(1).regex(/\S/)
