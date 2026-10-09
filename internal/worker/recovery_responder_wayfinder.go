@@ -453,6 +453,7 @@ func (a *WayfinderRecoveryAdvisor) Recommend(ctx context.Context, request Recove
 		return "", fmt.Errorf("wayfinder request template has no candidate for remaining recovery targets")
 	}
 	narrowWayfinderRequest(&packet, remaining)
+	overlayQuotaObservation(&packet, request.QuotaObservation, request.Now)
 	if err := validateWayfinderRequest(&packet); err != nil {
 		return "", fmt.Errorf("build wayfinder routing/v3 request: %w", err)
 	}
@@ -529,6 +530,33 @@ func (a *WayfinderRecoveryAdvisor) Recommend(ctx context.Context, request Recove
 		return "", fmt.Errorf("wayfinder response fresh advisory validity window expired")
 	}
 	return result.Recommendation.ExecutionTarget.TargetID, nil
+}
+
+func overlayQuotaObservation(request *wayfinderEvaluateRequest, observation *QuotaObservation, now time.Time) {
+	if request == nil || observation == nil || !observation.IsFresh(now) || !observation.IsHardExhausted() || strings.TrimSpace(observation.AccountRef) == "" {
+		return
+	}
+	for i := range request.Candidates {
+		candidate := &request.Candidates[i]
+		if candidate.ExecutionTarget.AccountRef != observation.AccountRef || !quotaModelMatches(*observation, candidate.Model) {
+			continue
+		}
+		for j := range request.Observations {
+			if request.Observations[j].RecordID != candidate.ObservationRef {
+				continue
+			}
+			value := "upstream"
+			request.Observations[j].Throttle = wayfinderKnownString{Known: true, Value: &value}
+		}
+	}
+}
+
+func quotaModelMatches(observation QuotaObservation, model wayfinderModelRecord) bool {
+	quotaModel := strings.TrimSpace(observation.Model)
+	if quotaModel == "" {
+		return true
+	}
+	return quotaModel == strings.TrimSpace(model.CanonicalModel) || quotaModel == strings.TrimSpace(model.ServeAs)
 }
 
 func narrowWayfinderRequest(request *wayfinderEvaluateRequest, remainingTargets []string) {

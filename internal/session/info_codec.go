@@ -140,6 +140,7 @@ var infoKeyCodec = []infoKeySpec{
 	{"recovery_cooldown_until", func(i *Info, v string) { i.RecoveryCooldownUntil = v }},
 	{"recovery_outcome", func(i *Info, v string) { i.RecoveryOutcome = v }},
 	{"recovery_work_id", func(i *Info, v string) { i.RecoveryWorkID = v }},
+	{RecoveryQuotaObservationMetadataKey, func(i *Info, v string) { i.RecoveryQuotaObservation = v }},
 
 	// trigger / brain-parent cluster (canonical gc.* keys via beadmeta)
 	{beadmeta.TriggerBeadIDMetadataKey, func(i *Info, v string) { i.TriggerBeadID = v }},
