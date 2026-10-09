@@ -14,17 +14,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newExtMsgCmd groups the external-conversation binding verbs. These are
-// thin projections over the extmsg binding service via the city API —
+// newExtMsgCmd groups the external-conversation binding, reply, and transcript
+// verbs. These are thin projections over extmsg services via the city API —
 // there is deliberately no local fallback: conversation bindings are live
 // controller state, and mutating the bead store behind a running
 // controller's back would race its delivery pipeline.
 func newExtMsgCmd(stdout, stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "extmsg",
-		Short: "Manage external-conversation bindings",
-		Long: `Manage bindings between external conversations (telegram, discord, ...)
-and gc sessions or configured agents.
+		Short: "Manage external conversations",
+		Long: `Manage bindings, replies, and transcripts for external conversations
+(telegram, discord, ...).
+
+A reply is sent through the city API with explicit session attribution.
 
 A conversation bound to an agent name survives session restarts: inbound
 messages resolve a live session for the agent at delivery time, cold-waking
@@ -37,6 +39,8 @@ These commands require the city API server; they have no local fallback.`,
 	cmd.AddCommand(newExtMsgBindCmd(stdout, stderr))
 	cmd.AddCommand(newExtMsgHandoffCmd(stdout, stderr))
 	cmd.AddCommand(newExtMsgUnbindCmd(stdout, stderr))
+	cmd.AddCommand(newExtMsgReplyCmd(stdout, stderr))
+	cmd.AddCommand(newExtMsgTranscriptCmd(stdout, stderr))
 	return cmd
 }
 
