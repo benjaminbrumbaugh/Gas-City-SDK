@@ -36,7 +36,7 @@ func ExecutionSessionBound(cityRoot, id string) (bool, error) {
 	}
 	defer db.Close() //nolint:errcheck
 	if err := db.View(func(tx *bbolt.Tx) error {
-		for _, name := range requiredBucketNames {
+		for _, name := range legacyRequiredBucketNames {
 			if tx.Bucket(name) == nil {
 				return ErrStoreCorrupt
 			}
