@@ -231,7 +231,9 @@
               "worktree-ensure",
               "worktree-verify",
               "trace-snapshot",
-              "routing-admit"
+              "routing-admit",
+              "routing-delivery-pending",
+              "routing-delivery-ack"
             ]
           },
           "event_id": {
