@@ -87,7 +87,53 @@ const (
 	StateExpired DeliveryState = "expired"
 	// StateCancelled records an operator cancellation.
 	StateCancelled DeliveryState = "cancelled" //nolint:misspell // public wire state spelling
+	// StateUncertain records a delivery whose remote acceptance cannot be
+	// ruled out. It is not claimable until the original request identity is
+	// reconciled by an owner that understands the provider.
+	StateUncertain DeliveryState = "uncertain"
 )
+
+// ResponseOutcome is the coordinator's explicit result. It is separate from
+// DeliveryState: a refused or failed answer is still a response that was
+// causally recorded, while a transport refusal is not a coordinator outcome.
+type ResponseOutcome string
+
+const (
+	// ResponseOutcomeAnswered records an answer or decision.
+	ResponseOutcomeAnswered ResponseOutcome = "answered"
+	// ResponseOutcomeRefused records an explicit coordinator refusal.
+	ResponseOutcomeRefused ResponseOutcome = "refused"
+	// ResponseOutcomeFailed records that the coordinator could not produce an answer.
+	ResponseOutcomeFailed ResponseOutcome = "failed"
+	// ResponseOutcomeExpired records that no answer was produced before expiry.
+	ResponseOutcomeExpired ResponseOutcome = "expired"
+)
+
+func (o ResponseOutcome) valid() bool {
+	switch o {
+	case ResponseOutcomeAnswered, ResponseOutcomeRefused, ResponseOutcomeFailed, ResponseOutcomeExpired:
+		return true
+	default:
+		return false
+	}
+}
+
+// RecoveryAction describes the durable result of recovering one abandoned
+// running claim.
+type RecoveryAction string
+
+const (
+	// RecoveryActionMarkedUncertain preserves a possible remote acceptance.
+	RecoveryActionMarkedUncertain RecoveryAction = "marked_uncertain"
+	// RecoveryActionExpired records that the request deadline passed before recovery.
+	RecoveryActionExpired RecoveryAction = "expired"
+)
+
+// RecoveryResult reports a recovery transition after its durable write wins.
+type RecoveryResult struct {
+	Record RequestRecord
+	Action RecoveryAction
+}
 
 // Capability describes an adapter's supported coordinator operations.
 type Capability struct {
@@ -176,7 +222,24 @@ type RequestRecord struct {
 	revision             int64
 	responseCommitment   string
 	responseScrubPending bool
+	outcome              ResponseOutcome
+	claimExpiresAt       time.Time
+	retryAt              time.Time
+	uncertaintyClass     string
 }
+
+// Outcome returns the explicit coordinator outcome recorded for this request.
+// An empty value means no response outcome has been recorded.
+func (r RequestRecord) Outcome() ResponseOutcome { return r.outcome }
+
+// ClaimExpiresAt returns the durable deadline for the current worker claim.
+func (r RequestRecord) ClaimExpiresAt() time.Time { return r.claimExpiresAt }
+
+// RetryAt returns the earliest instant at which a queued retry may be claimed.
+func (r RequestRecord) RetryAt() time.Time { return r.retryAt }
+
+// UncertaintyClass returns the sanitized reason a request became uncertain.
+func (r RequestRecord) UncertaintyClass() string { return r.uncertaintyClass }
 
 // DeliveryReceipt reports adapter acceptance, not external coordinator execution completion.
 type DeliveryReceipt struct {
@@ -189,6 +252,8 @@ type DeliveryReceipt struct {
 	ResponseID      string        `json:"response_id,omitempty"`
 	RetryAfter      time.Duration `json:"retry_after,omitempty"`
 	Error           string        `json:"error,omitempty"`
+
+	retryClass string
 }
 
 // Response records a result returned by the external coordinator.
@@ -197,7 +262,7 @@ type Response struct {
 	Attempt          int              `json:"attempt" minimum:"1"`
 	CorrelationID    string           `json:"correlation_id" minLength:"1"`
 	ResponseID       string           `json:"response_id"`
-	State            string           `json:"state"`
+	State            ResponseOutcome  `json:"state"`
 	Summary          string           `json:"summary,omitempty"`
 	ContentRetention ContentRetention `json:"content_retention,omitempty"`
 	FollowUpRequired bool             `json:"follow_up_required"`
@@ -227,9 +292,79 @@ type Store interface {
 
 // Service is the concrete durable request queue.
 type Service struct {
-	store   beads.Store
-	claimMu sync.Mutex
+	store         beads.Store
+	claimMu       sync.Mutex
+	now           func() time.Time
+	claimLease    time.Duration
+	maxAttempts   int
+	retryBase     time.Duration
+	retryMax      time.Duration
+	recoveryBatch int
 }
 
-// NewService creates a durable external coordination request service over the city's bead store.
-func NewService(store beads.Store) *Service { return &Service{store: store} }
+// ServiceOptions controls the bounded recovery policy of a Service. Now is an
+// injectable clock seam for deterministic expiry and lease tests; production
+// callers should leave it nil.
+type ServiceOptions struct {
+	Now           func() time.Time
+	ClaimLease    time.Duration
+	MaxAttempts   int
+	RetryBase     time.Duration
+	RetryMax      time.Duration
+	RecoveryBatch int
+}
+
+// NewService creates a durable external coordination request service over the
+// city's bead store using the production recovery policy.
+func NewService(store beads.Store) *Service {
+	return NewServiceWithOptions(store, ServiceOptions{})
+}
+
+// NewServiceWithOptions creates a service with an explicit clock and bounded
+// claim/retry policy. Zero-valued options use safe production defaults.
+func NewServiceWithOptions(store beads.Store, options ServiceOptions) *Service {
+	if options.Now == nil {
+		options.Now = func() time.Time { return time.Now().UTC() }
+	}
+	if options.ClaimLease <= 0 {
+		options.ClaimLease = defaultClaimLease
+	}
+	if options.MaxAttempts <= 0 {
+		options.MaxAttempts = defaultMaxAttempts
+	}
+	if options.RetryBase <= 0 {
+		options.RetryBase = defaultRetryBase
+	}
+	if options.RetryMax <= 0 {
+		options.RetryMax = defaultRetryMax
+	}
+	if options.RetryMax < options.RetryBase {
+		options.RetryMax = options.RetryBase
+	}
+	if options.RecoveryBatch <= 0 {
+		options.RecoveryBatch = defaultRecoveryBatch
+	}
+	return &Service{
+		store:         store,
+		now:           options.Now,
+		claimLease:    options.ClaimLease,
+		maxAttempts:   options.MaxAttempts,
+		retryBase:     options.RetryBase,
+		retryMax:      options.RetryMax,
+		recoveryBatch: options.RecoveryBatch,
+	}
+}
+
+// NewServiceWithClock creates a service using an injected clock and default
+// recovery limits. It is convenient for callers that only need deterministic
+// time in tests.
+func NewServiceWithClock(store beads.Store, now func() time.Time) *Service {
+	return NewServiceWithOptions(store, ServiceOptions{Now: now})
+}
+
+func (s *Service) nowTime() time.Time {
+	if s == nil || s.now == nil {
+		return time.Now().UTC()
+	}
+	return s.now().UTC()
+}
