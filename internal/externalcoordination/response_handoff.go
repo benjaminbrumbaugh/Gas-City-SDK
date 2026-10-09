@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/extmsg"
@@ -184,6 +185,22 @@ func (h *ResponseHandoff) Enqueue(ctx context.Context, request Request, response
 	}
 	response, err = normalizeHandoffResponse(response, handoffRequest)
 	if err != nil {
+		return ResponseHandoffRecord{}, err
+	}
+	return h.enqueueNormalized(ctx, handoffRequest, response)
+}
+
+// enqueueNormalized persists a response whose canonical form was established
+// by the caller. It validates the identity fence but never rewrites the body,
+// so the handoff and request-settlement commitments use identical bytes.
+func (h *ResponseHandoff) enqueueNormalized(ctx context.Context, handoffRequest HandoffRequest, response Response) (ResponseHandoffRecord, error) {
+	if err := checkContext(ctx); err != nil {
+		return ResponseHandoffRecord{}, err
+	}
+	if h == nil || h.store == nil {
+		return ResponseHandoffRecord{}, fmt.Errorf("%w: nil store", ErrInvalidInput)
+	}
+	if err := validateHandoffResponse(response, handoffRequest); err != nil {
 		return ResponseHandoffRecord{}, err
 	}
 	commitment, err := responseCommitment(response)
@@ -697,16 +714,8 @@ func normalizeHandoffResponse(response Response, request HandoffRequest) (Respon
 	if response.State == "" {
 		response.State = "answered"
 	}
-	switch response.State {
-	case "answered", "refused", "failed", "expired":
-	default:
-		return Response{}, fmt.Errorf("%w: invalid response outcome %q", ErrInvalidInput, response.State)
-	}
-	if response.RequestID != request.RequestID || response.Attempt != request.Attempt || response.CorrelationID != request.CorrelationID {
-		return Response{}, fmt.Errorf("%w: response does not match handoff identity", ErrInvalidInput)
-	}
-	if response.ContentRetention != "" && response.ContentRetention != RetentionDurable && response.ContentRetention != RetentionEphemeral {
-		return Response{}, fmt.Errorf("%w: invalid response content_retention %q", ErrInvalidInput, response.ContentRetention)
+	if err := validateHandoffResponse(response, request); err != nil {
+		return Response{}, err
 	}
 	if response.State == "failed" || response.State == "expired" {
 		response.Summary = sanitizeOutcomeSummary(response.State, response.Summary)
@@ -718,6 +727,21 @@ func normalizeHandoffResponse(response Response, request HandoffRequest) (Respon
 		}
 	}
 	return response, nil
+}
+
+func validateHandoffResponse(response Response, request HandoffRequest) error {
+	switch response.State {
+	case "answered", "refused", "failed", "expired":
+	default:
+		return fmt.Errorf("%w: invalid response outcome %q", ErrInvalidInput, response.State)
+	}
+	if response.RequestID != request.RequestID || response.Attempt != request.Attempt || response.CorrelationID != request.CorrelationID {
+		return fmt.Errorf("%w: response does not match handoff identity", ErrInvalidInput)
+	}
+	if response.ContentRetention != "" && response.ContentRetention != RetentionDurable && response.ContentRetention != RetentionEphemeral {
+		return fmt.Errorf("%w: invalid response content_retention %q", ErrInvalidInput, response.ContentRetention)
+	}
+	return nil
 }
 
 func validateRouteIdentity(identity map[string]string) error {
@@ -870,7 +894,10 @@ func sanitizeHandoffError(value string) string {
 		}
 	}
 	if len(value) > 128 {
-		return value[:128]
+		value = value[:128]
+		for !utf8.ValidString(value) {
+			value = value[:len(value)-1]
+		}
 	}
 	return value
 }

@@ -80,11 +80,11 @@ func (c *ResponseComposer) Record(ctx context.Context, response Response) (Respo
 }
 
 func (c *ResponseComposer) enqueueHandoff(ctx context.Context, request RequestRecord, response Response) (ResponseHandoffRecord, error) {
+	handoffRequest, err := normalizeHandoffRequest(request.Request)
+	if err != nil {
+		return ResponseHandoffRecord{}, err
+	}
 	if request.State == StateCompleted {
-		handoffRequest, err := normalizeHandoffRequest(request.Request)
-		if err != nil {
-			return ResponseHandoffRecord{}, err
-		}
 		commitment, err := responseCommitment(response)
 		if err != nil {
 			return ResponseHandoffRecord{}, err
@@ -98,7 +98,7 @@ func (c *ResponseComposer) enqueueHandoff(ctx context.Context, request RequestRe
 		}
 		return c.handoff.Get(ctx, existing.ID)
 	}
-	return c.handoff.Enqueue(ctx, request.Request, response)
+	return c.handoff.enqueueNormalized(ctx, handoffRequest, response)
 }
 
 func normalizeComposedResponse(response Response, request RequestRecord) (Response, error) {

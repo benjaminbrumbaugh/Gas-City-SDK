@@ -40,8 +40,12 @@ func (w *failOnceResponseSettlementWriter) UpdateIfMatch(id string, revision int
 	return w.ConditionalWriter.UpdateIfMatch(id, revision, opts)
 }
 
+func compositionTestNow() time.Time {
+	return time.Now().UTC().Truncate(time.Second)
+}
+
 func TestResponseComposerPersistsBodyBeforeSettlementAndRetriesExactly(t *testing.T) {
-	now := time.Date(2026, 10, 7, 23, 0, 0, 0, time.UTC)
+	now := compositionTestNow()
 	base := beads.NewMemStore()
 	initial := NewService(base)
 	input := testRequestInput(now)
@@ -130,7 +134,7 @@ func TestResponseComposerPersistsBodyBeforeSettlementAndRetriesExactly(t *testin
 func TestResponseComposerPreservesTerminalOutcomeAndStoredOriginFence(t *testing.T) {
 	for _, state := range []string{"refused", "failed", "expired"} {
 		t.Run(state, func(t *testing.T) {
-			now := time.Date(2026, 10, 7, 23, 10, 0, 0, time.UTC)
+			now := compositionTestNow()
 			store := beads.NewMemStore()
 			service := NewService(store)
 			input := testRequestInput(now)
@@ -175,8 +179,79 @@ func TestResponseComposerPreservesTerminalOutcomeAndStoredOriginFence(t *testing
 	}
 }
 
+func TestResponseComposerReplaysTerminalSummaryWithExactCommitment(t *testing.T) {
+	now := compositionTestNow()
+	store := beads.NewMemStore()
+	service := NewService(store)
+	input := testRequestInput(now)
+	input.ResultDestination = "origin-conversation-exact-bytes"
+	created, err := service.Enqueue(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := service.Claim(context.Background(), created.ID, "dispatcher-a", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := Response{
+		RequestID:     claimed.Request.RequestID,
+		Attempt:       claimed.Request.Attempt,
+		CorrelationID: claimed.Request.CorrelationID,
+		ResponseID:    "response-exact-bytes",
+		State:         "failed",
+		Summary:       strings.Repeat("a", 127) + "é",
+		ReceivedAt:    now.Add(2 * time.Second),
+	}
+	normalized, err := normalizeComposedResponse(response, claimed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoff := NewResponseHandoff(store, testOriginResolver, OriginHandoffPort{})
+	composer := NewResponseComposer(service, handoff)
+	first, err := composer.Record(context.Background(), response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Handoff == nil {
+		t.Fatal("first composition did not return a durable handoff")
+	}
+	if first.Handoff.Response.Summary != normalized.Summary {
+		t.Fatalf("stored handoff summary = %q, want canonical composer summary %q", first.Handoff.Response.Summary, normalized.Summary)
+	}
+	commitment, err := responseCommitment(normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Handoff.ResponseCommitment != commitment {
+		t.Fatalf("handoff commitment = %q, want composer commitment %q", first.Handoff.ResponseCommitment, commitment)
+	}
+	replay, err := composer.Record(context.Background(), response)
+	if err != nil {
+		t.Fatalf("exact terminal response replay: %v", err)
+	}
+	if replay.Handoff == nil || replay.Handoff.ID != first.Handoff.ID {
+		t.Fatalf("replay handoff = %+v, want original id %q", replay.Handoff, first.Handoff.ID)
+	}
+	stored, err := handoff.Get(context.Background(), first.Handoff.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ResponseCommitment != responseCommitmentForTest(t, stored.Response) {
+		t.Fatalf("stored handoff commitment does not match stored response: %q", stored.ResponseCommitment)
+	}
+}
+
+func responseCommitmentForTest(t *testing.T, response Response) string {
+	t.Helper()
+	commitment, err := responseCommitment(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return commitment
+}
+
 func TestResponseComposerRecordsWithoutOriginHandoff(t *testing.T) {
-	now := time.Date(2026, 10, 7, 23, 20, 0, 0, time.UTC)
+	now := compositionTestNow()
 	store := beads.NewMemStore()
 	service := NewService(store)
 	created, err := service.Enqueue(context.Background(), testRequestInput(now))
@@ -212,7 +287,7 @@ func TestResponseComposerRecordsWithoutOriginHandoff(t *testing.T) {
 }
 
 func TestResponseComposerRefusesCompletedRequestWithoutDurableHandoff(t *testing.T) {
-	now := time.Date(2026, 10, 7, 23, 30, 0, 0, time.UTC)
+	now := compositionTestNow()
 	store := beads.NewMemStore()
 	service := NewService(store)
 	input := testRequestInput(now)
@@ -251,7 +326,7 @@ func TestResponseComposerRefusesCompletedRequestWithoutDurableHandoff(t *testing
 }
 
 func TestResponseComposerRejectsStaleAttemptBeforeHandoff(t *testing.T) {
-	now := time.Date(2026, 10, 7, 23, 40, 0, 0, time.UTC)
+	now := compositionTestNow()
 	store := beads.NewMemStore()
 	service := NewService(store)
 	input := testRequestInput(now)
