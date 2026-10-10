@@ -405,3 +405,37 @@ func TestParseBeadIDAnchorsCreatedOutput(t *testing.T) {
 		t.Fatalf("parseBeadID diagnostic = (%q, %t), want (empty, false)", got, ok)
 	}
 }
+
+// TestAgentScriptsShareBeadIDMatcher keeps the shell matcher aligned with the
+// Go matcher and rejects future hardcoded store-prefix filters.
+func TestAgentScriptsShareBeadIDMatcher(t *testing.T) {
+	libPath := filepath.Join("..", "agents", "lib", "bead-id.sh")
+	lib, err := os.ReadFile(libPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", libPath, err)
+	}
+	assign := regexp.MustCompile(`BEAD_ID_ERE='([^']*)'`).FindSubmatch(lib)
+	if assign == nil {
+		t.Fatalf("%s: no BEAD_ID_ERE assignment", libPath)
+	}
+	if got := string(assign[1]); got != beadIDERE {
+		t.Errorf("%s: BEAD_ID_ERE = %q, want %q", libPath, got, beadIDERE)
+	}
+
+	scripts, err := filepath.Glob(filepath.Join("..", "agents", "*.sh"))
+	if err != nil {
+		t.Fatalf("globbing agent scripts: %v", err)
+	}
+	banned := regexp.MustCompile(`\^(?:gc|bd|mc)-`)
+	for _, path := range scripts {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		for i, line := range strings.Split(string(contents), "\n") {
+			if banned.MatchString(line) {
+				t.Errorf("%s:%d: hardcoded bead-ID prefix filter; use bead_id_rows", path, i+1)
+			}
+		}
+	}
+}

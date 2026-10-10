@@ -35,7 +35,7 @@ func TestGastown_PipelineHumanToWorker(t *testing.T) {
 // send mail to agent → agent reads mail → agent creates work → work processed.
 func TestGastown_PipelineMailAndWork(t *testing.T) {
 	agents := []gasTownAgent{
-		{Name: "mayor", StartCommand: "bash " + agentScript("mayor-dispatch.sh")},
+		{Name: "mayor", StartCommand: "bash " + singleQuoteShell(agentScript("mayor-dispatch.sh"))},
 	}
 	cityDir := setupGasTownCityNoGuard(t, agents)
 
@@ -64,7 +64,7 @@ func TestGastown_PipelineMailAndWork(t *testing.T) {
 // create multiple beads → pool agent drains them all.
 func TestGastown_PipelinePoolDrain(t *testing.T) {
 	agents := []gasTownAgent{
-		{Name: "polecat", StartCommand: "bash " + agentScript("loop.sh"), Pool: &poolConfig{
+		{Name: "polecat", StartCommand: "bash " + singleQuoteShell(agentScript("loop.sh")), Pool: &poolConfig{
 			Min: 1, Max: 5, Check: "echo 1",
 		}},
 	}
@@ -91,7 +91,7 @@ func TestGastown_PipelinePoolDrain(t *testing.T) {
 // create convoy → create beads → process beads → convoy auto-closes.
 func TestGastown_PipelineConvoyTracking(t *testing.T) {
 	agents := []gasTownAgent{
-		{Name: "worker", StartCommand: "bash " + agentScript("loop.sh")},
+		{Name: "worker", StartCommand: "bash " + singleQuoteShell(agentScript("loop.sh"))},
 	}
 	cityDir := setupGasTownCityNoGuard(t, agents)
 
@@ -135,7 +135,7 @@ func TestGastown_PipelineConvoyTracking(t *testing.T) {
 // TestGastown_PipelineMailChain validates a mail chain between agents.
 func TestGastown_PipelineMailChain(t *testing.T) {
 	agents := []gasTownAgent{
-		{Name: "mayor", StartCommand: "bash " + agentScript("loop-mail.sh")},
+		{Name: "mayor", StartCommand: "bash " + singleQuoteShell(agentScript("loop-mail.sh"))},
 		{Name: "deacon", StartCommand: "sleep 3600"},
 	}
 	cityDir := setupGasTownCityNoGuard(t, agents)
@@ -163,12 +163,12 @@ func TestGastown_PipelineGitCommitMerge(t *testing.T) {
 	agents := []gasTownAgent{
 		{
 			Name:         "polecat",
-			StartCommand: "bash " + agentScript("polecat-git.sh"),
+			StartCommand: "bash " + singleQuoteShell(agentScript("polecat-git.sh")),
 			Env:          map[string]string{"GIT_WORK_DIR": polecatRepo, "GC_HANDOFF_TO": "refinery"},
 		},
 		{
 			Name:         "refinery",
-			StartCommand: "bash " + agentScript("refinery-git.sh"),
+			StartCommand: "bash " + singleQuoteShell(agentScript("refinery-git.sh")),
 			Env:          map[string]string{"GIT_WORK_DIR": refineryRepo},
 		},
 	}

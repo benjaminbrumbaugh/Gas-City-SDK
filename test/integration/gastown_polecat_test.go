@@ -11,7 +11,7 @@ import (
 // claim work → process → close bead → exit.
 func TestGastown_PolecatHappyPath(t *testing.T) {
 	agents := []gasTownAgent{
-		{Name: "polecat", StartCommand: "bash " + agentScript("one-shot.sh"), Pool: &poolConfig{
+		{Name: "polecat", StartCommand: "bash " + singleQuoteShell(agentScript("one-shot.sh")), Pool: &poolConfig{
 			Min: 1, Max: 3, Check: "echo 1",
 		}},
 	}
@@ -29,7 +29,7 @@ func TestGastown_PolecatHappyPath(t *testing.T) {
 // multiple beads from the ready queue.
 func TestGastown_PolecatPoolProcessing(t *testing.T) {
 	agents := []gasTownAgent{
-		{Name: "polecat", StartCommand: "bash " + agentScript("loop.sh"), Pool: &poolConfig{
+		{Name: "polecat", StartCommand: "bash " + singleQuoteShell(agentScript("loop.sh")), Pool: &poolConfig{
 			Min: 1, Max: 3, Check: "echo 1",
 		}},
 	}

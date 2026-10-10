@@ -12,7 +12,7 @@ import (
 // human and agent using a bash agent that auto-replies.
 func TestGastown_MailRoundTrip(t *testing.T) {
 	agents := []gasTownAgent{
-		{Name: "mayor", StartCommand: "bash " + agentScript("loop-mail.sh")},
+		{Name: "mayor", StartCommand: "bash " + singleQuoteShell(agentScript("loop-mail.sh"))},
 	}
 	cityDir := setupGasTownCityNoGuard(t, agents)
 

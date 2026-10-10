@@ -89,7 +89,7 @@ func TestGCLiveContract_BeadsAndEvents(t *testing.T) {
 		EventCursor string `json:"event_cursor"`
 	}](t, baseURL, validator, http.MethodPost, "/v0/city", map[string]string{
 		"dir":           cityDir,
-		"start_command": "bash " + agentScript("stuck-agent.sh"),
+		"start_command": "bash " + singleQuoteShell(agentScript("stuck-agent.sh")),
 	}, http.StatusAccepted)
 	if createCity.RequestID == "" {
 		t.Fatalf("city create response missing request_id")

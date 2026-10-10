@@ -23,7 +23,7 @@ import (
 // city.toml config), gc mail send/inbox, gc stop.
 func TestMail_BashAgent(t *testing.T) {
 	agents := []agentConfig{
-		{Name: "mayor", StartCommand: "bash " + agentScript("loop-mail.sh")},
+		{Name: "mayor", StartCommand: "bash " + singleQuoteShell(agentScript("loop-mail.sh"))},
 	}
 
 	var cityDir string
