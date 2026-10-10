@@ -1438,6 +1438,12 @@ func appendLiveContractDefaultQuery(path, pathTemplate, rigName string) string {
 
 func liveContractProbeSkipReason(pathTemplate string) string {
 	switch {
+	case pathTemplate == "/v0/city/{cityName}/external-coordination/requests":
+		return "requires [external_coordination] enabled=true and a live adapter"
+	case pathTemplate == "/v0/city/{cityName}/routing/decisions",
+		pathTemplate == "/v0/city/{cityName}/routing/outcomes",
+		pathTemplate == "/v0/city/{cityName}/routing/outcomes-v3":
+		return "requires the routing decision service to be initialized"
 	case strings.HasSuffix(pathTemplate, "/extmsg/bindings"),
 		strings.HasSuffix(pathTemplate, "/extmsg/groups"),
 		strings.HasSuffix(pathTemplate, "/extmsg/transcript"):
@@ -1448,6 +1454,58 @@ func liveContractProbeSkipReason(pathTemplate string) string {
 		return "requires [maintenance.dolt] enabled=true in city.toml"
 	default:
 		return ""
+	}
+}
+
+func TestLiveContractProbeSkipReason(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		path       string
+		wantReason string
+	}{
+		{
+			name:       "external coordination requests",
+			path:       "/v0/city/{cityName}/external-coordination/requests",
+			wantReason: "external_coordination",
+		},
+		{
+			name:       "routing decisions",
+			path:       "/v0/city/{cityName}/routing/decisions",
+			wantReason: "routing decision",
+		},
+		{
+			name:       "routing outcomes",
+			path:       "/v0/city/{cityName}/routing/outcomes",
+			wantReason: "routing decision",
+		},
+		{
+			name:       "routing execution outcomes",
+			path:       "/v0/city/{cityName}/routing/outcomes-v3",
+			wantReason: "routing decision",
+		},
+		{
+			name: "routing status remains covered",
+			path: "/v0/city/{cityName}/routing/status",
+		},
+		{
+			name: "external coordination capability remains covered",
+			path: "/v0/city/{cityName}/external-coordination",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason := liveContractProbeSkipReason(tt.path)
+			if tt.wantReason == "" {
+				if reason != "" {
+					t.Fatalf("liveContractProbeSkipReason(%q) = %q, want no skip", tt.path, reason)
+				}
+				return
+			}
+			if !strings.Contains(reason, tt.wantReason) {
+				t.Fatalf("liveContractProbeSkipReason(%q) = %q, want reason containing %q", tt.path, reason, tt.wantReason)
+			}
+		})
 	}
 }
 
