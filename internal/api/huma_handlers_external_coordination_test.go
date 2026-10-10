@@ -703,3 +703,26 @@ func TestExternalCoordinationCapabilityReportsUnconfiguredCityAsUnavailable(t *t
 		t.Fatalf("capability for an unconfigured city = %+v, want available/registered/configured all false", capability)
 	}
 }
+
+func TestExternalCoordinationRequestListReportsUnconfiguredCity(t *testing.T) {
+	state := newFakeState(t)
+	state.cityBeadStore = beads.NewMemStore()
+	h := newTestCityHandler(t, state)
+
+	req := httptest.NewRequest(http.MethodGet, cityURL(state, "/external-coordination/requests"), nil)
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, req)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /external-coordination/requests status = %d, want 503; body = %s", response.Code, response.Body.String())
+	}
+	var problem struct {
+		Status int    `json:"status"`
+		Code   string `json:"code"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("decode unavailable problem: %v; body = %s", err, response.Body.String())
+	}
+	if problem.Status != http.StatusServiceUnavailable || problem.Code != "service-unavailable" {
+		t.Fatalf("unavailable problem = %+v, want status=503 code=service-unavailable", problem)
+	}
+}

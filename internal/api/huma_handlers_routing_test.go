@@ -563,10 +563,19 @@ func TestRoutingWireErrorsUseStableProblemCodes(t *testing.T) {
 	}
 
 	unavailable := newTestCityHandler(t, newFakeState(t))
-	rec := httptest.NewRecorder()
-	unavailable.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v0/city/test-city/routing/status", nil))
-	if rec.Code != http.StatusServiceUnavailable || decodeRoutingProblem(t, rec).Code != "routing-unavailable" {
-		t.Fatalf("missing routing capability = %d: %s", rec.Code, rec.Body.String())
+	for _, path := range []string{
+		"/v0/city/test-city/routing/status",
+		"/v0/city/test-city/routing/decisions",
+		"/v0/city/test-city/routing/outcomes",
+		"/v0/city/test-city/routing/outcomes-v3",
+	} {
+		t.Run("unavailable "+path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			unavailable.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusServiceUnavailable || decodeRoutingProblem(t, rec).Code != "routing-unavailable" {
+				t.Fatalf("missing routing capability = %d: %s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
