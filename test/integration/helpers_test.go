@@ -405,3 +405,33 @@ func TestParseBeadIDAnchorsCreatedOutput(t *testing.T) {
 		t.Fatalf("parseBeadID diagnostic = (%q, %t), want (empty, false)", got, ok)
 	}
 }
+
+// TestAgentScriptsShareBeadIDMatcher keeps the Bash agent filter aligned with
+// the Go parser. Store-configured prefixes must not make the mail loop skip a
+// valid unread message.
+func TestAgentScriptsShareBeadIDMatcher(t *testing.T) {
+	libPath := filepath.Join("..", "agents", "lib", "bead-id.sh")
+	lib, err := os.ReadFile(libPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", libPath, err)
+	}
+
+	assign := regexp.MustCompile(`BEAD_ID_ERE='([^']*)'`).FindSubmatch(lib)
+	if assign == nil {
+		t.Fatalf("%s: no BEAD_ID_ERE assignment", libPath)
+	}
+	if got := string(assign[1]); got != beadIDERE {
+		t.Errorf("%s: BEAD_ID_ERE = %q, want %q", libPath, got, beadIDERE)
+	}
+
+	script, err := os.ReadFile(filepath.Join("..", "agents", "loop-mail.sh"))
+	if err != nil {
+		t.Fatalf("reading loop-mail.sh: %v", err)
+	}
+	if !strings.Contains(string(script), "bead_id_rows") {
+		t.Error("loop-mail.sh must use bead_id_rows instead of a hardcoded bead prefix")
+	}
+	if regexp.MustCompile(`\^(?:gc|bd|mc)-`).Match(script) {
+		t.Error("loop-mail.sh must not hardcode gc-, bd-, or mc- bead prefixes")
+	}
+}
