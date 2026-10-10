@@ -634,7 +634,169 @@ var liveContractRequiredOperations = []liveContractRequiredOperation{
 type liveContractReadProbe struct {
 	pathTemplate string
 	path         string
-	skipReason   string
+	expectation  liveContractReadExpectation
+}
+
+// liveContractFixtureCapabilities describes optional services provided by the
+// fixture that owns the live read sweep. The default fixture intentionally
+// leaves both optional services unavailable; provider-specific owner tests
+// cover their configured success paths.
+type liveContractFixtureCapabilities struct {
+	RoutingDecisionService         bool
+	ExternalCoordinationConfigured bool
+	ExternalCoordinationAdapter    bool
+}
+
+var liveContractDefaultFixtureCapabilities = liveContractFixtureCapabilities{}
+
+type liveContractReadExpectation struct {
+	expectedStatus int
+	problemCode    string
+	reason         string
+	skipReason     string
+}
+
+func liveContractProbeExpectation(pathTemplate string, capabilities liveContractFixtureCapabilities) liveContractReadExpectation {
+	expectation := liveContractReadExpectation{expectedStatus: http.StatusOK}
+	switch {
+	case pathTemplate == "/v0/city/{cityName}/routing/decisions",
+		pathTemplate == "/v0/city/{cityName}/routing/outcomes",
+		pathTemplate == "/v0/city/{cityName}/routing/outcomes-v3":
+		if !capabilities.RoutingDecisionService {
+			expectation.expectedStatus = http.StatusServiceUnavailable
+			expectation.problemCode = "routing-unavailable"
+			expectation.reason = "routing decision service is not initialized"
+		}
+	case pathTemplate == "/v0/city/{cityName}/external-coordination/requests":
+		if !capabilities.ExternalCoordinationConfigured {
+			expectation.expectedStatus = http.StatusServiceUnavailable
+			expectation.problemCode = "service-unavailable"
+			expectation.reason = "requires [external_coordination] enabled=true; adapter registration is required for delivery"
+		}
+	case strings.HasSuffix(pathTemplate, "/extmsg/bindings"),
+		strings.HasSuffix(pathTemplate, "/extmsg/groups"),
+		strings.HasSuffix(pathTemplate, "/extmsg/transcript"):
+		expectation.skipReason = "requires a real session/conversation identity"
+	case strings.HasSuffix(pathTemplate, "/orders/history"):
+		expectation.skipReason = "requires a scoped order name fixture"
+	case strings.Contains(pathTemplate, "/maintenance"):
+		expectation.skipReason = "requires [maintenance.dolt] enabled=true in city.toml"
+	}
+	return expectation
+}
+
+type liveContractProblem struct {
+	Type   string `json:"type"`
+	Status int    `json:"status"`
+	Code   string `json:"code"`
+}
+
+func assertLiveContractProblem(t *testing.T, raw []byte, wantStatus int, wantCode string) {
+	t.Helper()
+	var problem liveContractProblem
+	if err := json.Unmarshal(raw, &problem); err != nil {
+		t.Fatalf("decode typed problem response: %v\nbody: %s", err, string(raw))
+	}
+	if problem.Status != wantStatus {
+		t.Fatalf("typed problem status = %d, want %d; body: %s", problem.Status, wantStatus, string(raw))
+	}
+	if problem.Code != wantCode {
+		t.Fatalf("typed problem code = %q, want %q; body: %s", problem.Code, wantCode, string(raw))
+	}
+	if !strings.HasSuffix(problem.Type, ":"+wantCode) {
+		t.Fatalf("typed problem type = %q, want suffix %q; body: %s", problem.Type, ":"+wantCode, string(raw))
+	}
+}
+
+func TestLiveContractProbeExpectation(t *testing.T) {
+	t.Parallel()
+
+	defaultFixture := liveContractFixtureCapabilities{}
+	configuredFixture := liveContractFixtureCapabilities{
+		RoutingDecisionService:         true,
+		ExternalCoordinationConfigured: true,
+		ExternalCoordinationAdapter:    true,
+	}
+	tests := []struct {
+		name         string
+		pathTemplate string
+		capabilities liveContractFixtureCapabilities
+		wantStatus   int
+		wantCode     string
+	}{
+		{
+			name:         "core reads remain successful",
+			pathTemplate: "/v0/city/{cityName}/health",
+			capabilities: defaultFixture,
+			wantStatus:   http.StatusOK,
+		},
+		{
+			name:         "routing decisions unavailable",
+			pathTemplate: "/v0/city/{cityName}/routing/decisions",
+			capabilities: defaultFixture,
+			wantStatus:   http.StatusServiceUnavailable,
+			wantCode:     "routing-unavailable",
+		},
+		{
+			name:         "routing outcomes unavailable",
+			pathTemplate: "/v0/city/{cityName}/routing/outcomes",
+			capabilities: defaultFixture,
+			wantStatus:   http.StatusServiceUnavailable,
+			wantCode:     "routing-unavailable",
+		},
+		{
+			name:         "routing execution outcomes unavailable",
+			pathTemplate: "/v0/city/{cityName}/routing/outcomes-v3",
+			capabilities: defaultFixture,
+			wantStatus:   http.StatusServiceUnavailable,
+			wantCode:     "routing-unavailable",
+		},
+		{
+			name:         "external coordination unavailable",
+			pathTemplate: "/v0/city/{cityName}/external-coordination/requests",
+			capabilities: defaultFixture,
+			wantStatus:   http.StatusServiceUnavailable,
+			wantCode:     "service-unavailable",
+		},
+		{
+			name:         "configured routing decisions succeed",
+			pathTemplate: "/v0/city/{cityName}/routing/decisions",
+			capabilities: configuredFixture,
+			wantStatus:   http.StatusOK,
+		},
+		{
+			name:         "configured routing outcomes succeed",
+			pathTemplate: "/v0/city/{cityName}/routing/outcomes",
+			capabilities: configuredFixture,
+			wantStatus:   http.StatusOK,
+		},
+		{
+			name:         "configured routing execution outcomes succeed",
+			pathTemplate: "/v0/city/{cityName}/routing/outcomes-v3",
+			capabilities: configuredFixture,
+			wantStatus:   http.StatusOK,
+		},
+		{
+			name:         "configured external coordination succeeds",
+			pathTemplate: "/v0/city/{cityName}/external-coordination/requests",
+			capabilities: configuredFixture,
+			wantStatus:   http.StatusOK,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := liveContractProbeExpectation(tt.pathTemplate, tt.capabilities)
+			if got.expectedStatus != tt.wantStatus {
+				t.Fatalf("liveContractProbeExpectation(%q, %+v).expectedStatus = %d, want %d", tt.pathTemplate, tt.capabilities, got.expectedStatus, tt.wantStatus)
+			}
+			if got.problemCode != tt.wantCode {
+				t.Fatalf("liveContractProbeExpectation(%q, %+v).problemCode = %q, want %q", tt.pathTemplate, tt.capabilities, got.problemCode, tt.wantCode)
+			}
+			if got.expectedStatus == http.StatusServiceUnavailable && strings.TrimSpace(got.reason) == "" {
+				t.Fatalf("liveContractProbeExpectation(%q, %+v) has no unavailable-capability reason", tt.pathTemplate, tt.capabilities)
+			}
+		})
+	}
 }
 
 type contractRig struct {
@@ -1368,10 +1530,13 @@ func runLiveContractReadSweep(t *testing.T, baseURL string, v openapivalidator.V
 	}
 	for _, probe := range probes {
 		t.Run("GET "+probe.pathTemplate, func(t *testing.T) {
-			if probe.skipReason != "" {
-				t.Skip(probe.skipReason)
+			if probe.expectation.skipReason != "" {
+				t.Skip(probe.expectation.skipReason)
 			}
-			liveContractRequest(t, baseURL, v, http.MethodGet, probe.path, nil, http.StatusOK)
+			raw := liveContractRequest(t, baseURL, v, http.MethodGet, probe.path, nil, probe.expectation.expectedStatus)
+			if probe.expectation.problemCode != "" {
+				assertLiveContractProblem(t, raw, probe.expectation.expectedStatus, probe.expectation.problemCode)
+			}
 		})
 	}
 }
@@ -1398,7 +1563,7 @@ func collectLiveContractReadProbes(t *testing.T, specBytes []byte, cityName, rig
 		probes = append(probes, liveContractReadProbe{
 			pathTemplate: pathTemplate,
 			path:         path,
-			skipReason:   liveContractProbeSkipReason(pathTemplate),
+			expectation:  liveContractProbeExpectation(pathTemplate, liveContractDefaultFixtureCapabilities),
 		})
 	}
 	return probes
@@ -1434,21 +1599,6 @@ func appendLiveContractDefaultQuery(path, pathTemplate, rigName string) string {
 		return path
 	}
 	return path + "?" + query.Encode()
-}
-
-func liveContractProbeSkipReason(pathTemplate string) string {
-	switch {
-	case strings.HasSuffix(pathTemplate, "/extmsg/bindings"),
-		strings.HasSuffix(pathTemplate, "/extmsg/groups"),
-		strings.HasSuffix(pathTemplate, "/extmsg/transcript"):
-		return "requires a real session/conversation identity"
-	case strings.HasSuffix(pathTemplate, "/orders/history"):
-		return "requires a scoped order name fixture"
-	case strings.Contains(pathTemplate, "/maintenance"):
-		return "requires [maintenance.dolt] enabled=true in city.toml"
-	default:
-		return ""
-	}
 }
 
 func assertLiveContractSpec(t *testing.T, specBytes []byte) {
