@@ -12,7 +12,7 @@ import (
 // the pool check determines how many instances run.
 func TestGastown_PoolScaling(t *testing.T) {
 	agents := []gasTownAgent{
-		{Name: "worker", StartCommand: "bash " + agentScript("loop.sh"), Pool: &poolConfig{
+		{Name: "worker", StartCommand: "bash " + singleQuoteShell(agentScript("loop.sh")), Pool: &poolConfig{
 			Min: 1, Max: 3, Check: "echo 1",
 		}},
 	}

@@ -12,7 +12,7 @@ import (
 func TestGastown_RefineryProcessing(t *testing.T) {
 	// Use a simple one-shot agent as refinery stand-in.
 	agents := []gasTownAgent{
-		{Name: "refinery", StartCommand: "bash " + agentScript("one-shot.sh")},
+		{Name: "refinery", StartCommand: "bash " + singleQuoteShell(agentScript("one-shot.sh"))},
 	}
 	cityDir := setupGasTownCityNoGuard(t, agents)
 
@@ -26,7 +26,7 @@ func TestGastown_RefineryProcessing(t *testing.T) {
 // multiple merge requests sequentially.
 func TestGastown_RefinerySequentialQueue(t *testing.T) {
 	agents := []gasTownAgent{
-		{Name: "refinery", StartCommand: "bash " + agentScript("loop.sh")},
+		{Name: "refinery", StartCommand: "bash " + singleQuoteShell(agentScript("loop.sh"))},
 	}
 	cityDir := setupGasTownCityNoGuard(t, agents)
 

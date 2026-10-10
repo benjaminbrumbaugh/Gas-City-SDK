@@ -193,7 +193,7 @@ func setupGraphWorkflowCity(t *testing.T, mode string) string {
 	}
 	cityDir := filepath.Join(t.TempDir(), cityName)
 
-	startCommand := "GC_GRAPH_MODE=" + mode + " bash " + agentScript("graph-dispatch.sh")
+	startCommand := "GC_GRAPH_MODE=" + mode + " bash " + singleQuoteShell(agentScript("graph-dispatch.sh"))
 	cityToml := fmt.Sprintf(
 		"[workspace]\nname = %q\n\n[session]\nprovider = \"subprocess\"\n\n[daemon]\nformula_v2 = true\npatrol_interval = \"100ms\"\n\n[[agent]]\nname = \"worker\"\nmax_active_sessions = 1\nstart_command = %q\n\n[[named_session]]\ntemplate = \"worker\"\nmode = \"always\"\n",
 		cityName, startCommand,

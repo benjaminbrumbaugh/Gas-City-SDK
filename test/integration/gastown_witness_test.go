@@ -12,7 +12,7 @@ import (
 func TestGastown_WitnessOrphanDetection(t *testing.T) {
 	agents := []gasTownAgent{
 		{Name: "mayor", StartCommand: "sleep 3600"},
-		{Name: "witness", StartCommand: "bash " + agentScript("witness-patrol.sh")},
+		{Name: "witness", StartCommand: "bash " + singleQuoteShell(agentScript("witness-patrol.sh"))},
 	}
 	cityDir := setupGasTownCityNoGuard(t, agents)
 
@@ -28,7 +28,7 @@ func TestGastown_WitnessOrphanDetection(t *testing.T) {
 func TestGastown_WitnessWithNoOrphans(t *testing.T) {
 	agents := []gasTownAgent{
 		{Name: "mayor", StartCommand: "sleep 3600"},
-		{Name: "witness", StartCommand: "bash " + agentScript("witness-patrol.sh")},
+		{Name: "witness", StartCommand: "bash " + singleQuoteShell(agentScript("witness-patrol.sh"))},
 	}
 	cityDir := setupGasTownCityNoGuard(t, agents)
 
