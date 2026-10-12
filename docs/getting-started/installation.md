@@ -31,6 +31,7 @@ for you; the other methods require manual installation.
 | flock | Yes | — | `brew install flock` | (built-in via util-linux) | File locking |
 | gh | Optional | — | `brew install gh` | [cli.github.com](https://cli.github.com/) | GitHub gate checks |
 | Go 1.26+ | Source only | 1.26 | `brew install go` | [golang.org](https://go.dev/dl/) | Compiler |
+| ICU development headers | Source only | — | `brew install icu4c` | `apt install libicu-dev` | Required by the transitive Dolt `go-icu-regex` CGO dependency |
 | make | Source only | — | (built-in) | `apt install make` (or `build-essential`) | Drives `make install` |
 
 Use a final Dolt 2.1.0 or newer. Gas City's managed Dolt checks reject older
@@ -177,7 +178,15 @@ using direct download. Homebrew handles this automatically.
 
 ## Build from source
 
-Requires `make` and Go 1.26+ (pinned in `go.mod` as 1.26.4).
+Requires `make`, Go 1.26+ (pinned in `go.mod` as 1.26.4), and ICU development
+headers for the transitive Dolt `go-icu-regex` CGO dependency. Install
+`icu4c` on macOS or `libicu-dev` on Debian/Ubuntu before running the build or
+quality gates.
+
+Homebrew keeps `icu4c` keg-only, so use the repository Makefile targets such as
+`make build`, `make vet`, and `make check`; they add Homebrew's ICU include and
+library paths. A bare `go vet ./...` can otherwise fail with
+`unicode/regex.h: file not found` even when ICU is installed.
 
 ```bash
 git clone https://github.com/gastownhall/gascity.git
