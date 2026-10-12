@@ -642,12 +642,16 @@ type liveContractReadProbe struct {
 // leaves both optional services unavailable; provider-specific owner tests
 // cover their configured success paths.
 type liveContractFixtureCapabilities struct {
-	RoutingDecisionService         bool
-	ExternalCoordinationConfigured bool
-	ExternalCoordinationAdapter    bool
+	RoutingDecisionService                bool
+	ExternalCoordinationConfigured        bool
+	ExternalCoordinationAdapterRegistered bool
 }
 
-var liveContractDefaultFixtureCapabilities = liveContractFixtureCapabilities{}
+var liveContractDefaultFixtureCapabilities = liveContractFixtureCapabilities{
+	RoutingDecisionService:                false,
+	ExternalCoordinationConfigured:        false,
+	ExternalCoordinationAdapterRegistered: false,
+}
 
 type liveContractReadExpectation struct {
 	expectedStatus int
@@ -668,7 +672,7 @@ func liveContractProbeExpectation(pathTemplate string, capabilities liveContract
 			expectation.reason = "routing decision service is not initialized"
 		}
 	case pathTemplate == "/v0/city/{cityName}/external-coordination/requests":
-		if !capabilities.ExternalCoordinationConfigured {
+		if !capabilities.ExternalCoordinationConfigured || !capabilities.ExternalCoordinationAdapterRegistered {
 			expectation.expectedStatus = http.StatusServiceUnavailable
 			expectation.problemCode = "service-unavailable"
 			expectation.reason = "requires [external_coordination] enabled=true; adapter registration is required for delivery"
@@ -711,11 +715,11 @@ func assertLiveContractProblem(t *testing.T, raw []byte, wantStatus int, wantCod
 func TestLiveContractProbeExpectation(t *testing.T) {
 	t.Parallel()
 
-	defaultFixture := liveContractFixtureCapabilities{}
+	defaultFixture := liveContractDefaultFixtureCapabilities
 	configuredFixture := liveContractFixtureCapabilities{
-		RoutingDecisionService:         true,
-		ExternalCoordinationConfigured: true,
-		ExternalCoordinationAdapter:    true,
+		RoutingDecisionService:                true,
+		ExternalCoordinationConfigured:        true,
+		ExternalCoordinationAdapterRegistered: true,
 	}
 	tests := []struct {
 		name         string
@@ -781,6 +785,13 @@ func TestLiveContractProbeExpectation(t *testing.T) {
 			pathTemplate: "/v0/city/{cityName}/external-coordination/requests",
 			capabilities: configuredFixture,
 			wantStatus:   http.StatusOK,
+		},
+		{
+			name:         "external coordination without adapter remains unavailable",
+			pathTemplate: "/v0/city/{cityName}/external-coordination/requests",
+			capabilities: liveContractFixtureCapabilities{ExternalCoordinationConfigured: true},
+			wantStatus:   http.StatusServiceUnavailable,
+			wantCode:     "service-unavailable",
 		},
 	}
 	for _, tt := range tests {
