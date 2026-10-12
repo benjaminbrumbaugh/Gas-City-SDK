@@ -74,16 +74,16 @@ var ErrRuntimeUnavailable = errors.New("runtime unavailable: liveness observatio
 var ErrRelaunchUnsupported = errors.New("runtime does not support warm-box relaunch")
 
 // IsSessionGone reports whether err represents a "the session is not
-// there" condition — either ErrSessionNotFound or the legacy provider
-// phrasings that predate the sentinel (tmux/subprocess providers may
-// still return raw strings). Callers that treat a missing session as
-// benign (e.g. bulk Stop) use this helper so the semantics live in one
-// place.
+// there" condition — either ErrSessionNotFound, an already-exited managed
+// process, or the legacy provider phrasings that predate the sentinels
+// (tmux/subprocess providers may still return raw strings). Callers that
+// treat a missing session as benign (e.g. bulk Stop) use this helper so the
+// semantics live in one place.
 func IsSessionGone(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, ErrSessionNotFound) {
+	if errors.Is(err, ErrSessionNotFound) || errors.Is(err, os.ErrProcessDone) {
 		return true
 	}
 	msg := err.Error()

@@ -260,7 +260,7 @@ func (m *Manager) stopTurnLocked(b beads.Bead, sessName string) error {
 		}
 		return nil
 	}
-	if err := m.sp.Interrupt(sessName); err != nil {
+	if err := m.sp.Interrupt(sessName); err != nil && !runtime.IsSessionGone(err) {
 		return fmt.Errorf("interrupting session: %w", err)
 	}
 	return nil

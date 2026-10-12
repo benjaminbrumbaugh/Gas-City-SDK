@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"testing"
 )
 
@@ -50,5 +52,21 @@ func TestMergeBackendListResultsPreservesNamesWhenAllBackendsAreDegraded(t *test
 	}
 	if len(names) != 2 || names[0] != "sess-a" || names[1] != "sess-b" {
 		t.Fatalf("MergeBackendListResults() names = %v, want [sess-a sess-b]", names)
+	}
+}
+
+func TestIsSessionGoneTreatsProcessExitAsGone(t *testing.T) {
+	t.Parallel()
+
+	if !IsSessionGone(fmt.Errorf("interrupting session: %w", os.ErrProcessDone)) {
+		t.Fatal("IsSessionGone() = false, want true for an exited process")
+	}
+}
+
+func TestIsSessionGoneKeepsUnrelatedErrorsFatal(t *testing.T) {
+	t.Parallel()
+
+	if IsSessionGone(errors.New("permission denied")) {
+		t.Fatal("IsSessionGone() = true, want false for an unrelated error")
 	}
 }
