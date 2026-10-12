@@ -4108,6 +4108,45 @@ func TestStopTurnInterruptsActiveSession(t *testing.T) {
 	}
 }
 
+func TestStopTurnTreatsProcessExitRaceAsSuccess(t *testing.T) {
+	store := beads.NewMemStore()
+	sp := &processExitDuringInterruptProvider{Provider: runtime.NewFake()}
+	mgr := NewManagerWithOptions(store, sp)
+
+	info, err := mgr.CreateSession(context.Background(), CreateOptions{
+		Template: "helper",
+		Title:    "",
+		Command:  "claude",
+		WorkDir:  "/tmp",
+		Provider: "claude",
+		Env:      nil,
+		Resume:   ProviderResume{},
+		Hints:    runtime.Config{},
+		ExtraMeta: map[string]string{
+			"session_origin": "manual",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := mgr.StopTurn(info.ID); err != nil {
+		t.Fatalf("StopTurn: %v", err)
+	}
+}
+
+type processExitDuringInterruptProvider struct {
+	runtime.Provider
+}
+
+func (*processExitDuringInterruptProvider) IsRunning(string) bool {
+	return true
+}
+
+func (*processExitDuringInterruptProvider) Interrupt(string) error {
+	return os.ErrProcessDone
+}
+
 func TestStopTurnAllowsPoolManagedSession(t *testing.T) {
 	store := beads.NewMemStore()
 	sp := runtime.NewFake()
