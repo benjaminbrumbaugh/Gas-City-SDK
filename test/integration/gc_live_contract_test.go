@@ -727,6 +727,7 @@ func TestLiveContractProbeExpectation(t *testing.T) {
 		capabilities liveContractFixtureCapabilities
 		wantStatus   int
 		wantCode     string
+		wantSkip     string
 	}{
 		{
 			name:         "core reads remain successful",
@@ -793,6 +794,39 @@ func TestLiveContractProbeExpectation(t *testing.T) {
 			wantStatus:   http.StatusServiceUnavailable,
 			wantCode:     "service-unavailable",
 		},
+		{
+			name:         "session-scoped external message reads remain skipped",
+			pathTemplate: "/v0/city/{cityName}/extmsg/transcript",
+			capabilities: defaultFixture,
+			wantStatus:   http.StatusOK,
+			wantSkip:     "real session/conversation identity",
+		},
+		{
+			name:         "order history remains skipped without an order fixture",
+			pathTemplate: "/v0/city/{cityName}/orders/history",
+			capabilities: defaultFixture,
+			wantStatus:   http.StatusOK,
+			wantSkip:     "scoped order name fixture",
+		},
+		{
+			name:         "maintenance reads remain skipped without maintenance config",
+			pathTemplate: "/v0/city/{cityName}/maintenance/health",
+			capabilities: defaultFixture,
+			wantStatus:   http.StatusOK,
+			wantSkip:     "maintenance.dolt",
+		},
+		{
+			name:         "routing status remains covered",
+			pathTemplate: "/v0/city/{cityName}/routing/status",
+			capabilities: defaultFixture,
+			wantStatus:   http.StatusOK,
+		},
+		{
+			name:         "external coordination capability remains covered",
+			pathTemplate: "/v0/city/{cityName}/external-coordination",
+			capabilities: defaultFixture,
+			wantStatus:   http.StatusOK,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -802,6 +836,9 @@ func TestLiveContractProbeExpectation(t *testing.T) {
 			}
 			if got.problemCode != tt.wantCode {
 				t.Fatalf("liveContractProbeExpectation(%q, %+v).problemCode = %q, want %q", tt.pathTemplate, tt.capabilities, got.problemCode, tt.wantCode)
+			}
+			if !strings.Contains(got.skipReason, tt.wantSkip) {
+				t.Fatalf("liveContractProbeExpectation(%q, %+v).skipReason = %q, want substring %q", tt.pathTemplate, tt.capabilities, got.skipReason, tt.wantSkip)
 			}
 			if got.expectedStatus == http.StatusServiceUnavailable && strings.TrimSpace(got.reason) == "" {
 				t.Fatalf("liveContractProbeExpectation(%q, %+v) has no unavailable-capability reason", tt.pathTemplate, tt.capabilities)
