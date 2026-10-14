@@ -82,9 +82,9 @@ func ProjectProducerExecutionOutcome(item DecisionWithAudits, launches []Executi
 		row.ActualTargetID = optionalOutcomeOpaque(latest.Authorization.Execution.Target)
 		actualDigest := "sha256:" + latest.Authorization.Execution.ConfigDigest
 		row.ActualConfigDigest = &actualDigest
-		if latest.StartedAt.Unix() > row.ObservedAtUnix {
-			row.ObservedAtUnix = latest.StartedAt.Unix()
-		}
+		// Launch evidence is immutable. Do not let later lifecycle audits change
+		// the serialized outcome when a failed projection is retried.
+		row.ObservedAtUnix = latest.StartedAt.Unix()
 	}
 	// Reuse the existing confined opaque/digest redaction rules for wire strings.
 	for _, value := range []string{row.CorrelationID, row.RecommendationID, row.WorkID, row.RequestedTargetID, row.Provenance} {
@@ -95,11 +95,21 @@ func ProjectProducerExecutionOutcome(item DecisionWithAudits, launches []Executi
 	if row.RoutingDecisionID == nil || row.ObservedAtUnix <= 0 {
 		return row, false, invalidf("outcome evidence unavailable")
 	}
-	data, err := json.Marshal(row)
+	outcomeID, err := producerExecutionOutcomeID(row)
 	if err != nil {
 		return row, false, err
 	}
-	digest := sha256.Sum256(append([]byte("gascity.producer-outcome.v3\x00"), data...))
-	row.OutcomeID = "outcome_" + hex.EncodeToString(digest[:])
+	row.OutcomeID = outcomeID
 	return row, true, nil
+}
+
+func producerExecutionOutcomeID(outcome ProducerExecutionOutcome) (string, error) {
+	canonical := outcome
+	canonical.OutcomeID = ""
+	data, err := json.Marshal(canonical)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(append([]byte("gascity.producer-outcome.v3\x00"), data...))
+	return "outcome_" + hex.EncodeToString(digest[:]), nil
 }

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gc routing delivery ack --json result",
+  "type": "object",
+  "properties": {
+    "ack": {"$ref": "#/$defs/DeliveryAck"},
+    "replay": {"type": "boolean"},
+    "ok": {"const": true}
+  },
+  "required": ["ack", "replay", "ok"],
+  "$defs": {
+    "DeliveryAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "delivery_id": {"type": "string"},
+        "payload_sha256": {"type": "string"},
+        "acknowledged_at_unix": {"type": "integer", "format": "int64"}
+      },
+      "required": ["delivery_id", "payload_sha256", "acknowledged_at_unix"]
+    }
+  },
+  "additionalProperties": false
+}

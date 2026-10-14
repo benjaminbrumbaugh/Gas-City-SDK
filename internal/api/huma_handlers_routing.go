@@ -16,6 +16,14 @@ func (s *Server) routingDecisionProvider() (RoutingDecisionProvider, error) {
 	return provider, nil
 }
 
+func (s *Server) routingDeliveryProvider() (RoutingDeliveryProvider, error) {
+	provider, ok := s.state.(RoutingDeliveryProvider)
+	if !ok || provider == nil {
+		return nil, apierr.RoutingUnavailable.Msg("routing delivery service unavailable")
+	}
+	return provider, nil
+}
+
 func (s *Server) humaHandleRoutingDecisionStatus(_ context.Context, _ *RoutingDecisionStatusInput) (*RoutingDecisionStatusOutput, error) {
 	provider, err := s.routingDecisionProvider()
 	if err != nil {
@@ -92,6 +100,45 @@ func (s *Server) humaHandleRoutingOutcomeList(ctx context.Context, input *Routin
 		return nil, apierr.RoutingUnavailable.Msg("routing outcome projection unavailable")
 	}
 	return &RoutingOutcomeListOutput{Body: page}, nil
+}
+
+func (s *Server) humaHandleRoutingDeliveryPending(ctx context.Context, input *RoutingDeliveryPendingInput) (*RoutingDeliveryPendingOutput, error) {
+	provider, err := s.routingDeliveryProvider()
+	if err != nil {
+		return nil, err
+	}
+	page, err := provider.RoutingDeliveryPending(ctx, routingdecision.DeliveryListOptions{Limit: input.Limit, Cursor: input.Cursor})
+	if err != nil {
+		if input.Cursor != "" && errors.Is(err, routingdecision.ErrInvalidDecision) {
+			return nil, apierr.InvalidCursor.Msg("cursor is not a valid routing-delivery pagination token; re-fetch the first page")
+		}
+		if errors.Is(err, routingdecision.ErrInvalidDecision) {
+			return nil, apierr.RoutingDecisionInvalid.Msg("routing delivery list request is invalid")
+		}
+		return nil, apierr.RoutingUnavailable.Msg("routing delivery ledger unavailable")
+	}
+	return &RoutingDeliveryPendingOutput{Body: page}, nil
+}
+
+func (s *Server) humaHandleRoutingDeliveryAck(ctx context.Context, input *RoutingDeliveryAckInput) (*RoutingDeliveryAckOutput, error) {
+	provider, err := s.routingDeliveryProvider()
+	if err != nil {
+		return nil, err
+	}
+	result, err := provider.RoutingDeliveryAck(ctx, input.Body)
+	if err != nil {
+		switch {
+		case errors.Is(err, routingdecision.ErrDeliveryInvalid):
+			return nil, apierr.InvalidRequest.Msg("routing delivery acknowledgement is malformed")
+		case errors.Is(err, routingdecision.ErrDeliveryNotFound):
+			return nil, apierr.RoutingDeliveryNotFound.Msg("routing delivery item not found")
+		case errors.Is(err, routingdecision.ErrDeliveryAckConflict), errors.Is(err, routingdecision.ErrDeliveryConflict):
+			return nil, apierr.RoutingIdempotencyConflict.Msg("routing delivery acknowledgement conflicts with the durable item")
+		default:
+			return nil, apierr.RoutingUnavailable.Msg("routing delivery acknowledgement unavailable")
+		}
+	}
+	return &RoutingDeliveryAckOutput{Body: result}, nil
 }
 
 func (s *Server) humaHandleRoutingDecisionIngest(ctx context.Context, input *RoutingDecisionIngestInput) (*RoutingDecisionIngestOutput, error) {
