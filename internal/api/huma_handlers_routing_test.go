@@ -66,6 +66,14 @@ func (s *routingTestState) RoutingDecisionOutcomes(_ context.Context, _ routingd
 	}, nil
 }
 
+func (s *routingTestState) RoutingDeliveryPending(_ context.Context, opts routingdecision.DeliveryListOptions) (routingdecision.DeliveryPage, error) {
+	return s.store.ListPendingDeliveries(opts)
+}
+
+func (s *routingTestState) RoutingDeliveryAck(_ context.Context, request routingdecision.DeliveryAckRequest) (routingdecision.DeliveryAckResult, error) {
+	return s.store.AcknowledgeDelivery(request)
+}
+
 func (s *routingTestState) RoutingDecisionIngest(_ context.Context, request routingdecision.IngestApprovedRequest) (routingdecision.IngestApprovedResult, error) {
 	return s.store.IngestApproved(request, s.verifier)
 }
@@ -149,7 +157,7 @@ func TestRoutingReadRoutesExposeTypedDeterministicSnapshots(t *testing.T) {
 	now := time.Date(2026, 8, 7, 20, 0, 0, 0, time.UTC)
 	state, _ := newRoutingTestState(t, now)
 	h := newTestCityHandler(t, state)
-	for _, path := range []string{"/routing/status", "/routing/targets", "/routing/eligible", "/routing/decisions?limit=1", "/routing/outcomes?limit=1"} {
+	for _, path := range []string{"/routing/status", "/routing/targets", "/routing/eligible", "/routing/decisions?limit=1", "/routing/outcomes?limit=1", "/routing/delivery/pending?limit=1"} {
 		req := httptest.NewRequest(http.MethodGet, cityURL(state, path), nil)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "next_id": 222,
+  "next_id": 224,
   "permanent_ids": [
     {
       "name": "help",
@@ -3532,6 +3532,52 @@
       "classification": "routing-decisions",
       "owner": "immediate",
       "id": 203
+    },
+    {
+      "path": "gc routing delivery",
+      "aliases": [],
+      "conditional_modes": [],
+      "hidden": false,
+      "effective_hidden": false,
+      "disable_flag_parsing": false,
+      "shape": "structural",
+      "recording_policy": "recordable",
+      "mode": "standard",
+      "notice_policy": "eligible",
+      "classification": "help",
+      "canonical_target": "@help",
+      "owner": "structural",
+      "id": 1
+    },
+    {
+      "path": "gc routing delivery ack",
+      "aliases": [],
+      "conditional_modes": [],
+      "hidden": false,
+      "effective_hidden": false,
+      "disable_flag_parsing": false,
+      "shape": "runnable",
+      "recording_policy": "recordable",
+      "mode": "standard",
+      "notice_policy": "eligible",
+      "classification": "routing-delivery-ack",
+      "owner": "immediate",
+      "id": 223
+    },
+    {
+      "path": "gc routing delivery pending",
+      "aliases": [],
+      "conditional_modes": [],
+      "hidden": false,
+      "effective_hidden": false,
+      "disable_flag_parsing": false,
+      "shape": "runnable",
+      "recording_policy": "recordable",
+      "mode": "standard",
+      "notice_policy": "eligible",
+      "classification": "routing-delivery-pending",
+      "owner": "immediate",
+      "id": 222
     },
     {
       "path": "gc routing eligible",

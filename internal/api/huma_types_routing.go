@@ -63,6 +63,29 @@ type RoutingOutcomeListOutput struct {
 	Body routingdecision.OutcomePage
 }
 
+// RoutingDeliveryPendingInput is the Huma input for bounded immutable delivery reads.
+type RoutingDeliveryPendingInput struct {
+	CityScope
+	Limit  int    `query:"limit" required:"false" minimum:"1" maximum:"100" default:"100" doc:"Maximum pending delivery items to return."`
+	Cursor string `query:"cursor" required:"false" doc:"Opaque delivery-ID keyset cursor."`
+}
+
+// RoutingDeliveryPendingOutput wraps one pending delivery page.
+type RoutingDeliveryPendingOutput struct {
+	Body routingdecision.DeliveryPage
+}
+
+// RoutingDeliveryAckInput is the city-write-authenticated acknowledgement body.
+type RoutingDeliveryAckInput struct {
+	CityScope
+	Body routingdecision.DeliveryAckRequest
+}
+
+// RoutingDeliveryAckOutput wraps one durable acknowledgement result.
+type RoutingDeliveryAckOutput struct {
+	Body routingdecision.DeliveryAckResult
+}
+
 // RoutingDecisionIngestBody is the exact signed approval envelope.
 type RoutingDecisionIngestBody struct {
 	Payload   routingdecision.DecisionPayload `json:"payload"`

@@ -924,6 +924,22 @@ export type DecisionPayload = {
     work_state_digest: string;
 };
 
+export type DeliveryAck = {
+    acknowledged_at_unix: number;
+    delivery_id: string;
+    payload_sha256: string;
+};
+
+export type DeliveryAckRequest = {
+    delivery_id: string;
+    payload_sha256: string;
+};
+
+export type DeliveryAckResult = {
+    ack: DeliveryAck;
+    replay: boolean;
+};
+
 export type DeliveryContextRecord = {
     BindingGeneration: number;
     Conversation: ConversationRef;
@@ -936,6 +952,25 @@ export type DeliveryContextRecord = {
     SchemaVersion: number;
     SessionID: string;
     SourceSessionID: string;
+};
+
+export type DeliveryItem = {
+    delivery_id: string;
+    evidence_at_unix: number;
+    outcome_id: string;
+    outcome_schema_version: string;
+    payload: string;
+    payload_sha256: string;
+    routing_decision_id: string;
+    source_id: string;
+    source_kind: string;
+    work_id: string;
+};
+
+export type DeliveryPage = {
+    items: Array<DeliveryItem> | null;
+    next_cursor?: string;
+    schema_version: string;
 };
 
 export type Dep = {
@@ -17608,6 +17643,125 @@ export type IngestRoutingDecisionResponses = {
 };
 
 export type IngestRoutingDecisionResponse = IngestRoutingDecisionResponses[keyof IngestRoutingDecisionResponses];
+
+export type PostV0CityByCityNameRoutingDeliveryAckData = {
+    body: DeliveryAckRequest;
+    headers: {
+        /**
+         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+         */
+        'X-GC-Request': string;
+    };
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/routing/delivery/ack';
+};
+
+export type PostV0CityByCityNameRoutingDeliveryAckErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Unauthorized
+     */
+    401: ErrorModel;
+    /**
+     * Forbidden
+     */
+    403: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Conflict
+     */
+    409: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type PostV0CityByCityNameRoutingDeliveryAckError = PostV0CityByCityNameRoutingDeliveryAckErrors[keyof PostV0CityByCityNameRoutingDeliveryAckErrors];
+
+export type PostV0CityByCityNameRoutingDeliveryAckResponses = {
+    /**
+     * OK
+     */
+    200: DeliveryAckResult;
+};
+
+export type PostV0CityByCityNameRoutingDeliveryAckResponse = PostV0CityByCityNameRoutingDeliveryAckResponses[keyof PostV0CityByCityNameRoutingDeliveryAckResponses];
+
+export type GetV0CityByCityNameRoutingDeliveryPendingData = {
+    body?: never;
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+    };
+    query?: {
+        /**
+         * Maximum pending delivery items to return.
+         */
+        limit?: number;
+        /**
+         * Opaque delivery-ID keyset cursor.
+         */
+        cursor?: string;
+    };
+    url: '/v0/city/{cityName}/routing/delivery/pending';
+};
+
+export type GetV0CityByCityNameRoutingDeliveryPendingErrors = {
+    /**
+     * Bad Request
+     */
+    400: ErrorModel;
+    /**
+     * Not Found
+     */
+    404: ErrorModel;
+    /**
+     * Unprocessable Entity
+     */
+    422: ErrorModel;
+    /**
+     * Internal Server Error
+     */
+    500: ErrorModel;
+    /**
+     * Service Unavailable
+     */
+    503: ErrorModel;
+};
+
+export type GetV0CityByCityNameRoutingDeliveryPendingError = GetV0CityByCityNameRoutingDeliveryPendingErrors[keyof GetV0CityByCityNameRoutingDeliveryPendingErrors];
+
+export type GetV0CityByCityNameRoutingDeliveryPendingResponses = {
+    /**
+     * OK
+     */
+    200: DeliveryPage;
+};
+
+export type GetV0CityByCityNameRoutingDeliveryPendingResponse = GetV0CityByCityNameRoutingDeliveryPendingResponses[keyof GetV0CityByCityNameRoutingDeliveryPendingResponses];
 
 export type GetRoutingEligibleData = {
     body?: never;
