@@ -67,7 +67,24 @@ func (a *TransportAdapter) Deliver(ctx context.Context, request Request) (Delive
 		Metadata:       metadata,
 	})
 	if err != nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: err.Error()}, err
+		if result != nil && (result.FailureKind == extmsg.PublishFailureTransient ||
+			result.FailureKind == extmsg.PublishFailureRateLimited) {
+			return DeliveryReceipt{
+				RequestID:  request.RequestID,
+				State:      StateQueued,
+				Error:      err.Error(),
+				RetryAfter: result.RetryAfter,
+				retryClass: string(result.FailureKind),
+			}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+		}
+		if result != nil && result.FailureKind != extmsg.PublishFailureUncertain &&
+			(result.FailureKind == extmsg.PublishFailurePermanent ||
+				result.FailureKind == extmsg.PublishFailureAuth ||
+				result.FailureKind == extmsg.PublishFailureNotFound ||
+				result.FailureKind == extmsg.PublishFailureUnsupported) {
+			return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: err.Error()}, err
+		}
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateUncertain, Error: err.Error()}, fmt.Errorf("%w: %w", ErrAmbiguousDelivery, err)
 	}
 	if result == nil || (!result.Delivered && (!result.Accepted || !result.Queued)) {
 		errText := "transport rejected external coordination request"
@@ -87,7 +104,15 @@ func (a *TransportAdapter) Deliver(ctx context.Context, request Request) (Delive
 				State:      StateQueued,
 				Error:      errText,
 				RetryAfter: result.RetryAfter,
+				retryClass: string(result.FailureKind),
 			}, fmt.Errorf("%w: %s", ErrUnavailable, errText)
+		}
+		if result == nil || result.FailureKind == extmsg.PublishFailureUncertain {
+			return DeliveryReceipt{
+				RequestID: request.RequestID,
+				State:     StateUncertain,
+				Error:     errText,
+			}, fmt.Errorf("%w: %s", ErrAmbiguousDelivery, errText)
 		}
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: errText}, nil
 	}

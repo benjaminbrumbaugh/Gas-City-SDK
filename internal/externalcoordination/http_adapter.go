@@ -66,8 +66,8 @@ func (a *HTTPAdapter) Capabilities() Capability { return a.capabilities }
 
 // Deliver sends one callback. A successful HTTP response is only accepted if
 // its body contains a valid non-terminal delivery receipt; malformed success
-// bodies are treated as transient failures so transport acceptance cannot be
-// misreported as execution completion.
+// bodies are treated as ambiguous because the remote may have accepted the
+// request before producing an unreadable response.
 func (a *HTTPAdapter) Deliver(ctx context.Context, request Request) (DeliveryReceipt, error) {
 	if a == nil || a.callbackURL == "" {
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: "callback URL is not configured"}, ErrUnavailable
@@ -88,19 +88,22 @@ func (a *HTTPAdapter) Deliver(ctx context.Context, request Request) (DeliveryRec
 	}
 	response, err := a.client.Do(httpRequest)
 	if err != nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("deliver external coordination request: %w", err)
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateUncertain, Error: "delivery outcome is ambiguous"}, fmt.Errorf("%w: deliver external coordination request: %w", ErrAmbiguousDelivery, err)
 	}
 	defer response.Body.Close() //nolint:errcheck
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("read external coordination response: %w", err)
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateUncertain, Error: "delivery outcome is ambiguous"}, fmt.Errorf("%w: read external coordination response: %w", ErrAmbiguousDelivery, err)
 	}
 	if response.StatusCode >= 400 {
+		if response.StatusCode >= 500 {
+			return DeliveryReceipt{RequestID: request.RequestID, State: StateUncertain, Error: fmt.Sprintf("adapter returned HTTP %d; delivery outcome is ambiguous", response.StatusCode)}, fmt.Errorf("%w: adapter returned HTTP %d", ErrAmbiguousDelivery, response.StatusCode)
+		}
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed, Error: fmt.Sprintf("adapter returned HTTP %d", response.StatusCode)}, nil
 	}
 	var receipt DeliveryReceipt
 	if err := json.Unmarshal(responseBody, &receipt); err != nil {
-		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("decode external coordination receipt: %w", err)
+		return DeliveryReceipt{RequestID: request.RequestID, State: StateUncertain, Error: "delivery outcome is ambiguous"}, fmt.Errorf("%w: decode external coordination receipt: %w", ErrAmbiguousDelivery, err)
 	}
 	if receipt.RequestID != request.RequestID {
 		return DeliveryReceipt{RequestID: request.RequestID, State: StateFailed}, fmt.Errorf("external coordination receipt request_id %q does not match %q", receipt.RequestID, request.RequestID)
@@ -113,6 +116,12 @@ func (a *HTTPAdapter) Deliver(ctx context.Context, request Request) (DeliveryRec
 	}
 	if receipt.State == "" {
 		receipt.State = StateQueued
+	}
+	if !receipt.Accepted && receipt.State != StateUncertain {
+		receipt.State = StateFailed
+		if receipt.Error == "" {
+			receipt.Error = "adapter rejected request"
+		}
 	}
 	return receipt, nil
 }
@@ -132,6 +141,12 @@ func (d *Dispatcher) DeliverNext(ctx context.Context, now time.Time) (*RequestRe
 	if d == nil || d.Queue == nil || d.Adapter == nil {
 		return nil, nil, ErrUnavailable
 	}
+	if now.IsZero() {
+		now = d.Queue.nowTime()
+	}
+	if _, err := d.Queue.RecoverAbandoned(ctx, now); err != nil {
+		return nil, nil, err
+	}
 	worker := strings.TrimSpace(d.Worker)
 	if worker == "" {
 		worker = d.Adapter.Name()
@@ -140,34 +155,70 @@ func (d *Dispatcher) DeliverNext(ctx context.Context, now time.Time) (*RequestRe
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(queued) == 0 {
+	var next *RequestRecord
+	for index := range queued {
+		candidate := queued[index]
+		if !candidate.RetryAt().IsZero() && candidate.RetryAt().After(now) {
+			continue
+		}
+		next = &candidate
+		break
+	}
+	if next == nil {
 		return nil, nil, nil
 	}
-	if err := validateCapabilities(d.Adapter.Capabilities(), queued[0].Request); err != nil {
-		_ = d.Queue.Fail(ctx, queued[0].ID, err, now)
+	if err := validateCapabilities(d.Adapter.Capabilities(), next.Request); err != nil {
+		if failErr := d.Queue.Fail(ctx, next.ID, err, now); failErr != nil {
+			return next, nil, failErr
+		}
 		return nil, nil, err
 	}
-	record, err := d.Queue.Claim(ctx, queued[0].ID, worker, now)
+	record, err := d.Queue.Claim(ctx, next.ID, worker, now)
 	if err != nil {
 		return nil, nil, err
 	}
 	receipt, deliverErr := d.Adapter.Deliver(ctx, record.Request)
 	if deliverErr != nil {
-		// ErrUnavailable means the adapter could not be reached, not that the
-		// request is bad. Failing it here is terminal and unrecoverable, since
-		// only queued records are ever dispatched again.
+		if receipt.State == StateUncertain || errors.Is(deliverErr, ErrAmbiguousDelivery) {
+			uncertaintyClass := receipt.Error
+			if uncertaintyClass == "" {
+				uncertaintyClass = "ambiguous_delivery"
+			}
+			if markErr := d.Queue.MarkUncertain(ctx, record.ID, uncertaintyClass, now); markErr != nil {
+				return &record, &receipt, markErr
+			}
+			return &record, &receipt, fmt.Errorf("%w: %w", ErrAmbiguousDelivery, deliverErr)
+		}
 		if errors.Is(deliverErr, ErrUnavailable) {
-			_ = d.Queue.Requeue(ctx, record.ID, deliverErr, now)
+			retryClass := receipt.retryClass
+			if retryClass == "" {
+				retryClass = "unavailable"
+			}
+			delay, requeueErr := d.Queue.requeueWithClass(ctx, record.ID, deliverErr, retryClass, now)
+			if requeueErr != nil {
+				return &record, &receipt, requeueErr
+			}
+			receipt.RetryAfter = delay
 		} else {
-			_ = d.Queue.Fail(ctx, record.ID, deliverErr, now)
+			if failErr := d.Queue.Fail(ctx, record.ID, deliverErr, now); failErr != nil {
+				return &record, &receipt, failErr
+			}
 		}
 		return &record, &receipt, deliverErr
+	}
+	if receipt.State == StateUncertain {
+		if markErr := d.Queue.MarkUncertain(ctx, record.ID, receipt.Error, now); markErr != nil {
+			return &record, &receipt, markErr
+		}
+		return &record, &receipt, ErrAmbiguousDelivery
 	}
 	if receipt.State == StateFailed {
 		if receipt.Error == "" {
 			receipt.Error = "adapter rejected request"
 		}
-		_ = d.Queue.Fail(ctx, record.ID, fmt.Errorf("%s", receipt.Error), now)
+		if failErr := d.Queue.Fail(ctx, record.ID, fmt.Errorf("%s", receipt.Error), now); failErr != nil {
+			return &record, &receipt, failErr
+		}
 		return &record, &receipt, nil
 	}
 	if err := d.Queue.Complete(ctx, record.ID, receipt, now); err != nil {
