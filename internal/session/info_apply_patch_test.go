@@ -33,7 +33,7 @@ var allProjectedMetadataKeys = []string{
 	"session_health_reason", "session_drainable", beadmeta.TriggerBeadIDMetadataKey,
 	"recovery_incident_id", "recovery_impairment", "recovery_detected_at",
 	"recovery_hold_until", "recovery_attempt", "recovery_attempted_targets",
-	"recovery_cooldown_until", "recovery_outcome", "recovery_work_id",
+	"recovery_cooldown_until", "recovery_outcome", "recovery_work_id", RecoveryQuotaObservationMetadataKey,
 	beadmeta.TriggerBeadStoreRefMetadataKey, beadmeta.BrainParentSIDMetadataKey,
 	beadmeta.PackMetadataKey, beadmeta.PackWorkspaceMetadataKey, beadmeta.WorkDirMetadataKey,
 	beadmeta.WorkerDirMetadataKey,

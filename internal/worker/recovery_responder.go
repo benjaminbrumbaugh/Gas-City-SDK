@@ -35,12 +35,17 @@ type RecoveryAdvisor interface {
 	Recommend(context.Context, RecoveryRequest) (string, error)
 }
 
+// QuotaObserver reads attributable provider evidence for the current session.
+// It is advisory input only and must not mutate provider or session state.
+type QuotaObserver func(context.Context, session.Info, time.Time) (*QuotaObservation, error)
+
 // RecoveryRequest identifies the remaining configured targets. The Wayfinder
 // advisor applies these caller-owned fields to an operator-authored packet.
 type RecoveryRequest struct {
-	CorrelationID string
-	Now           time.Time
-	Targets       []string
+	CorrelationID    string
+	Now              time.Time
+	Targets          []string
+	QuotaObservation *QuotaObservation
 }
 
 // RecoveryResponderOptions activates the responder only when Targets is non-empty.
@@ -51,6 +56,7 @@ type RecoveryResponderOptions struct {
 	Cooldown        time.Duration
 	MaxAttempts     int
 	Advisor         RecoveryAdvisor
+	QuotaObserver   QuotaObserver
 }
 
 // RecoveryReport summarizes one reconciliation pass.
@@ -232,9 +238,9 @@ func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.
 		snapshot = nextSnapshot
 		return adopted, false, err
 	}
-
 	state := recoveryStateFromInfo(info)
-	if state.IncidentID == "" || state.Impairment != impairment || state.Outcome == "verified" {
+	resetState := state.IncidentID == "" || state.Impairment != impairment || state.Outcome == "verified"
+	if resetState {
 		state = session.RecoveryState{
 			IncidentID: deterministicRecoveryIncidentID(info, impairment),
 			Impairment: impairment,
@@ -242,6 +248,21 @@ func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.
 			HoldUntil:  now.Add(r.options.HoldDuration),
 			Outcome:    "detected",
 		}
+	}
+	if impairment == "quota_exceeded" && r.options.QuotaObserver != nil {
+		observed, observeErr := r.options.QuotaObserver(ctx, info, now)
+		if observeErr != nil {
+			return report, false, fmt.Errorf("observe quota evidence: %w", observeErr)
+		}
+		if observed != nil {
+			encoded, encodeErr := marshalQuotaObservation(observed)
+			if encodeErr != nil {
+				return report, false, encodeErr
+			}
+			state.QuotaObservation = encoded
+		}
+	}
+	if resetState || state.QuotaObservation != recoveryStateFromInfo(info).QuotaObservation {
 		snapshot, err = r.sessions.RecordRecoveryStateIfCurrent(snapshot, state)
 		if err != nil {
 			if recoveryFenceLost(err) {
@@ -371,9 +392,10 @@ func (r *RecoveryResponder) reconcileIncident(ctx context.Context, info session.
 		nextAttempt = attempt + 1
 		attemptIdentity = deterministicRecoveryAttemptID(state.IncidentID, nextAttempt)
 		target = r.recommend(ctx, RecoveryRequest{
-			CorrelationID: attemptIdentity,
-			Now:           now,
-			Targets:       append([]string(nil), candidates...),
+			CorrelationID:    attemptIdentity,
+			Now:              now,
+			Targets:          append([]string(nil), candidates...),
+			QuotaObservation: decodeCurrentQuotaObservation(state.QuotaObservation, info, now),
 		})
 		advised = r.options.Advisor != nil
 		if !containsRecoveryTarget(candidates, target) {
@@ -791,6 +813,7 @@ func recoveryStateFromInfo(info session.Info) session.RecoveryState {
 		CooldownUntil:    parseRecoveryTime(info.RecoveryCooldownUntil),
 		Outcome:          info.RecoveryOutcome,
 		WorkID:           info.RecoveryWorkID,
+		QuotaObservation: info.RecoveryQuotaObservation,
 	}
 }
 
