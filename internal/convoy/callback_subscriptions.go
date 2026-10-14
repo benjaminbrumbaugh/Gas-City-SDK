@@ -21,6 +21,8 @@ const (
 	subscriptionOwnerMetadata  = "convoy.callback_subscription.owner"
 	subscriptionRegMetadata    = "convoy.callback_subscription.registration_id"
 	subscriptionGenMetadata    = "convoy.callback_subscription.generation"
+	subscriptionLeaseMetadata  = "convoy.callback_subscription.lease_expires_at"
+	subscriptionDefaultMeta    = "convoy.callback_subscription.default"
 	subscriptionStateMetadata  = "convoy.callback_subscription.state"
 )
 
@@ -84,6 +86,8 @@ type SubscriptionRecord struct {
 	Scope                WorkScope           `json:"scope"`
 	RouteIdentity        string              `json:"route_identity"`
 	Interests            []LifecycleInterest `json:"interests"`
+	LeaseExpiresAt       *time.Time          `json:"lease_expires_at,omitempty"`
+	Default              bool                `json:"default,omitempty"`
 	State                SubscriptionState   `json:"state"`
 	RegisteredAt         time.Time           `json:"registered_at"`
 	UpdatedAt            time.Time           `json:"updated_at"`
@@ -101,6 +105,8 @@ type CreateSubscriptionInput struct {
 	Scope          WorkScope
 	RouteIdentity  string
 	Interests      []LifecycleInterest
+	LeaseExpiresAt *time.Time
+	Default        bool
 	Now            time.Time
 }
 
@@ -108,9 +114,10 @@ type CreateSubscriptionInput struct {
 // RegistrationID, and Generation are immutable except for fenced generation
 // advancement performed by the service.
 type SubscriptionPatch struct {
-	Scope         *WorkScope
-	RouteIdentity *string
-	Interests     []LifecycleInterest
+	Scope          *WorkScope
+	RouteIdentity  *string
+	Interests      []LifecycleInterest
+	LeaseExpiresAt *time.Time
 }
 
 // SubscriptionService persists callback subscriptions in the bead store.
@@ -143,6 +150,8 @@ func (s *SubscriptionService) Create(ctx context.Context, input CreateSubscripti
 		Scope:          normalized.Scope,
 		RouteIdentity:  normalized.RouteIdentity,
 		Interests:      normalized.Interests,
+		LeaseExpiresAt: normalized.LeaseExpiresAt,
+		Default:        normalized.Default,
 		State:          SubscriptionActive,
 		RegisteredAt:   normalized.Now,
 		UpdatedAt:      normalized.Now,
@@ -253,13 +262,34 @@ func (s *SubscriptionService) Renew(ctx context.Context, owner, id string, fence
 	})
 }
 
+// RenewLease advances the registration generation and replaces its lease
+// expiry under the existing owner and generation fence.
+func (s *SubscriptionService) RenewLease(ctx context.Context, owner, id string, fence RegistrationFence, leaseExpiresAt, now time.Time) (SubscriptionRecord, error) {
+	return s.mutate(ctx, owner, id, fence, func(current SubscriptionRecord) (SubscriptionRecord, error) {
+		if current.State != SubscriptionActive {
+			return SubscriptionRecord{}, invalidSubscriptionState(current.State)
+		}
+		now = normalizeSubscriptionTime(now)
+		leaseExpiresAt = normalizeSubscriptionTime(leaseExpiresAt)
+		if !leaseExpiresAt.After(now) {
+			return SubscriptionRecord{}, invalidSubscriptionInput("lease expiry must be after now")
+		}
+		next, err := advanceSubscriptionGeneration(current, now)
+		if err != nil {
+			return SubscriptionRecord{}, err
+		}
+		next.LeaseExpiresAt = timePointer(leaseExpiresAt)
+		return next, nil
+	})
+}
+
 // Update changes mutable subscription fields and advances its generation.
 func (s *SubscriptionService) Update(ctx context.Context, owner, id string, fence RegistrationFence, patch SubscriptionPatch, now time.Time) (SubscriptionRecord, error) {
 	return s.mutate(ctx, owner, id, fence, func(current SubscriptionRecord) (SubscriptionRecord, error) {
 		if current.State != SubscriptionActive {
 			return SubscriptionRecord{}, invalidSubscriptionState(current.State)
 		}
-		if patch.Scope == nil && patch.RouteIdentity == nil && patch.Interests == nil {
+		if patch.Scope == nil && patch.RouteIdentity == nil && patch.Interests == nil && patch.LeaseExpiresAt == nil {
 			return SubscriptionRecord{}, invalidSubscriptionInput("empty update")
 		}
 		next := cloneSubscriptionRecord(current)
@@ -283,6 +313,14 @@ func (s *SubscriptionService) Update(ctx context.Context, owner, id string, fenc
 				return SubscriptionRecord{}, err
 			}
 			next.Interests = interests
+		}
+		if patch.LeaseExpiresAt != nil {
+			updatedAt := normalizeSubscriptionTime(now)
+			leaseExpiresAt := normalizeSubscriptionTime(*patch.LeaseExpiresAt)
+			if !leaseExpiresAt.After(updatedAt) {
+				return SubscriptionRecord{}, invalidSubscriptionInput("lease expiry must be after now")
+			}
+			next.LeaseExpiresAt = timePointer(leaseExpiresAt)
 		}
 		return advanceSubscriptionGeneration(next, now)
 	})
@@ -474,6 +512,8 @@ func subscriptionMetadata(record SubscriptionRecord, payload string) map[string]
 		subscriptionOwnerMetadata:  record.Owner,
 		subscriptionRegMetadata:    record.RegistrationID,
 		subscriptionGenMetadata:    strconv.FormatUint(record.Generation, 10),
+		subscriptionLeaseMetadata:  formatSubscriptionTime(record.LeaseExpiresAt),
+		subscriptionDefaultMeta:    strconv.FormatBool(record.Default),
 		subscriptionStateMetadata:  string(record.State),
 	}
 }
@@ -510,6 +550,15 @@ func normalizeCreateInput(input CreateSubscriptionInput) (CreateSubscriptionInpu
 	if err != nil {
 		return CreateSubscriptionInput{}, err
 	}
+	now := normalizeSubscriptionTime(input.Now)
+	var leaseExpiresAt *time.Time
+	if input.LeaseExpiresAt != nil {
+		lease := normalizeSubscriptionTime(*input.LeaseExpiresAt)
+		if !lease.After(now) {
+			return CreateSubscriptionInput{}, invalidSubscriptionInput("lease expiry must be after now")
+		}
+		leaseExpiresAt = timePointer(lease)
+	}
 	return CreateSubscriptionInput{
 		Owner:          owner,
 		RegistrationID: registration,
@@ -517,7 +566,9 @@ func normalizeCreateInput(input CreateSubscriptionInput) (CreateSubscriptionInpu
 		Scope:          scope,
 		RouteIdentity:  route,
 		Interests:      interests,
-		Now:            normalizeSubscriptionTime(input.Now),
+		LeaseExpiresAt: leaseExpiresAt,
+		Default:        input.Default,
+		Now:            now,
 	}, nil
 }
 
@@ -590,6 +641,9 @@ func validateStoredSubscription(record SubscriptionRecord) error {
 	if _, err := normalizeInterests(record.Interests); err != nil {
 		return err
 	}
+	if record.LeaseExpiresAt != nil && !record.LeaseExpiresAt.After(record.RegisteredAt) {
+		return invalidSubscriptionInput("lease expiry must be after registration")
+	}
 	switch record.State {
 	case SubscriptionActive:
 		if record.RevokedAt != nil || record.UnregisteredAt != nil || record.RevocationReason != "" || record.UnregistrationReason != "" {
@@ -656,7 +710,23 @@ func cloneSubscriptionRecord(record SubscriptionRecord) SubscriptionRecord {
 		value := *record.UnregisteredAt
 		record.UnregisteredAt = &value
 	}
+	if record.LeaseExpiresAt != nil {
+		value := record.LeaseExpiresAt.UTC()
+		record.LeaseExpiresAt = &value
+	}
 	return record
+}
+
+func timePointer(value time.Time) *time.Time {
+	value = value.UTC()
+	return &value
+}
+
+func formatSubscriptionTime(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }
 
 func normalizeSubscriptionTime(value time.Time) time.Time {
