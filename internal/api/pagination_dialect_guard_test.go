@@ -101,9 +101,10 @@ var boundedLimitOnlyFeeds = map[string]bool{
 // contract limit of 100. Widening either to the general 1000-row API contract
 // would violate its bounded-work rule.
 var boundedKeysetLimits = map[string]float64{
-	"GET /v0/city/{cityName}/routing/decisions":   256,
-	"GET /v0/city/{cityName}/routing/outcomes":    100,
-	"GET /v0/city/{cityName}/routing/outcomes-v3": 100,
+	"GET /v0/city/{cityName}/routing/decisions":        256,
+	"GET /v0/city/{cityName}/routing/outcomes":         100,
+	"GET /v0/city/{cityName}/routing/outcomes-v3":      100,
+	"GET /v0/city/{cityName}/routing/delivery/pending": 100,
 }
 
 type specParam struct {

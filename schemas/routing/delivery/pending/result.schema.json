@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gc routing delivery pending --json result",
+  "type": "object",
+  "properties": {
+    "schema_version": {"type": "string"},
+    "items": {"type": ["array", "null"], "items": {"$ref": "#/$defs/DeliveryItem"}},
+    "next_cursor": {"type": "string"},
+    "ok": {"const": true}
+  },
+  "required": ["schema_version", "items", "ok"],
+  "$defs": {
+    "DeliveryItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "delivery_id": {"type": "string"},
+        "source_kind": {"type": "string"},
+        "source_id": {"type": "string"},
+        "outcome_schema_version": {"type": "string"},
+        "outcome_id": {"type": "string"},
+        "routing_decision_id": {"type": "string"},
+        "work_id": {"type": "string"},
+        "payload": {"type": "string", "contentEncoding": "base64"},
+        "payload_sha256": {"type": "string"},
+        "evidence_at_unix": {"type": "integer", "format": "int64"}
+      },
+      "required": ["delivery_id", "source_kind", "source_id", "outcome_schema_version", "outcome_id", "routing_decision_id", "work_id", "payload", "payload_sha256", "evidence_at_unix"]
+    }
+  },
+  "additionalProperties": false
+}

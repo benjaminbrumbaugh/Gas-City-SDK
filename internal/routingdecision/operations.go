@@ -285,9 +285,54 @@ func (store *Store) Verify(verifier Verifier) (VerifyReport, error) {
 		}); err != nil {
 			return err
 		}
+		if err := verifyDeliveryBuckets(tx); err != nil {
+			return err
+		}
 		return nil
 	})
 	return report, classifyStoreError(err)
+}
+
+func verifyDeliveryBuckets(tx *bbolt.Tx) error {
+	items, acks, sources := tx.Bucket(bucketDeliveryItems), tx.Bucket(bucketDeliveryAcks), tx.Bucket(bucketDeliverySource)
+	if err := items.ForEach(func(key, value []byte) error {
+		var item DeliveryItem
+		if strictUnmarshal(value, &item) != nil || string(key) != item.DeliveryID || validateDeliveryItem(item) != nil {
+			return ErrStoreCorrupt
+		}
+		if string(sources.Get(deliverySourceKey(item.SourceKind, item.SourceID))) != item.DeliveryID {
+			return ErrStoreCorrupt
+		}
+		if raw := acks.Get(key); raw != nil {
+			var ack DeliveryAck
+			if strictUnmarshal(raw, &ack) != nil || ack.DeliveryID != item.DeliveryID || ack.PayloadSHA256 != item.PayloadSHA256 || ack.AcknowledgedAtUnix <= 0 {
+				return ErrStoreCorrupt
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := acks.ForEach(func(key, value []byte) error {
+		var ack DeliveryAck
+		if strictUnmarshal(value, &ack) != nil || string(key) != ack.DeliveryID || items.Get(key) == nil {
+			return ErrStoreCorrupt
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return sources.ForEach(func(key, value []byte) error {
+		itemValue := items.Get(value)
+		if itemValue == nil {
+			return ErrStoreCorrupt
+		}
+		var item DeliveryItem
+		if strictUnmarshal(itemValue, &item) != nil || !bytes.Equal(key, deliverySourceKey(item.SourceKind, item.SourceID)) || !bytes.Equal(value, []byte(item.DeliveryID)) {
+			return ErrStoreCorrupt
+		}
+		return nil
+	})
 }
 
 func receiptIdentity(receipt idempotencyRecord) (string, uint64, bool) {

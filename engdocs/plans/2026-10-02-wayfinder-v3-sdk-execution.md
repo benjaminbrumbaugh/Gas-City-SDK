@@ -232,16 +232,18 @@ transition, falling back only to the immutable signed creation timestamp.
 
 This observation is **not** the producer `routing/outcome/v3` protocol, and no
 producer outcome schema/ranking is duplicated. It is a usable domain seam over
-durable authority records, not yet exposed via a v3 HTTP/CLI projection. Existing
-production outcome-authority readers still lack a terminal disposition record
-bound to decision/work/session/execution/target/config/adapter/invocation. No
-terminal success or actual tuple is invented to fill that gap.
-
-Required next interfaces: an SDK-owned durable launch/completion receipt writer
-at successful actual runtime operations, exact read auth and typed projection
-for the observation, and city mapping of those facts into the fixed plugin's
-`SubmitOutcome`. The receipt must bind the full execution tuple and original
-claim/session generation; work metadata alone is not authority.
+durable authority records. The SDK-owned delivery ledger now persists the
+serialized v3 projection at the committed runtime-launch receipt boundary and
+persists schema-preserving v2/v3 non-admission items only for authoritative
+refused/expired/revoked transitions with a stable causal identity. It exposes
+bounded `GET /routing/delivery/pending` and city-write-authenticated
+`POST /routing/delivery/ack` projections. The immutable item retains the exact
+payload bytes and SHA-256 digest; an acknowledgement binds only that digest,
+replays idempotently, and cannot mutate or delete the source item. Lost
+transport acknowledgements therefore reopen the same bytes and identities.
+Read time, work metadata, admission, and closure still cannot fabricate a
+terminal success or actual tuple. The City/plugin consumer owns scheduling and
+transport; the SDK owns source truth and durable replay.
 
 ## Verification
 

@@ -90,6 +90,12 @@ func TestRoutingDecisionServiceBootLatchesAuthorityBeforeOpeningLedger(t *testin
 	if status.Status != routingdecision.AvailabilityDenied || status.Reason != routingdecision.ReasonAuthorityUnavailable || status.AuthorityReady {
 		t.Fatalf("missing authority status = %+v", status)
 	}
+	if _, err := missing.routingDecisionService.DeliveryPending(context.Background(), routingdecision.DeliveryListOptions{Limit: 1}); err == nil {
+		t.Fatal("delivery pending succeeded while the routing service was unavailable")
+	}
+	if _, err := missing.routingDecisionService.DeliveryAck(context.Background(), routingdecision.DeliveryAckRequest{DeliveryID: "missing", PayloadSHA256: "sha256:" + strings.Repeat("a", 64)}); err == nil {
+		t.Fatal("delivery acknowledgement succeeded while the routing service was unavailable")
+	}
 	if _, err := os.Stat(filepath.Join(missingRoot, routingdecision.StoreRelativePath)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("default-deny boot created ledger: %v", err)
 	}
