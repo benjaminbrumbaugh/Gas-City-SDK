@@ -617,3 +617,20 @@ func TestFormatExtmsgNotifyReminderExplicitTargetSanitization(t *testing.T) {
 		t.Fatalf("ExplicitTarget tag breakout survived stripping:\n%s", got)
 	}
 }
+
+func TestFormatExtmsgNotifyReminderAdvertisesShippedReplyCommand(t *testing.T) {
+	got := formatExtmsgNotifyReminder(extmsgNotifyReminder{
+		Provider:       "telegram",
+		ConversationID: "conversation-1",
+		ActorDisplay:   "alice",
+		ActorKind:      "human",
+		Text:           "hello",
+		Handle:         "worker",
+	})
+	if !strings.Contains(got, "gc extmsg reply --provider telegram --conversation-id conversation-1 --body-file <path>") {
+		t.Fatalf("reminder = %q, want shipped generic reply command", got)
+	}
+	if strings.Contains(got, "reply-current") || strings.Contains(got, "gc telegram reply") {
+		t.Fatalf("reminder advertises a provider-specific or nonexistent reply command: %q", got)
+	}
+}

@@ -231,7 +231,10 @@
               "worktree-ensure",
               "worktree-verify",
               "trace-snapshot",
-              "routing-admit"
+              "routing-admit",
+              "extmsg-reply",
+              "extmsg-transcript",
+              "extmsg-transcript-ack"
             ]
           },
           "event_id": {
