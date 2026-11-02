@@ -45,7 +45,7 @@ gc [flags]
 | [gc dolt-cleanup](#gc-dolt-cleanup) | Find and remove orphaned Dolt databases (Go-side core) |
 | [gc event](#gc-event) | Event operations |
 | [gc events](#gc-events) | Show events from the GC API |
-| [gc extmsg](#gc-extmsg) | Manage external-conversation bindings |
+| [gc extmsg](#gc-extmsg) | Manage external conversations |
 | [gc formula](#gc-formula) | Manage and inspect formulas |
 | [gc github](#gc-github) | GitHub integration commands |
 | [gc graph](#gc-graph) | Show dependency graph for beads |
@@ -1647,8 +1647,10 @@ gc --city /path/to/city events rotate --api http://127.0.0.1:8080
 
 ## gc extmsg
 
-Manage bindings between external conversations (telegram, discord, ...)
-and gc sessions or configured agents.
+Manage bindings, replies, and transcripts for external conversations
+(telegram, discord, ...).
+
+A reply is sent through the city API with explicit session attribution.
 
 A conversation bound to an agent name survives session restarts: inbound
 messages resolve a live session for the agent at delivery time, cold-waking
@@ -1666,6 +1668,8 @@ gc extmsg
 |------------|-------------|
 | [gc extmsg bind](#gc-extmsg-bind) | Bind a conversation to a session or configured agent |
 | [gc extmsg handoff](#gc-extmsg-handoff) | Rebind a conversation to another configured agent |
+| [gc extmsg reply](#gc-extmsg-reply) | Reply to an external conversation |
+| [gc extmsg transcript](#gc-extmsg-transcript) | Read a scoped external-conversation transcript |
 | [gc extmsg unbind](#gc-extmsg-unbind) | Remove active conversation bindings |
 
 ## gc extmsg bind
@@ -1713,6 +1717,81 @@ gc extmsg handoff [flags]
 | `--provider` | string |  | External messaging provider (required) |
 | `--scope-id` | string |  | Conversation scope (default: the city name) |
 | `--to` | string |  | Configured agent identity to hand the conversation to (required) |
+
+## gc extmsg reply
+
+Reply through the city API with explicit session attribution. When
+--conversation-id is omitted, exactly one active conversation binding for
+--session (or the current session environment) must exist; ambiguity fails
+closed so simultaneous conversations cannot be crossed.
+
+Use --body-file for multiline or sensitive text. --body and --body-file are
+mutually exclusive.
+
+```
+gc extmsg reply [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--account-id` | string | `default` | Adapter account ID |
+| `--body` | string |  | Reply body (mutually exclusive with --body-file) |
+| `--body-file` | string |  | Read the reply body from this file (mutually exclusive with --body) |
+| `--conversation-id` | string |  | Provider conversation ID (required) |
+| `--idempotency-key` | string |  | Idempotency key for safe retries |
+| `--json` | bool |  | Output the API result as JSON |
+| `--kind` | string | `dm` | Conversation kind: dm, room, or thread |
+| `--parent-conversation-id` | string |  | Parent conversation ID for thread conversations |
+| `--provider` | string |  | External messaging provider (required) |
+| `--reply-to` | string |  | Provider message ID to reply to |
+| `--scope-id` | string |  | Conversation scope (default: the city name) |
+| `--session` | string |  | Session selector (default: GC_SESSION_ID, GC_SESSION_NAME, or GC_ALIAS) |
+
+## gc extmsg transcript
+
+Read a scoped external-conversation transcript
+
+```
+gc extmsg transcript [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--account-id` | string | `default` | Adapter account ID |
+| `--after-sequence` | int64 |  | Return entries after this sequence |
+| `--conversation-id` | string |  | Provider conversation ID (required) |
+| `--json` | bool |  | Output transcript entries as JSON |
+| `--kind` | string | `dm` | Conversation kind: dm, room, or thread |
+| `--limit` | int |  | Maximum entries to return (server default when omitted) |
+| `--order` | string |  | Transcript order: asc or desc |
+| `--parent-conversation-id` | string |  | Parent conversation ID for thread conversations |
+| `--provider` | string |  | External messaging provider (required) |
+| `--scope-id` | string |  | Conversation scope (default: the city name) |
+| `--session` | string |  | Session selector for safe current-conversation selection |
+
+| Subcommand | Description |
+|------------|-------------|
+| [gc extmsg transcript ack](#gc-extmsg-transcript-ack) | Acknowledge a scoped transcript sequence |
+
+## gc extmsg transcript ack
+
+Acknowledge a scoped transcript sequence
+
+```
+gc extmsg transcript ack [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--account-id` | string | `default` | Adapter account ID |
+| `--conversation-id` | string |  | Provider conversation ID (required) |
+| `--json` | bool |  | Output acknowledgement as JSON |
+| `--kind` | string | `dm` | Conversation kind: dm, room, or thread |
+| `--parent-conversation-id` | string |  | Parent conversation ID for thread conversations |
+| `--provider` | string |  | External messaging provider (required) |
+| `--scope-id` | string |  | Conversation scope (default: the city name) |
+| `--sequence` | int64 |  | Acknowledge entries through this sequence (required) |
+| `--session` | string |  | Session selector for the acknowledgement |
 
 ## gc extmsg unbind
 
