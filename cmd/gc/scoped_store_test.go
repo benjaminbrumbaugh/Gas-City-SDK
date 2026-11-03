@@ -376,7 +376,12 @@ func TestScopedBdStoreForCityKillsChildOnCtxCancel(t *testing.T) {
 		"wait\n")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	// Give the real fake command bounded startup headroom to publish its PID
+	// before cancellation under a loaded process-test runner. This is a
+	// test-only budget; the production scoped-store context remains owned by
+	// its caller. Keep the descendant shape so this test continues to prove
+	// process-group cleanup, not merely parent-process cancellation.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	store, err := scopedBdStoreForCity(ctx, cityDir)
