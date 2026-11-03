@@ -97,6 +97,7 @@ func infoFromPersistedBeadFrozen(b beads.Bead) Info {
 		RecoveryCooldownUntil:    b.Metadata["recovery_cooldown_until"],
 		RecoveryOutcome:          b.Metadata["recovery_outcome"],
 		RecoveryWorkID:           b.Metadata["recovery_work_id"],
+		RecoveryQuotaObservation: b.Metadata[RecoveryQuotaObservationMetadataKey],
 
 		RoutingExecutionDecisionID: b.Metadata[RoutingExecutionDecisionMetadataKey],
 		TriggerBeadID:              b.Metadata[beadmeta.TriggerBeadIDMetadataKey],

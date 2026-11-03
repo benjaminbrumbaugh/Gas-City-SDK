@@ -70,6 +70,10 @@ const LabelSession = "gc:session"
 // the wall-clock time of the most recent successful queued-nudge delivery.
 const MetadataLastNudgeDeliveredAt = "last_nudge_delivered_at"
 
+// RecoveryQuotaObservationMetadataKey stores serialized, attributable quota
+// evidence used by the recovery responder's advisory handoff.
+const RecoveryQuotaObservationMetadataKey = "recovery_quota_observation"
+
 // Info holds the user-facing details of a chat session.
 type Info struct {
 	ID string
@@ -212,6 +216,7 @@ type Info struct {
 	RecoveryCooldownUntil    string // recovery_cooldown_until (RFC3339)
 	RecoveryOutcome          string // recovery_outcome
 	RecoveryWorkID           string // recovery_work_id
+	RecoveryQuotaObservation string // recovery_quota_observation (JSON)
 
 	// --- trigger / brain-parent cluster (controller read surface) ---
 	//

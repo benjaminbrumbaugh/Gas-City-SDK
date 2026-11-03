@@ -196,6 +196,45 @@ func TestRecoveryResponderUsesValidWayfinderRecommendationAndPersistsIncident(t 
 	assertRecoveryWorkCount(t, store, 1)
 }
 
+func TestRecoveryResponderPersistsAndForwardsCurrentQuotaEvidence(t *testing.T) {
+	store := recoveryTestStore(t, "quota_exceeded")
+	if err := store.SetMetadataBatch("session-1", map[string]string{
+		"provider": "codex", "session_key": "session-1", "instance_token": "incarnation-a",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	reached := true
+	var got *QuotaObservation
+	advisor := recoveryAdvisorFunc(func(_ context.Context, req RecoveryRequest) (string, error) {
+		got = req.QuotaObservation
+		return "rig/first", nil
+	})
+	responder := NewRecoveryResponder(session.NewStore(beads.SessionStore{Store: store}), store, RecoveryResponderOptions{
+		Targets: []string{"rig/first"}, HoldDuration: time.Hour, Advisor: advisor,
+		QuotaObserver: func(_ context.Context, info session.Info, observedAt time.Time) (*QuotaObservation, error) {
+			return &QuotaObservation{
+				Provider: "codex", SessionID: info.SessionKey, Incarnation: info.InstanceToken,
+				AccountRef: "codex", ObservedAt: observedAt.Add(-time.Minute), ExpiresAt: observedAt.Add(time.Minute),
+				Primary: &QuotaWindow{Reached: &reached},
+			}, nil
+		},
+	})
+	if _, err := responder.Reconcile(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Incarnation != "incarnation-a" || !got.IsHardExhausted() {
+		t.Fatalf("advisor quota observation = %+v, want current hard exhaustion", got)
+	}
+	info, err := session.NewStore(beads.SessionStore{Store: store}).Get("session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(info.RecoveryQuotaObservation, `"incarnation":"incarnation-a"`) {
+		t.Fatalf("persisted quota observation = %q, want current incarnation", info.RecoveryQuotaObservation)
+	}
+}
+
 func TestRecoveryResponderRunsAtMostOneAdvisoryActionPerTick(t *testing.T) {
 	metadata := func(name string) map[string]string {
 		return map[string]string{
