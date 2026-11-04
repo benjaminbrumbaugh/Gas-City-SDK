@@ -693,14 +693,14 @@ func normalizeHandoffResponse(response Response, request HandoffRequest) (Respon
 	response.RequestID = strings.TrimSpace(response.RequestID)
 	response.CorrelationID = strings.TrimSpace(response.CorrelationID)
 	response.ResponseID = strings.TrimSpace(response.ResponseID)
-	response.State = strings.ToLower(strings.TrimSpace(response.State))
+	response.State = ResponseOutcome(strings.ToLower(strings.TrimSpace(string(response.State))))
 	if response.State == "" {
-		response.State = "answered"
+		response.State = ResponseOutcomeAnswered
 	}
 	switch response.State {
-	case "answered", "refused", "failed", "expired":
+	case ResponseOutcomeAnswered, ResponseOutcomeRefused, ResponseOutcomeFailed, ResponseOutcomeExpired:
 	default:
-		return Response{}, fmt.Errorf("%w: invalid response outcome %q", ErrInvalidInput, response.State)
+		return Response{}, fmt.Errorf("%w: invalid response outcome %q", ErrInvalidInput, string(response.State))
 	}
 	if response.RequestID != request.RequestID || response.Attempt != request.Attempt || response.CorrelationID != request.CorrelationID {
 		return Response{}, fmt.Errorf("%w: response does not match handoff identity", ErrInvalidInput)
@@ -708,8 +708,8 @@ func normalizeHandoffResponse(response Response, request HandoffRequest) (Respon
 	if response.ContentRetention != "" && response.ContentRetention != RetentionDurable && response.ContentRetention != RetentionEphemeral {
 		return Response{}, fmt.Errorf("%w: invalid response content_retention %q", ErrInvalidInput, response.ContentRetention)
 	}
-	if response.State == "failed" || response.State == "expired" {
-		response.Summary = sanitizeOutcomeSummary(response.State, response.Summary)
+	if response.State == ResponseOutcomeFailed || response.State == ResponseOutcomeExpired {
+		response.Summary = sanitizeOutcomeSummary(string(response.State), response.Summary)
 	}
 	if response.ReceivedAt.IsZero() {
 		response.ReceivedAt = request.CreatedAt
@@ -848,7 +848,7 @@ func requestRetention(request HandoffRequest) ContentRetention {
 }
 
 func isExpiredResponse(response Response) bool {
-	return strings.EqualFold(strings.TrimSpace(response.State), "expired")
+	return strings.EqualFold(strings.TrimSpace(string(response.State)), string(ResponseOutcomeExpired))
 }
 
 func sanitizeHandoffError(value string) string {
