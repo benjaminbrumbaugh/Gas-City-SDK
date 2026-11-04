@@ -2626,6 +2626,59 @@
         ],
         "type": "object"
       },
+      "DeliveryAck": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledged_at_unix": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "delivery_id": {
+            "type": "string"
+          },
+          "payload_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delivery_id",
+          "payload_sha256",
+          "acknowledged_at_unix"
+        ],
+        "type": "object"
+      },
+      "DeliveryAckRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "delivery_id": {
+            "type": "string"
+          },
+          "payload_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delivery_id",
+          "payload_sha256"
+        ],
+        "type": "object"
+      },
+      "DeliveryAckResult": {
+        "additionalProperties": false,
+        "properties": {
+          "ack": {
+            "$ref": "#/components/schemas/DeliveryAck"
+          },
+          "replay": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ack",
+          "replay"
+        ],
+        "type": "object"
+      },
       "DeliveryContextRecord": {
         "additionalProperties": false,
         "properties": {
@@ -2673,6 +2726,81 @@
           "LastMessageID",
           "SourceSessionID",
           "Metadata"
+        ],
+        "type": "object"
+      },
+      "DeliveryItem": {
+        "additionalProperties": false,
+        "properties": {
+          "delivery_id": {
+            "type": "string"
+          },
+          "evidence_at_unix": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "outcome_id": {
+            "type": "string"
+          },
+          "outcome_schema_version": {
+            "type": "string"
+          },
+          "payload": {
+            "contentEncoding": "base64",
+            "type": "string"
+          },
+          "payload_sha256": {
+            "type": "string"
+          },
+          "routing_decision_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "work_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delivery_id",
+          "source_kind",
+          "source_id",
+          "outcome_schema_version",
+          "outcome_id",
+          "routing_decision_id",
+          "work_id",
+          "payload",
+          "payload_sha256",
+          "evidence_at_unix"
+        ],
+        "type": "object"
+      },
+      "DeliveryPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DeliveryItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "next_cursor": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "items"
         ],
         "type": "object"
       },
@@ -2828,6 +2956,7 @@
               "urn:gascity:error:provider-not-found",
               "urn:gascity:error:rig-not-found",
               "urn:gascity:error:routing-decision-invalid",
+              "urn:gascity:error:routing-delivery-not-found",
               "urn:gascity:error:routing-idempotency-conflict",
               "urn:gascity:error:routing-ingest-nonloopback",
               "urn:gascity:error:routing-ingest-unhardened",
@@ -2882,6 +3011,7 @@
               "urn:gascity:error:provider-not-found",
               "urn:gascity:error:rig-not-found",
               "urn:gascity:error:routing-decision-invalid",
+              "urn:gascity:error:routing-delivery-not-found",
               "urn:gascity:error:routing-idempotency-conflict",
               "urn:gascity:error:routing-ingest-nonloopback",
               "urn:gascity:error:routing-ingest-unhardened",
@@ -49725,6 +49855,321 @@
           }
         },
         "summary": "Ingest one signed routing decision"
+      }
+    },
+    "/v0/city/{cityName}/routing/delivery/ack": {
+      "post": {
+        "operationId": "post-v0-city-by-city-name-routing-delivery-ack",
+        "parameters": [
+          {
+            "description": "Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.",
+            "in": "header",
+            "name": "X-GC-Request",
+            "required": true,
+            "schema": {
+              "description": "Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.",
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "City name.",
+            "in": "path",
+            "name": "cityName",
+            "required": true,
+            "schema": {
+              "description": "City name.",
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliveryAckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryAckResult"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Forbidden",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Not Found",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Conflict",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Unprocessable Entity",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Post v0 city by city name routing delivery ack"
+      }
+    },
+    "/v0/city/{cityName}/routing/delivery/pending": {
+      "get": {
+        "description": "Results are ordered delivery_id ASC. A truncated response always carries next_cursor; passing it back returns the next page in the same order. Invalid or legacy cursors are rejected with a typed 400 (invalid-cursor).",
+        "operationId": "get-v0-city-by-city-name-routing-delivery-pending",
+        "parameters": [
+          {
+            "description": "City name.",
+            "in": "path",
+            "name": "cityName",
+            "required": true,
+            "schema": {
+              "description": "City name.",
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Maximum pending delivery items to return.",
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 100,
+              "description": "Maximum pending delivery items to return.",
+              "format": "int64",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque delivery-ID keyset cursor.",
+            "explode": false,
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "description": "Opaque delivery-ID keyset cursor.",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryPage"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Not Found",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Unprocessable Entity",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
+          }
+        },
+        "summary": "Get v0 city by city name routing delivery pending"
       }
     },
     "/v0/city/{cityName}/routing/eligible": {

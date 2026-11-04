@@ -41,7 +41,7 @@ func TestRoutingCLICommandGroupIsPublicAndComplete(t *testing.T) {
 	if err != nil || group == nil || group.Hidden {
 		t.Fatalf("routing group = (%v, %v), want visible command", group, err)
 	}
-	want := map[string]bool{"status": false, "targets": false, "eligible": false, "decisions": false, "outcomes": false, "ingest": false, "admit": false}
+	want := map[string]bool{"status": false, "targets": false, "eligible": false, "decisions": false, "outcomes": false, "delivery": false, "ingest": false, "admit": false}
 	for _, child := range group.Commands() {
 		if _, ok := want[child.Name()]; ok {
 			want[child.Name()] = !child.Hidden
@@ -109,6 +109,11 @@ func TestRoutingCLIReadCommandsAreLiveAPIOnly(t *testing.T) {
 				t.Fatalf("outcome query = %q", r.URL.RawQuery)
 			}
 			return routingCLIResponse(t, http.StatusOK, routingdecision.OutcomePage{SchemaVersion: routingdecision.OutcomeSchemaVersion, Items: []routingdecision.OutcomeRecord{}, Partial: false}), nil
+		case "/v0/city/acme/routing/delivery/pending":
+			if r.URL.Query().Get("limit") != "7" || r.URL.Query().Get("cursor") != "next" {
+				t.Fatalf("delivery query = %q", r.URL.RawQuery)
+			}
+			return routingCLIResponse(t, http.StatusOK, routingdecision.DeliveryPage{SchemaVersion: routingdecision.DeliverySchemaVersion, Items: []routingdecision.DeliveryItem{}}), nil
 		default:
 			return routingCLIResponse(t, http.StatusNotFound, struct{}{}), nil
 		}
@@ -124,6 +129,7 @@ func TestRoutingCLIReadCommandsAreLiveAPIOnly(t *testing.T) {
 		{args: []string{"eligible", "--json"}, wantKeys: []string{"observed_at"}},
 		{args: []string{"decisions", "--state", "claimed", "--limit", "7", "--cursor", "next", "--json"}, wantKeys: []string{"items", "total"}},
 		{args: []string{"outcomes", "--limit", "7", "--cursor", "next", "--json"}, wantKeys: []string{"schema_version", "items", "partial"}},
+		{args: []string{"delivery", "pending", "--limit", "7", "--cursor", "next", "--json"}, wantKeys: []string{"schema_version", "items"}},
 	}
 	for _, test := range tests {
 		var outputBuffer, errorBuffer bytes.Buffer
@@ -132,7 +138,11 @@ func TestRoutingCLIReadCommandsAreLiveAPIOnly(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("routing %v: exit %d stderr=%s stdout=%s", test.args, code, stderr, stdout)
 		}
-		validateJSONAgainstResultSchema(t, []string{"routing", test.args[0]}, outputBuffer.Bytes())
+		commandPath := []string{"routing", test.args[0]}
+		if test.args[0] == "delivery" {
+			commandPath = append(commandPath, "pending")
+		}
+		validateJSONAgainstResultSchema(t, commandPath, outputBuffer.Bytes())
 		var output map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &output); err != nil {
 			t.Fatalf("routing %v output is not JSON: %q: %v", test.args, stdout, err)
@@ -145,6 +155,31 @@ func TestRoutingCLIReadCommandsAreLiveAPIOnly(t *testing.T) {
 				t.Fatalf("routing %v output = %s, want %q", test.args, stdout, wantKey)
 			}
 		}
+	}
+}
+
+func TestRoutingCLIDeliveryAckUsesTypedGrant(t *testing.T) {
+	transport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v0/city/acme/routing/delivery/ack" || r.Header.Get("X-GC-City-Write") != "secret-grant-token" || r.Header.Get("X-GC-Request") == "" {
+			t.Fatalf("delivery ack request = method=%s path=%s headers=%#v", r.Method, r.URL.Path, r.Header)
+		}
+		return routingCLIResponse(t, http.StatusOK, routingdecision.DeliveryAckResult{Ack: routingdecision.DeliveryAck{DeliveryID: "delivery-1", PayloadSHA256: "sha256:" + strings.Repeat("a", 64)}, Replay: true}), nil
+	})
+	withRoutingCLIClient(t, transport)
+	priorRunner := routingGrantCommandRun
+	routingGrantCommandRun = func(_ context.Context, command string, binding gcapi.GrantBinding) (string, error) {
+		if command != "signer" || binding.Path != "/v0/city/acme/routing/delivery/ack" {
+			t.Fatalf("grant request = command=%q binding=%+v", command, binding)
+		}
+		return "secret-grant-token", nil
+	}
+	t.Cleanup(func() { routingGrantCommandRun = priorRunner })
+	stdout, stderr, err := executeRoutingCommand(t, "delivery", "ack", "--delivery-id", "delivery-1", "--payload-sha256", "sha256:"+strings.Repeat("a", 64), "--write-grant-command", "signer", "--json")
+	if err != nil || !strings.Contains(stdout, "delivery-1") {
+		t.Fatalf("delivery ack: err=%v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if strings.Contains(stdout, "secret-grant-token") || strings.Contains(stderr, "secret-grant-token") {
+		t.Fatal("grant token disclosed")
 	}
 }
 
