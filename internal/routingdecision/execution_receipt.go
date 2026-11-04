@@ -150,7 +150,7 @@ func (store *Store) RecordExecutionLaunchAttempt(auth ExecutionSessionAuthorizat
 			if json.Unmarshal(prior, &result) != nil {
 				return ErrStoreCorrupt
 			}
-			return nil
+			return recordExecutionLaunchDeliveryTx(tx, result)
 		}
 		if err := checkExecutionIncarnationHead(tx, auth); err != nil {
 			return err
@@ -167,7 +167,10 @@ func (store *Store) RecordExecutionLaunchAttempt(auth ExecutionSessionAuthorizat
 		if err != nil {
 			return err
 		}
-		return launches.Put([]byte(id), encoded)
+		if err := launches.Put([]byte(id), encoded); err != nil {
+			return err
+		}
+		return recordExecutionLaunchDeliveryTx(tx, result)
 	})
 	return result, err
 }

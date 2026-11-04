@@ -66,12 +66,15 @@ var (
 	bucketTransitions       = []byte("transitions")
 	bucketImports           = []byte("imports")
 	bucketPurgedDecisions   = []byte("purged_decisions")
+	bucketDeliveryItems     = []byte("delivery_items_v1")
+	bucketDeliveryAcks      = []byte("delivery_acks_v1")
+	bucketDeliverySource    = []byte("delivery_source_v1")
 	keySchemaVersion        = []byte("schema_version")
 	keyStoreRevision        = []byte("store_revision")
 	keyReceiptIndexFloor    = []byte("receipt_index_floor_revision")
 	requiredBucketNames     = [][]byte{
 		bucketMeta, bucketDecisions, bucketStateExpiry, bucketStateCounts, bucketIdempotency, bucketReceiptByDecision,
-		bucketTransitions, bucketImports, bucketPurgedDecisions,
+		bucketTransitions, bucketImports, bucketPurgedDecisions, bucketDeliveryItems, bucketDeliveryAcks, bucketDeliverySource,
 	}
 )
 
@@ -706,6 +709,9 @@ func (store *Store) FinalAdmission(request FinalAdmissionRequest, verifier Verif
 		if err := putAudit(tx, audit); err != nil {
 			return err
 		}
+		if err := recordNonAdmissionDeliveryTx(tx, record, audit); err != nil {
+			return err
+		}
 		receipt = TransitionReceipt{DecisionID: record.Payload.DecisionID, State: record.State, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
 		idempotency := idempotencyRecord{Kind: "admission", Fingerprint: fingerprint, DecisionID: record.Payload.DecisionID, Transition: &receipt}
 		return putIdempotency(tx, request.IdempotencyToken, idempotency)
@@ -969,7 +975,11 @@ func (store *Store) AdmitLocal(payload DecisionPayload, token string, callback f
 		if err := moveStateCount(tx, StateProposed, record.State); err != nil {
 			return err
 		}
-		if err := putAudit(tx, TransitionAudit{DecisionID: payload.DecisionID, From: StateProposed, To: record.State, At: now, Reason: callbackResult.Reason, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}); err != nil {
+		audit := TransitionAudit{DecisionID: payload.DecisionID, From: StateProposed, To: record.State, At: now, Reason: callbackResult.Reason, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
+		if err := putAudit(tx, audit); err != nil {
+			return err
+		}
+		if err := recordNonAdmissionDeliveryTx(tx, record, audit); err != nil {
 			return err
 		}
 		receipt := TransitionReceipt{DecisionID: payload.DecisionID, State: record.State, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
@@ -1070,6 +1080,9 @@ func (store *Store) transitionTx(tx *bbolt.Tx, request TransitionRequest, verifi
 	}
 	audit := TransitionAudit{DecisionID: record.Payload.DecisionID, From: request.From, To: request.To, At: store.now().UTC(), Reason: request.Reason, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
 	if err := putAudit(tx, audit); err != nil {
+		return TransitionReceipt{}, err
+	}
+	if err := recordNonAdmissionDeliveryTx(tx, record, audit); err != nil {
 		return TransitionReceipt{}, err
 	}
 	receipt := TransitionReceipt{DecisionID: record.Payload.DecisionID, State: record.State, RecordRevision: record.RecordRevision, StoreRevision: storeRevision}
@@ -1524,7 +1537,7 @@ func classifyStoreError(err error) error {
 	if err == nil {
 		return nil
 	}
-	for _, sentinel := range []error{ErrStoreLocked, ErrUnsupportedSchema, ErrStoreCorrupt, ErrDecisionNotFound, ErrDecisionExists, ErrStaleRevision, ErrInvalidTransition, ErrIdempotencyConflict, ErrAdmissionCallback, ErrAdmissionCommit, ErrInvalidDecision, ErrStoredDecisionInvalid, ErrAuthorizationRequired, ErrUnknownAuthority, ErrInvalidSignature} {
+	for _, sentinel := range []error{ErrStoreLocked, ErrUnsupportedSchema, ErrStoreCorrupt, ErrDecisionNotFound, ErrDecisionExists, ErrStaleRevision, ErrInvalidTransition, ErrIdempotencyConflict, ErrAdmissionCallback, ErrAdmissionCommit, ErrInvalidDecision, ErrStoredDecisionInvalid, ErrAuthorizationRequired, ErrUnknownAuthority, ErrInvalidSignature, ErrDeliveryInvalid, ErrDeliveryConflict, ErrDeliveryNotFound, ErrDeliveryAckConflict} {
 		if errors.Is(err, sentinel) {
 			return err
 		}

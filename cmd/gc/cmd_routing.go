@@ -44,9 +44,91 @@ func newRoutingCmd(stdout, stderr io.Writer) *cobra.Command {
 		newRoutingEligibleCmd(stdout, stderr),
 		newRoutingDecisionsCmd(stdout, stderr),
 		newRoutingOutcomesCmd(stdout, stderr),
+		newRoutingDeliveryCmd(stdout, stderr),
 		newRoutingIngestCmd(stdout, stderr),
 		newRoutingAdmitCmd(stdout, stderr),
 	)
+	return cmd
+}
+
+func newRoutingDeliveryCmd(stdout, stderr io.Writer) *cobra.Command {
+	cmd := &cobra.Command{Use: "delivery", Short: "Drain and acknowledge immutable routing outcome deliveries"}
+	cmd.AddCommand(newRoutingDeliveryPendingCmd(stdout, stderr), newRoutingDeliveryAckCmd(stdout, stderr))
+	return cmd
+}
+
+func newRoutingDeliveryPendingCmd(stdout, stderr io.Writer) *cobra.Command {
+	var cursor string
+	var limit int
+	var jsonOutput bool
+	cmd := &cobra.Command{Use: "pending", Short: "List unacknowledged routing outcome deliveries", Args: cobra.NoArgs}
+	cmd.Flags().IntVar(&limit, "limit", 100, "Maximum rows to return (1-100)")
+	cmd.Flags().StringVar(&cursor, "cursor", "", "Opaque delivery-ID cursor")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	cmd.RunE = func(_ *cobra.Command, _ []string) error {
+		if limit < 1 || limit > 100 {
+			fmt.Fprintln(stderr, "gc routing delivery pending: invalid --limit (want 1-100)") //nolint:errcheck
+			return errExit
+		}
+		client, err := routingClient(stderr, "delivery pending")
+		if err != nil {
+			return err
+		}
+		page, err := client.RoutingDeliveryPending(gcapi.RoutingDeliveryListRequest{Limit: limit, Cursor: cursor})
+		if err != nil {
+			fmt.Fprintf(stderr, "gc routing delivery pending: %v\n", err) //nolint:errcheck
+			return errExit
+		}
+		if jsonOutput {
+			return writeCLIJSONLine(stdout, page)
+		}
+		for _, item := range page.Items {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", item.DeliveryID, item.SourceKind, item.SourceID, item.OutcomeSchemaVersion, item.PayloadSHA256) //nolint:errcheck
+		}
+		if page.NextCursor != "" {
+			fmt.Fprintf(stdout, "Next cursor: %s\n", page.NextCursor) //nolint:errcheck
+		}
+		return nil
+	}
+	return cmd
+}
+
+func newRoutingDeliveryAckCmd(stdout, stderr io.Writer) *cobra.Command {
+	var deliveryID, payloadSHA256, grantCommand string
+	var jsonOutput bool
+	cmd := &cobra.Command{Use: "ack", Short: "Acknowledge one exact routing outcome delivery", Args: cobra.NoArgs}
+	cmd.Flags().StringVar(&deliveryID, "delivery-id", "", "Immutable delivery ID")
+	cmd.Flags().StringVar(&payloadSHA256, "payload-sha256", "", "Exact payload digest")
+	cmd.Flags().StringVar(&grantCommand, "write-grant-command", "", "Command that reads GrantBinding JSON on stdin and prints one city-write token")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		if strings.TrimSpace(deliveryID) == "" || strings.TrimSpace(payloadSHA256) == "" || strings.TrimSpace(grantCommand) == "" {
+			fmt.Fprintln(stderr, "gc routing delivery ack: --delivery-id, --payload-sha256, and --write-grant-command are required") //nolint:errcheck
+			return errExit
+		}
+		client, err := routingClient(stderr, "delivery ack")
+		if err != nil {
+			return err
+		}
+		if err := client.SetGrantSource(func(binding gcapi.GrantBinding) (string, error) {
+			grantCtx, cancel := context.WithTimeout(cmd.Context(), routingGrantTimeout)
+			defer cancel()
+			return routingGrantCommandRun(grantCtx, grantCommand, binding)
+		}); err != nil {
+			fmt.Fprintln(stderr, "gc routing delivery ack: live routing API unavailable") //nolint:errcheck
+			return errExit
+		}
+		result, err := client.RoutingDeliveryAck(routingdecision.DeliveryAckRequest{DeliveryID: deliveryID, PayloadSHA256: payloadSHA256})
+		if err != nil {
+			fmt.Fprintf(stderr, "gc routing delivery ack: %v\n", err) //nolint:errcheck
+			return errExit
+		}
+		if jsonOutput {
+			return writeCLIJSONLine(stdout, result)
+		}
+		fmt.Fprintf(stdout, "Acknowledged %s (replay=%t)\n", result.Ack.DeliveryID, result.Replay) //nolint:errcheck
+		return nil
+	}
 	return cmd
 }
 

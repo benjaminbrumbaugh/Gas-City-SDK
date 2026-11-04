@@ -76,6 +76,10 @@ func (sm *SupervisorMux) registerCityRoutes() {
 		Description: "Actual identity comes only from exact durable SDK runtime-start receipts. Missing launch authority is omitted with partial=true. Terminal disposition stays unknown.",
 		Errors:      []int{http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable},
 	}, (*Server).humaHandleRoutingExecutionOutcomes)
+	cityGet(sm, "/routing/delivery/pending", (*Server).humaHandleRoutingDeliveryPending,
+		errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable), listOrder("delivery_id ASC"))
+	cityPost(sm, "/routing/delivery/ack", (*Server).humaHandleRoutingDeliveryAck,
+		errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable))
 	cityRegister(sm, huma.Operation{
 		OperationID: "ingest-routing-decision", Method: http.MethodPost, Path: "/routing/decisions",
 		Summary: "Ingest one signed routing decision", DefaultStatus: http.StatusCreated,

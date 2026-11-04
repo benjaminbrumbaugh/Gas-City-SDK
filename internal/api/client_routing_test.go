@@ -40,6 +40,12 @@ func TestRoutingClientUsesGeneratedRoutesAndFinalGrantBinding(t *testing.T) {
 				Items:         []routingdecision.OutcomeRecord{{SchemaVersion: routingdecision.OutcomeSchemaVersion, RecommendationID: "routing/v2:" + strings.Repeat("c", 64), RoutingDecisionID: routingStringPointer("decision-1")}},
 				NextCursor:    "next", Partial: true,
 			}
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/city/acme/routing/delivery/pending":
+			if r.URL.Query().Get("limit") != "10" || r.URL.Query().Get("cursor") != "after-delivery" {
+				t.Fatalf("delivery query = %q", r.URL.RawQuery)
+			}
+			status = http.StatusOK
+			value = routingdecision.DeliveryPage{SchemaVersion: routingdecision.DeliverySchemaVersion, Items: []routingdecision.DeliveryItem{{DeliveryID: "delivery-1", Payload: []byte("exact")}}, NextCursor: "next-delivery"}
 		case r.Method == http.MethodPost && r.URL.Path == "/v0/city/acme/routing/decisions":
 			if r.Header.Get("Idempotency-Key") != "idem-1" || r.Header.Get("X-GC-City-Write") != "grant-token" {
 				t.Fatalf("headers = %#v", r.Header)
@@ -58,6 +64,12 @@ func TestRoutingClientUsesGeneratedRoutesAndFinalGrantBinding(t *testing.T) {
 				Record:  routingdecision.Record{Local: true, Payload: routingdecision.DecisionPayload{DecisionID: "local-1"}, State: routingdecision.StateAdmitted},
 				Receipt: routingdecision.TransitionReceipt{DecisionID: "local-1", State: routingdecision.StateAdmitted},
 			}
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/city/acme/routing/delivery/ack":
+			if r.Header.Get("X-GC-Request") == "" || r.Header.Get("X-GC-City-Write") != "grant-token" {
+				t.Fatalf("delivery ack headers = %#v", r.Header)
+			}
+			status = http.StatusOK
+			value = routingdecision.DeliveryAckResult{Ack: routingdecision.DeliveryAck{DeliveryID: "delivery-1", PayloadSHA256: "sha256:" + strings.Repeat("a", 64), AcknowledgedAtUnix: 1}, Replay: true}
 		default:
 			status = http.StatusNotFound
 			value = struct{}{}
@@ -94,6 +106,14 @@ func TestRoutingClientUsesGeneratedRoutesAndFinalGrantBinding(t *testing.T) {
 	outcomes, err := client.RoutingOutcomes(RoutingOutcomeListRequest{Limit: 10, Cursor: "after"})
 	if err != nil || outcomes.SchemaVersion != routingdecision.OutcomeSchemaVersion || len(outcomes.Items) != 1 || outcomes.Items[0].RecommendationID != "routing/v2:"+strings.Repeat("c", 64) || outcomes.NextCursor != "next" || !outcomes.Partial {
 		t.Fatalf("RoutingOutcomes = (%+v, %v)", outcomes, err)
+	}
+	deliveries, err := client.RoutingDeliveryPending(RoutingDeliveryListRequest{Limit: 10, Cursor: "after-delivery"})
+	if err != nil || deliveries.SchemaVersion != routingdecision.DeliverySchemaVersion || len(deliveries.Items) != 1 || string(deliveries.Items[0].Payload) != "exact" || deliveries.NextCursor != "next-delivery" {
+		t.Fatalf("RoutingDeliveryPending = (%+v, %v)", deliveries, err)
+	}
+	ack, err := client.RoutingDeliveryAck(routingdecision.DeliveryAckRequest{DeliveryID: "delivery-1", PayloadSHA256: "sha256:" + strings.Repeat("a", 64)})
+	if err != nil || !ack.Replay || ack.Ack.DeliveryID != "delivery-1" {
+		t.Fatalf("RoutingDeliveryAck = (%+v, %v)", ack, err)
 	}
 	request := routingdecision.IngestApprovedRequest{
 		Payload:          routingdecision.DecisionPayload{DecisionID: "decision-1", CreatedAt: time.Now()},
