@@ -26,7 +26,7 @@ func TestExecutionSessionAuthorizationSurvivesReopenAndCannotMigrate(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.FinalAdmission(FinalAdmissionRequest{DecisionID: p.DecisionID, ExpectedRevision: result.Record.RecordRevision, IdempotencyToken: "admitted"}, verifier, func(Record) (AdmissionCallbackResult, error) {
+	admitted, err := store.FinalAdmission(FinalAdmissionRequest{DecisionID: p.DecisionID, ExpectedRevision: result.Record.RecordRevision, IdempotencyToken: "admitted"}, verifier, func(Record) (AdmissionCallbackResult, error) {
 		return AdmissionCallbackResult{State: StateAdmitted, Reason: "exact test admission"}, nil
 	})
 	if err != nil {
@@ -40,6 +40,20 @@ func TestExecutionSessionAuthorizationSurvivesReopenAndCannotMigrate(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	pending, err := store.ListPendingDeliveries(DeliveryListOptions{Limit: 10})
+	if err != nil || len(pending.Items) != 1 || pending.Items[0].SourceID != original.ExecutionID || pending.Items[0].OutcomeSchemaVersion != "routing/outcome/v3" {
+		t.Fatalf("launch delivery = %+v, err=%v", pending, err)
+	}
+	exactDeliveryPayload := append([]byte(nil), pending.Items[0].Payload...)
+	if _, err := store.Verify(verifier); err != nil {
+		t.Fatalf("Verify delivery ledger: %v", err)
+	}
+	if _, err := store.Transition(TransitionRequest{
+		DecisionID: p.DecisionID, ExpectedRevision: admitted.RecordRevision,
+		From: StateAdmitted, To: StateClaimed, IdempotencyToken: "claim-after-launch", Reason: "exact claim observed",
+	}, verifier); err != nil {
+		t.Fatalf("claim after launch: %v", err)
+	}
 	if err = store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +65,10 @@ func TestExecutionSessionAuthorizationSurvivesReopenAndCannotMigrate(t *testing.
 	replayed, err := reopened.RecordExecutionLaunchAttempt(auth, original.AttemptID)
 	if err != nil || replayed != original {
 		t.Fatalf("successful-start replay changed receipt/time: %+v %+v %v", original, replayed, err)
+	}
+	pending, err = reopened.ListPendingDeliveries(DeliveryListOptions{Limit: 10})
+	if err != nil || len(pending.Items) != 1 || pending.Items[0].SourceID != original.ExecutionID || string(pending.Items[0].Payload) != string(exactDeliveryPayload) {
+		t.Fatalf("launch delivery replay = %+v, err=%v", pending, err)
 	}
 	got, err := reopened.ExecutionSession("s1")
 	if err != nil || got == nil || *got != auth {

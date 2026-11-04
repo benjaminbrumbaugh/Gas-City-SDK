@@ -89,6 +89,7 @@ var (
 	IdempotencyInFlight        = Register(ProblemType{Code: "idempotency-in-flight", Status: http.StatusConflict, Title: "Idempotency Key In Flight"})
 	IdempotencyMismatch        = Register(ProblemType{Code: "idempotency-mismatch", Status: http.StatusUnprocessableEntity, Title: "Idempotency Key Body Mismatch"})
 	RoutingIdempotencyConflict = Register(ProblemType{Code: "routing-idempotency-conflict", Status: http.StatusConflict, Title: "Routing Idempotency Conflict"})
+	RoutingDeliveryNotFound    = Register(ProblemType{Code: "routing-delivery-not-found", Status: http.StatusNotFound, Title: "Routing Delivery Not Found"})
 
 	// Backend availability. store-unavailable is the bead-store-not-live 503 emitted
 	// by the shared cacheLiveOr503 helper; service-unavailable is the generic 503

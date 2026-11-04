@@ -71,6 +71,22 @@ func (s *controllerState) RoutingDecisionOutcomes(ctx context.Context, opts rout
 	return service.Outcomes(ctx, opts)
 }
 
+func (s *controllerState) RoutingDeliveryPending(ctx context.Context, opts routingdecision.DeliveryListOptions) (routingdecision.DeliveryPage, error) {
+	service := s.routingDecisions()
+	if service == nil {
+		return routingdecision.DeliveryPage{}, errors.New("routing decision service unavailable")
+	}
+	return service.DeliveryPending(ctx, opts)
+}
+
+func (s *controllerState) RoutingDeliveryAck(ctx context.Context, request routingdecision.DeliveryAckRequest) (routingdecision.DeliveryAckResult, error) {
+	service := s.routingDecisions()
+	if service == nil {
+		return routingdecision.DeliveryAckResult{}, errors.New("routing decision service unavailable")
+	}
+	return service.DeliveryAck(ctx, request)
+}
+
 func (s *controllerState) RoutingDecisionIngest(ctx context.Context, request routingdecision.IngestApprovedRequest) (routingdecision.IngestApprovedResult, error) {
 	service := s.routingDecisions()
 	if service == nil {
