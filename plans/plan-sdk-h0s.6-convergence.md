@@ -417,7 +417,7 @@ proves, observed layer, and what it does not prove.
 | Race tests | pass | `CGO_ENABLED=0 go test -race ./internal/externalcoordination ./internal/convoysubscription` and the root `cmd/gc` conversation/reply regression pass | concurrent response/convoy paths and root command projection | no external receipt |
 | Generated checks | pass | `make spec-ci`, `make dashboard-ci`, and `make check-docs` pass with no generated drift | API/schema/client/dashboard artifacts and docs synchronization | no live runtime invocation |
 | Broad gates | mixed | `make test-fast-parallel` and `make test-cmd-gc-process-parallel` pass; integration package/process shards pass except unrelated review-formula timeouts and one suspend/resume race | repository package, process, and integration runners | integration remains environment-dependent; failures are recorded below |
-| Final provenance | pending | pending | git/refinery handoff | no merge until refinery |
+| Final provenance | pass | push gate passed and `origin/polecat/sdk-h0s.6` matched the local HEAD before refinery handoff | git/refinery handoff | branch is pushed; refinery still must verify and merge |
 
 ### Integration evidence
 
