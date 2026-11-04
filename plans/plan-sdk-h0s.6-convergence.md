@@ -413,11 +413,47 @@ proves, observed layer, and what it does not prove.
 | --- | --- | --- | --- | --- |
 | Candidate inventory | pass | exact heads/parents and retained `.4`/`.5` bytes are recorded | git refs/history | no behavior |
 | RED regression | fail as intended | root cannot find `extmsg reply` on current main | root CLI command tree | CGO-disabled build; no live provider |
-| Focused tests | pending | pending | changed packages | no deployment |
-| Race tests | pending | pending | concurrent durable paths | no external receipt |
-| Generated checks | pending | pending | API/schema/client artifacts | no runtime invocation |
-| Broad gates | pending | pending | repository policy | environment-dependent |
+| Focused tests | pass | changed candidate packages and root CLI/API regression pass with CGO disabled | changed packages plus root projections | no deployment or live receipt |
+| Race tests | pass | `CGO_ENABLED=0 go test -race ./internal/externalcoordination ./internal/convoysubscription` and the root `cmd/gc` conversation/reply regression pass | concurrent response/convoy paths and root command projection | no external receipt |
+| Generated checks | pass | `make spec-ci`, `make dashboard-ci`, and `make check-docs` pass with no generated drift | API/schema/client/dashboard artifacts and docs synchronization | no live runtime invocation |
+| Broad gates | mixed | `make test-fast-parallel` and `make test-cmd-gc-process-parallel` pass; integration package/process shards pass except unrelated review-formula timeouts and one suspend/resume race | repository package, process, and integration runners | integration remains environment-dependent; failures are recorded below |
 | Final provenance | pending | pending | git/refinery handoff | no merge until refinery |
+
+### Integration evidence
+
+- Candidate `.1` and `.2` were cherry-picked with `-x`; the `.2` `TESTING.md`
+  ledger conflict retained current-main baselines/expiry rather than stale
+  historical dates. Focused `cmd/gc` and `internal/api` tests pass.
+- Candidate `.3` was cherry-picked with `-x`. Its typed `ResponseOutcome`
+  contract required a small compatibility commit in retained
+  `response_handoff.go`; focused externalcoordination/extmsg tests pass.
+- Candidate `.9` commits were cherry-picked with `-x`; focused
+  convoysubscription/convoy tests pass.
+- Candidate `.10` commits were cherry-picked with `-x`. The replay validator
+  was merged with the typed outcome contract, and response-composition plus
+  handoff tests pass.
+- The candidate `.2` test additions changed the checked HTTP-test-server
+  census. Regenerating `TESTING.md` changed only the two generated baseline
+  counts (`324/68` to `331/70`); the resource-census invariant test passes.
+- The final fast and process gates pass. The integration runner's package/core,
+  `cmd/gc`, runtime/tmux, bdstore, REST smoke, and seven of eight REST-full
+  shards pass. Its review-formula shards time out waiting for synthetic worker
+  workflows to close (the diagnostics show active workers and open beads), and
+  `rest-full-1-of-8` reports the unrelated `TestE2E_SuspendResume_Agent`
+  restart assertion. These are integration-environment observations, not
+  evidence of the changed communication surfaces.
+- A final combined changed-package command passed for the changed internal
+  packages and resource census, but the full `cmd/gc` package portion timed out
+  after 601s in unrelated doctor/controller tests. The earlier selected root
+  CLI/API regression suite and process shards pass; this full-package timeout is
+  recorded as a verification limit rather than suppressed.
+- `CGO_ENABLED=0 go vet ./...` passes. The default `go vet ./...` remains
+  unavailable on this host because the installed ICU headers do not provide
+  `unicode/regex.h`; this is an environment limitation, not a source error.
+
+These results prove package and provider-free root behavior at the tested
+layers. They do not prove live external delivery, origin acknowledgment,
+deployment, callback readiness, or merge to `main`.
 
 ### Observed candidate matrix (pre-implementation)
 
